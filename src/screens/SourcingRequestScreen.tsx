@@ -17,6 +17,10 @@ import * as ImagePicker from 'expo-image-picker';
 import { Colors } from '../constants/colors';
 import { useUserSession } from '../context/UserContext';
 import { getERPNextClient } from '../services/erpnext';
+import { collectDescendantItemGroupIds } from '../utils/itemGroup';
+import { Category } from '../types';
+import { SearchableSelect } from '../components/SearchableSelect';
+import { withOtherItemOption, SourcingItemOption } from '../utils/sourcingItems';
 
 export const SourcingRequestScreen: React.FC = () => {
   const navigation = useNavigation();
@@ -24,20 +28,15 @@ export const SourcingRequestScreen: React.FC = () => {
   const [allGroups, setAllGroups] = useState<any[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(false);
 
-  const [selectedParentId, setSelectedParentId] = useState('');
-  const [selectedParentName, setSelectedParentName] = useState('');
-  const [selectedChildId, setSelectedChildId] = useState('');
-  const [selectedChildName, setSelectedChildName] = useState('');
+  const [selectedCategoryId, setSelectedCategoryId] = useState('');
+  const [selectedCategoryName, setSelectedCategoryName] = useState('');
   const [selectedProductId, setSelectedProductId] = useState('');
   const [itemDescription, setItemDescription] = useState('');
   const [referenceImageUri, setReferenceImageUri] = useState<string | null>(null);
   const [quantity, setQuantity] = useState('1');
   const [expectedRate, setExpectedRate] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [showParentPicker, setShowParentPicker] = useState(false);
-  const [showChildPicker, setShowChildPicker] = useState(false);
-  const [showItemPicker, setShowItemPicker] = useState(false);
-  const [categoryProducts, setCategoryProducts] = useState<Array<{ id: string; name: string; itemCode: string }>>([]);
+  const [categoryProducts, setCategoryProducts] = useState<SourcingItemOption[]>([]);
   const [loadingProducts, setLoadingProducts] = useState(false);
 
   useEffect(() => {
@@ -57,12 +56,27 @@ export const SourcingRequestScreen: React.FC = () => {
     fetchGroups();
   }, []);
 
-  const parentGroupList = useMemo(() => {
+  const categoryTree = useMemo<Category[]>(
+    () =>
+      allGroups.map((group: any) => ({
+        id: group.name,
+        name: group.item_group_name || group.name,
+        slug: group.name,
+        image: group.image || '',
+        parentId: group.parent_item_group,
+      })),
+    [allGroups]
+  );
+
+  const parentCategoryList = useMemo(() => {
     return allGroups
       .filter((group: any) => {
         const isGroup = Number(group?.is_group) === 1;
         const parent = String(group?.parent_item_group || '').trim();
-        return isGroup && (parent === '' || parent === 'All Item Groups');
+        return (
+          isGroup &&
+          (parent === '' || parent === 'All Item Groups' || parent === 'All Items Group')
+        );
       })
       .map((group: any) => ({
         id: group.name,
@@ -70,23 +84,9 @@ export const SourcingRequestScreen: React.FC = () => {
       }));
   }, [allGroups]);
 
-  const childGroupList = useMemo(() => {
-    if (!selectedParentId) return [];
-    return allGroups
-      .filter((group: any) => {
-        const parent = String(group?.parent_item_group || '').trim();
-        return parent === selectedParentId || parent === selectedParentName;
-      })
-      .map((group: any) => ({
-        id: group.name,
-        name: group.item_group_name || group.name,
-        isGroup: Number(group?.is_group) === 1,
-      }));
-  }, [allGroups, selectedParentId, selectedParentName]);
-
   useEffect(() => {
-    const fetchProductsForChildGroup = async () => {
-      if (!selectedChildId) {
+    const fetchProductsForCategory = async () => {
+      if (!selectedCategoryId) {
         setCategoryProducts([]);
         return;
       }
@@ -94,66 +94,57 @@ export const SourcingRequestScreen: React.FC = () => {
       try {
         setLoadingProducts(true);
         const client = getERPNextClient();
-        // Use raw Item list (not Website Item), filtered by selected group.
-        const byId = await client.getRawItemsByGroup(selectedChildId, 500);
-        const byName =
-          selectedChildName && selectedChildName !== selectedChildId
-            ? await client.getRawItemsByGroup(selectedChildName, 500)
-            : [];
-        const merged = [...(byId || []), ...(byName || [])];
+        const groupIds = collectDescendantItemGroupIds(selectedCategoryId, categoryTree);
+        const items = await client.getRawItemsByGroups(groupIds, 500);
         const uniqueMap = new Map<string, any>();
-        merged.forEach((item: any) => {
+        items.forEach((item: any) => {
           if (item?.name) uniqueMap.set(item.name, item);
         });
-        const dropdownItems = Array.from(uniqueMap.values())
+        const dropdownItems: SourcingItemOption[] = Array.from(uniqueMap.values())
           .filter((item: any) => Number(item?.disabled) !== 1)
           .map((item: any) => ({
             id: item.name,
             name: item.item_name || item.name,
             itemCode: item.name,
           }));
-        setCategoryProducts(dropdownItems);
+        setCategoryProducts(withOtherItemOption(dropdownItems));
       } catch (error) {
-        console.error('Error fetching subgroup items:', error);
+        console.error('Error fetching category items:', error);
         setCategoryProducts([]);
       } finally {
         setLoadingProducts(false);
       }
     };
 
-    fetchProductsForChildGroup();
-  }, [allGroups, selectedChildId, selectedChildName]);
+    fetchProductsForCategory();
+  }, [selectedCategoryId, categoryTree]);
 
   const selectedProduct = useMemo(
     () => categoryProducts.find((product) => product.id === selectedProductId),
     [categoryProducts, selectedProductId]
   );
-  const isOtherItemSelected = (selectedProduct?.name || '').trim().toLowerCase() === 'other';
+  const quantityNum = parseInt(quantity, 10);
+  const rateNum = parseFloat(expectedRate);
 
-  const canSubmit = !!selectedChildId && !!selectedProduct && !!expectedRate && !submitting;
+  const canSubmit =
+    !!selectedCategoryId &&
+    !!selectedProduct &&
+    !!itemDescription.trim() &&
+    !!quantity.trim() &&
+    quantityNum >= 1 &&
+    !!expectedRate.trim() &&
+    rateNum > 0 &&
+    !!referenceImageUri &&
+    !submitting;
 
-  const handleParentSelect = (parent: any) => {
-    setSelectedParentId(parent.id);
-    setSelectedParentName(parent.name);
-    setSelectedChildId('');
-    setSelectedChildName('');
+  const handleCategorySelect = (category: { id: string; name: string }) => {
+    setSelectedCategoryId(category.id);
+    setSelectedCategoryName(category.name);
     setSelectedProductId('');
-    setShowParentPicker(false);
-    setShowChildPicker(false);
-    setShowItemPicker(false);
   };
 
-  const handleChildSelect = (child: any) => {
-    setSelectedChildId(child.id);
-    setSelectedChildName(child.name);
-    setSelectedProductId('');
-    setShowChildPicker(false);
-    setShowItemPicker(false);
-  };
-
-  const handleItemSelect = (product: any) => {
+  const handleItemSelect = (product: { id: string; name: string }) => {
     setSelectedProductId(product.id);
-    setShowItemPicker(false);
   };
 
   const handlePickImage = async () => {
@@ -194,8 +185,16 @@ export const SourcingRequestScreen: React.FC = () => {
       Alert.alert('Invalid Expected Rate', 'Expected rate must be greater than 0.');
       return;
     }
-    if (isOtherItemSelected && !itemDescription.trim()) {
-      Alert.alert('Description Required', 'Please enter a description for "Other" item.');
+    if (!itemDescription.trim()) {
+      Alert.alert('Description Required', 'Please enter an item description.');
+      return;
+    }
+    if (!selectedCategoryId) {
+      Alert.alert('Missing Category', 'Please select an item category.');
+      return;
+    }
+    if (!referenceImageUri) {
+      Alert.alert('Reference Image Required', 'Please upload a preference image before submitting.');
       return;
     }
 
@@ -250,9 +249,7 @@ export const SourcingRequestScreen: React.FC = () => {
             rate,
             amount: qty * rate,
             description: [
-              isOtherItemSelected
-                ? itemDescription.trim()
-                : (itemDescription.trim() || `Sourcing request from China - ${selectedParentName} / ${selectedChildName}`),
+              itemDescription.trim(),
               referenceImageUri ? `Reference Image: ${referenceImageUri}` : '',
             ]
               .filter(Boolean)
@@ -333,109 +330,50 @@ export const SourcingRequestScreen: React.FC = () => {
         <View style={styles.headerIconButton} />
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
-        <Text style={styles.label}>Parent Group</Text>
-        <TouchableOpacity style={styles.selector} onPress={() => setShowParentPicker((prev) => !prev)}>
-          <Text style={styles.selectorText}>
-            {selectedParentName || 'Select parent group'}
-          </Text>
-          <Ionicons name={showParentPicker ? 'chevron-up' : 'chevron-down'} size={16} color={Colors.TEXT_SECONDARY} />
-        </TouchableOpacity>
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={styles.contentContainer}
+        keyboardShouldPersistTaps="handled"
+        nestedScrollEnabled
+      >
+        <Text style={styles.label}>Item Category *</Text>
+        <SearchableSelect
+          options={parentCategoryList}
+          selectedId={selectedCategoryId}
+          selectedLabel={selectedCategoryName}
+          onSelect={handleCategorySelect}
+          placeholder="Select item category"
+          searchPlaceholder="Search categories..."
+          loading={loadingGroups}
+          emptyText="No item categories available right now."
+        />
 
-        {showParentPicker && (
-          <View style={styles.optionsContainer}>
-            {loadingGroups ? (
-              <ActivityIndicator color={Colors.ROYAL_BLUE} />
-            ) : parentGroupList.length === 0 ? (
-              <Text style={styles.emptyText}>No parent groups available right now.</Text>
-            ) : (
-              parentGroupList.map((parent) => (
-                <TouchableOpacity
-                  key={parent.id}
-                  style={styles.option}
-                  onPress={() => handleParentSelect(parent)}
-                >
-                  <Text style={styles.optionText}>{parent.name}</Text>
-                </TouchableOpacity>
-              ))
-            )}
-          </View>
-        )}
+        <Text style={styles.label}>Item *</Text>
+        <SearchableSelect
+          options={categoryProducts}
+          selectedId={selectedProductId}
+          selectedLabel={selectedProduct?.name}
+          onSelect={handleItemSelect}
+          placeholder={selectedCategoryId ? 'Select item' : 'Select item category first'}
+          searchPlaceholder="Search items..."
+          disabled={!selectedCategoryId}
+          loading={loadingProducts}
+          emptyText="No items found in this category."
+          listMaxHeight={320}
+        />
 
-        <Text style={styles.label}>Category</Text>
-        <TouchableOpacity
-          style={[styles.selector, !selectedParentId && styles.selectorDisabled]}
-          onPress={() => selectedParentId && setShowChildPicker((prev) => !prev)}
-          disabled={!selectedParentId}
-        >
-          <Text style={styles.selectorText}>
-            {selectedChildName || (selectedParentId ? 'Select category' : 'Select parent group first')}
-          </Text>
-          <Ionicons name={showChildPicker ? 'chevron-up' : 'chevron-down'} size={16} color={Colors.TEXT_SECONDARY} />
-        </TouchableOpacity>
-
-        {showChildPicker && selectedParentId && (
-          <View style={styles.optionsContainer}>
-            {childGroupList.length === 0 ? (
-              <Text style={styles.emptyText}>No categories found under this parent group.</Text>
-            ) : (
-              childGroupList.map((child) => (
-                <TouchableOpacity
-                  key={child.id}
-                  style={styles.option}
-                  onPress={() => handleChildSelect(child)}
-                >
-                  <Text style={styles.optionText}>{child.name}</Text>
-                </TouchableOpacity>
-              ))
-            )}
-          </View>
-        )}
-
-        <Text style={styles.label}>Item</Text>
-        <TouchableOpacity
-          style={[styles.selector, !selectedChildId && styles.selectorDisabled]}
-          onPress={() => selectedChildId && setShowItemPicker((prev) => !prev)}
-          disabled={!selectedChildId}
-        >
-          <Text style={styles.selectorText}>
-            {selectedProduct?.name || (selectedChildId ? 'Select item' : 'Select category first')}
-          </Text>
-          <Ionicons name={showItemPicker ? 'chevron-up' : 'chevron-down'} size={16} color={Colors.TEXT_SECONDARY} />
-        </TouchableOpacity>
-
-        {showItemPicker && selectedChildId && (
-          <View style={styles.optionsContainer}>
-            {loadingProducts ? (
-              <ActivityIndicator color={Colors.ROYAL_BLUE} />
-            ) : categoryProducts.length === 0 ? (
-              <Text style={styles.emptyText}>No items found in this category.</Text>
-            ) : (
-              categoryProducts.map((product) => (
-                <TouchableOpacity
-                  key={product.id}
-                  style={styles.option}
-                  onPress={() => handleItemSelect(product)}
-                >
-                  <Text style={styles.optionText}>{product.name}</Text>
-                </TouchableOpacity>
-              ))
-            )}
-          </View>
-        )}
-
-        <Text style={styles.label}>{isOtherItemSelected ? 'Item Description *' : 'Item Description (Optional)'}</Text>
+        <Text style={styles.label}>Item Description *</Text>
         <TextInput
           style={[styles.input, styles.textArea]}
           value={itemDescription}
           onChangeText={setItemDescription}
-          placeholder={isOtherItemSelected ? 'Describe the "Other" item you need' : 'Add extra details (optional)'}
+          placeholder="Describe the item you need"
           placeholderTextColor={Colors.TEXT_SECONDARY}
           multiline
           textAlignVertical="top"
         />
 
-        <Text style={styles.label}>Reference Image (Optional)</Text>
+        <Text style={styles.label}>Preference Image *</Text>
         <TouchableOpacity style={styles.imagePickerButton} onPress={handlePickImage}>
           <Ionicons name="image-outline" size={16} color={Colors.ROYAL_BLUE} />
           <Text style={styles.imagePickerButtonText}>
@@ -451,7 +389,7 @@ export const SourcingRequestScreen: React.FC = () => {
           </View>
         )}
 
-        <Text style={styles.label}>Quantity</Text>
+        <Text style={styles.label}>Quantity *</Text>
         <TextInput
           style={styles.input}
           value={quantity}
@@ -461,7 +399,7 @@ export const SourcingRequestScreen: React.FC = () => {
           placeholderTextColor={Colors.TEXT_SECONDARY}
         />
 
-        <Text style={styles.label}>Expected Rate (GH₵)</Text>
+        <Text style={styles.label}>Expected Rate (GH₵) *</Text>
         <TextInput
           style={styles.input}
           value={expectedRate}
@@ -523,50 +461,6 @@ const styles = StyleSheet.create({
     color: Colors.BLACK,
     marginBottom: 6,
     marginTop: 10,
-  },
-  selector: {
-    borderWidth: 1,
-    borderColor: Colors.BORDER,
-    borderRadius: 8,
-    backgroundColor: Colors.WHITE,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  selectorDisabled: {
-    opacity: 0.6,
-  },
-  selectorText: {
-    fontSize: 13,
-    color: Colors.BLACK,
-    flex: 1,
-    marginRight: 8,
-  },
-  optionsContainer: {
-    marginTop: 8,
-    borderWidth: 1,
-    borderColor: Colors.BORDER,
-    borderRadius: 8,
-    backgroundColor: Colors.WHITE,
-    paddingVertical: 4,
-    maxHeight: 200,
-  },
-  option: {
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.LIGHT_GRAY,
-  },
-  optionText: {
-    fontSize: 13,
-    color: Colors.BLACK,
-  },
-  emptyText: {
-    fontSize: 12,
-    color: Colors.TEXT_SECONDARY,
-    padding: 12,
   },
   input: {
     borderWidth: 1,

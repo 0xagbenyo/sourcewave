@@ -10,6 +10,7 @@ import {
   Image,
   RefreshControl,
   Animated,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -28,6 +29,15 @@ import { mapERPItemToProduct } from '../services/mappers';
 import { collectDescendantItemGroupIds } from '../utils/itemGroup';
 
 const { width } = Dimensions.get('window');
+
+const isTopLevelParentGroup = (category: any): boolean => {
+  const isGroup = Number(category?.isGroup ?? category?.is_group) === 1;
+  const parent = String(category?.parentItemGroup ?? category?.parent_item_group ?? '').trim();
+  return (
+    isGroup &&
+    (parent === '' || parent === 'All Item Groups' || parent === 'All Items Group')
+  );
+};
 
 // Animated Category Item Component
 const AnimatedCategoryItem: React.FC<{
@@ -157,12 +167,23 @@ export const CategoriesScreen: React.FC = () => {
   // Pull-to-refresh state
   const [refreshing, setRefreshing] = useState(false);
   
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [selectedParentId, setSelectedParentId] = useState<string | null>(null);
   const [childCategories, setChildCategories] = useState<any[]>([]);
   const [loadingChildren, setLoadingChildren] = useState(false);
   const [childImages, setChildImages] = useState<Record<string, string>>({});
   const [sortOption, setSortOption] = useState<SortOption>('default');
   const preselectedParent = route?.params?.selectedParent;
+
+  const parentOnly = useMemo(
+    () => parentCategories?.filter(isTopLevelParentGroup) || [],
+    [parentCategories]
+  );
+
+  const selectedParentName = useMemo(() => {
+    if (!selectedParentId) return '';
+    const match = parentOnly.find((cat) => cat.id === selectedParentId);
+    return match?.name || selectedParentId;
+  }, [parentOnly, selectedParentId]);
   
   // Optimistic state for immediate UI updates
   const [optimisticWishlist, setOptimisticWishlist] = useState<Set<string>>(new Set());
@@ -217,57 +238,39 @@ export const CategoriesScreen: React.FC = () => {
   const isInitialLoading = (!parentCategories && categoriesLoading) && 
     (!pricingRules || pricingRules.length === 0);
 
-  // Set first category as selected when data loads
+  // Set first parent category when data loads
   useEffect(() => {
-    if (parentCategories && parentCategories.length > 0 && !selectedCategory) {
-      // Log detailed information about all categories
-      console.log('📚 Total Categories:', parentCategories.length);
-      parentCategories.forEach((cat: any, idx: number) => {
-        console.log(`  [${idx}] name: "${cat.name}", parentItemGroup: "${cat.parentItemGroup}", isGroup: ${cat.isGroup}`);
-      });
-      
-      // Get first parent category (where parentItemGroup is empty/null)
-      const firstParent = parentCategories.find((cat: any) => !cat.parentItemGroup || cat.parentItemGroup === '');
-      if (firstParent) {
-        console.log('📚 Selected First Parent:', firstParent.name);
-        setSelectedCategory(firstParent.name);
-        fetchChildCategories(firstParent.name);
-      }
+    if (parentOnly.length > 0 && !selectedParentId) {
+      const firstParent = parentOnly[0];
+      setSelectedParentId(firstParent.id);
+      fetchChildCategories(firstParent.id, firstParent.name);
     }
-  }, [parentCategories, sortOption]); // Include sortOption to refetch when sorting changes
+  }, [parentOnly, selectedParentId]);
 
   // If Home passes a parent category, open this screen with that parent selected.
   useEffect(() => {
-    if (!parentCategories || parentCategories.length === 0 || !preselectedParent) return;
-    const matchedParent = parentCategories.find((cat: any) => cat.id === preselectedParent || cat.name === preselectedParent);
-    if (matchedParent && matchedParent.name !== selectedCategory) {
-      setSelectedCategory(matchedParent.name);
-      fetchChildCategories(matchedParent.name);
+    if (parentOnly.length === 0 || !preselectedParent) return;
+    const matchedParent = parentOnly.find(
+      (cat) => cat.id === preselectedParent || cat.name === preselectedParent
+    );
+    if (matchedParent && matchedParent.id !== selectedParentId) {
+      setSelectedParentId(matchedParent.id);
+      fetchChildCategories(matchedParent.id, matchedParent.name);
     }
-  }, [parentCategories, preselectedParent, selectedCategory, sortOption]);
+  }, [parentOnly, preselectedParent, selectedParentId]);
 
-  const fetchChildCategories = async (parentName: string) => {
+  const fetchChildCategories = async (parentId: string, parentName?: string) => {
     setLoadingChildren(true);
     try {
       const client = getERPNextClient();
-      // Fetch all item groups and filter for children of the selected parent
       const response = await client.getItemGroups();
-      
-      console.log(`📚 Looking for children of parent: "${parentName}"`);
-      console.log(`📚 Total groups returned: ${response.length}`);
-      
-      // Debug: Show all parent_item_group values (use raw field name from API)
-      response.forEach((group: any, idx: number) => {
-        if (group.parent_item_group) {
-          console.log(`  [${idx}] ${group.name} -> parent: "${group.parent_item_group}"`);
-        }
-      });
-      
-      // Filter for children where parent_item_group matches selected parent (use raw field name!) and exclude "All Items Group"
-      const children = response.filter((group: any) => group.parent_item_group === parentName && group.name !== 'All Items Group');
-      console.log(`📚 Children of "${parentName}": ${children.length} found`);
-      children.forEach((child: any) => {
-        console.log(`  - ${child.name}`);
+
+      const children = response.filter((group: any) => {
+        const parent = String(group.parent_item_group || '').trim();
+        return (
+          (parent === parentId || (!!parentName && parent === parentName)) &&
+          group.name !== 'All Items Group'
+        );
       });
       setChildCategories(children);
 
@@ -318,10 +321,10 @@ export const CategoriesScreen: React.FC = () => {
     }
   };
 
-  const handleCategorySelect = useCallback((categoryName: string) => {
-    setSelectedCategory(categoryName);
-    fetchChildCategories(categoryName);
-  }, [sortOption]); // Include sortOption to refetch when sorting changes
+  const handleParentSelect = useCallback((parentId: string, parentName: string) => {
+    setSelectedParentId(parentId);
+    fetchChildCategories(parentId, parentName);
+  }, []);
   
   // Handle pull-to-refresh - reload the entire page
   const onRefresh = useCallback(async () => {
@@ -337,52 +340,46 @@ export const CategoriesScreen: React.FC = () => {
   }, [refreshWishlist]);
 
 
-  const renderSidebar = () => {
-    // Filter to show only parent item groups (where parent_item_group is empty/null) and exclude "All Items Group"
-    const parentOnly = parentCategories?.filter(
-      (cat: any) => (!cat.parentItemGroup || cat.parentItemGroup === '') && cat.name !== 'All Items Group'
-    ) || [];
-
-    return (
+  const renderSidebar = () => (
     <View style={styles.sidebar}>
       <View style={styles.sidebarHeader}>
         <View style={styles.sidebarIndicator} />
         <Text style={styles.sidebarTitle}>Just for You</Text>
       </View>
-        {categoriesLoading ? null : (
-      <ScrollView showsVerticalScrollIndicator={false}>
-            {parentOnly && parentOnly.length > 0 ? (
-              parentOnly.map((category) => {
-                const categoryName = category.name || '';
-                if (!categoryName) return null;
-                return (
-          <TouchableOpacity
-                    key={category.name}
-            style={[
-              styles.sidebarItem,
-                      selectedCategory === category.name && styles.sidebarItemActive
-            ]}
-                    onPress={() => handleCategorySelect(category.name)}
-          >
-            <Text style={[
-              styles.sidebarItemText,
-                      selectedCategory === category.name && styles.sidebarItemTextActive
-            ]}>
-                      {categoryName}
-            </Text>
-          </TouchableOpacity>
-                );
-              })
-            ) : (
-              <View style={styles.emptyContainer}>
-                <Text style={styles.emptyText}>No categories available</Text>
-              </View>
-            )}
-      </ScrollView>
-        )}
+      {categoriesLoading ? (
+        <ActivityIndicator style={styles.sidebarLoader} color={Colors.SHEIN_PINK} />
+      ) : (
+        <ScrollView
+          style={styles.sidebarScroll}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.sidebarScrollContent}
+        >
+          {parentOnly.length > 0 ? (
+            parentOnly.map((category) => {
+              const categoryName = category.name || category.id || '';
+              if (!categoryName) return null;
+              const isActive = selectedParentId === category.id;
+              return (
+                <TouchableOpacity
+                  key={category.id}
+                  style={[styles.sidebarItem, isActive && styles.sidebarItemActive]}
+                  onPress={() => handleParentSelect(category.id, category.name)}
+                >
+                  <Text style={[styles.sidebarItemText, isActive && styles.sidebarItemTextActive]}>
+                    {categoryName}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })
+          ) : (
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyText}>No categories available</Text>
+            </View>
+          )}
+        </ScrollView>
+      )}
     </View>
   );
-  };
 
   const renderProductGrid = (products: any[], title: string, showTrendsLogo = false) => (
     <View style={styles.productSection}>
@@ -490,56 +487,43 @@ export const CategoriesScreen: React.FC = () => {
     </View>
   );
 
-  const renderChildCategoriesGrid = () => {
-    if (loadingChildren) {
-      return null; // Don't show anything while loading children
-    }
-
-    return (
-      <View style={styles.productSection}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Picks for You</Text>
-        </View>
-        <View style={styles.childCategoriesGridContainer}>
-          <FlatList
-            data={childCategories}
-            numColumns={4}
-            scrollEnabled={true}
-            horizontal={false}
-            showsVerticalScrollIndicator={false}
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.childCategoriesGridList}
-            columnWrapperStyle={styles.childCategoriesRow}
-            renderItem={({ item, index }) => {
-              const image = childImages[item.name];
-              const categoryName = item.name || 'Category';
-              
-              return (
-                <AnimatedCategoryItem
-                  key={item.name || item.item_group_name || `category-${index}`}
-                  category={item}
-                  image={image}
-                  categoryName={categoryName}
-                  index={index}
-                  onPress={() => {
-                    (navigation as any).navigate('SourcingRequest', {
-                      parentCategory: selectedCategory || '',
-                      subCategory: item.name || '',
-                    });
-                  }}
-                />
-              );
-            }}
-            keyExtractor={(item) => item.name || item.item_group_name || `category-${Math.random()}`}
-          />
-        </View>
+  const renderChildCategoriesGrid = () => (
+    <View style={styles.productSection}>
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>Picks for You</Text>
       </View>
-    );
-  };
+      {loadingChildren ? (
+        <ActivityIndicator style={styles.childLoader} color={Colors.SHEIN_PINK} />
+      ) : childCategories.length > 0 ? (
+        <View style={styles.childCategoriesGridContainer}>
+          {childCategories.map((item, index) => {
+            const image = childImages[item.name];
+            const categoryName = item.item_group_name || item.name || 'Category';
 
-  const renderContent = () => (
-    <View>
-      {renderChildCategoriesGrid()}
+            return (
+              <AnimatedCategoryItem
+                key={item.name || item.item_group_name || `category-${index}`}
+                category={item}
+                image={image}
+                categoryName={categoryName}
+                index={index}
+                onPress={() => {
+                  (navigation as any).navigate('SourcingRequest', {
+                    parentCategory: selectedParentName || selectedParentId || '',
+                    subCategory: item.item_group_name || item.name || '',
+                  });
+                }}
+              />
+            );
+          })}
+        </View>
+      ) : (
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyText}>
+            {selectedParentId ? 'No subcategories for this group' : 'Select a category on the left'}
+          </Text>
+        </View>
+      )}
     </View>
   );
 
@@ -553,9 +537,20 @@ export const CategoriesScreen: React.FC = () => {
       <Header />
       <View style={styles.content}>
         {renderSidebar()}
-        <View style={styles.mainContent}>
-          {renderContent()}
-        </View>
+        <ScrollView
+          style={styles.mainContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={Colors.SHEIN_PINK}
+              colors={[Colors.SHEIN_PINK]}
+            />
+          }
+        >
+          {renderChildCategoriesGrid()}
+        </ScrollView>
       </View>
     </SafeAreaView>
   );
@@ -571,10 +566,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
   },
   sidebar: {
-    width: width * 0.35,
+    width: width * 0.32,
     borderRightWidth: 1,
     borderRightColor: Colors.BORDER,
     backgroundColor: Colors.LIGHT_GRAY,
+  },
+  sidebarScroll: {
+    flex: 1,
+  },
+  sidebarScrollContent: {
+    paddingBottom: 24,
+  },
+  sidebarLoader: {
+    marginTop: 24,
   },
   sidebarHeader: {
     flexDirection: 'row',
@@ -701,19 +705,19 @@ const styles = StyleSheet.create({
     color: Colors.TEXT_SECONDARY,
     textAlign: 'center',
   },
+  childLoader: {
+    marginVertical: 32,
+  },
   childCategoriesGridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     paddingHorizontal: 8,
-  },
-  childCategoriesGridList: {
-    paddingHorizontal: 4,
-  },
-  childCategoriesRow: {
-    justifyContent: 'space-around',
+    justifyContent: 'flex-start',
   },
   childCategoryItem: {
     alignItems: 'center',
     marginBottom: 16,
-    width: (width * 0.65 - 16) / 4,
+    width: (width * 0.68 - 16) / 4,
     paddingHorizontal: 4,
   },
   childCategoryCircle: {

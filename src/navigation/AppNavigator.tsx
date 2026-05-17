@@ -113,12 +113,7 @@ const MainTabNavigator = () => {
       <MainTab.Screen 
         name="Home" 
         component={HomeScreen}
-        options={{ tabBarLabel: 'Shop' }}
-      />
-      <MainTab.Screen 
-        name="Categories" 
-        component={CategoriesScreen}
-        options={{ tabBarLabel: 'Category' }}
+        options={{ tabBarLabel: 'Activity' }}
       />
       <MainTab.Screen 
         name="Sourcing" 
@@ -126,9 +121,14 @@ const MainTabNavigator = () => {
         options={{ tabBarLabel: 'Sourcing' }}
       />
       <MainTab.Screen 
+        name="Categories" 
+        component={CategoriesScreen}
+        options={{ tabBarLabel: 'Category' }}
+      />
+      <MainTab.Screen 
         name="Profile" 
         component={ProfileScreen}
-        options={{ tabBarLabel: 'Me' }}
+        options={{ tabBarLabel: 'Account' }}
       />
     </MainTab.Navigator>
   );

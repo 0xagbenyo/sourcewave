@@ -17,41 +17,35 @@ import * as ImagePicker from 'expo-image-picker';
 import { Colors } from '../constants/colors';
 import { useUserSession } from '../context/UserContext';
 import { getERPNextClient } from '../services/erpnext';
+import { collectDescendantItemGroupIds } from '../utils/itemGroup';
+import { Category } from '../types';
+import { SearchableSelect } from '../components/SearchableSelect';
+import { withOtherItemOption, SourcingItemOption } from '../utils/sourcingItems';
 
-type DropdownItem = { id: string; name: string; itemCode: string };
+type DropdownItem = SourcingItemOption;
 type RequestForm = {
   id: string;
   expanded: boolean;
-  selectedParentId: string;
-  selectedParentName: string;
-  selectedChildId: string;
-  selectedChildName: string;
+  selectedCategoryId: string;
+  selectedCategoryName: string;
   selectedProductId: string;
   itemDescription: string;
   referenceImageUri: string | null;
   quantity: string;
   expectedRate: string;
-  showParentPicker: boolean;
-  showChildPicker: boolean;
-  showItemPicker: boolean;
   loadingProducts: boolean;
 };
 
 const newForm = (expanded: boolean): RequestForm => ({
   id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   expanded,
-  selectedParentId: '',
-  selectedParentName: '',
-  selectedChildId: '',
-  selectedChildName: '',
+  selectedCategoryId: '',
+  selectedCategoryName: '',
   selectedProductId: '',
   itemDescription: '',
   referenceImageUri: null,
   quantity: '1',
   expectedRate: '',
-  showParentPicker: false,
-  showChildPicker: false,
-  showItemPicker: false,
   loadingProducts: false,
 });
 
@@ -83,12 +77,27 @@ export const SourcingRequestMultiScreen: React.FC = () => {
     fetchGroups();
   }, []);
 
-  const parentGroupList = useMemo(() => {
+  const categoryTree = useMemo<Category[]>(
+    () =>
+      allGroups.map((group: any) => ({
+        id: group.name,
+        name: group.item_group_name || group.name,
+        slug: group.name,
+        image: group.image || '',
+        parentId: group.parent_item_group,
+      })),
+    [allGroups]
+  );
+
+  const parentCategoryList = useMemo(() => {
     return allGroups
       .filter((group: any) => {
         const isGroup = Number(group?.is_group) === 1;
         const parent = String(group?.parent_item_group || '').trim();
-        return isGroup && (parent === '' || parent === 'All Item Groups');
+        return (
+          isGroup &&
+          (parent === '' || parent === 'All Item Groups' || parent === 'All Items Group')
+        );
       })
       .map((group: any) => ({
         id: group.name,
@@ -96,39 +105,35 @@ export const SourcingRequestMultiScreen: React.FC = () => {
       }));
   }, [allGroups]);
 
-  const childGroupListFor = (form: RequestForm) =>
-    allGroups
-      .filter((group: any) => {
-        const parent = String(group?.parent_item_group || '').trim();
-        return parent === form.selectedParentId || parent === form.selectedParentName;
-      })
-      .map((group: any) => ({
-        id: group.name,
-        name: group.item_group_name || group.name,
-      }));
-
   const updateForm = (formId: string, updates: Partial<RequestForm>) => {
     setForms((prev) => prev.map((f) => (f.id === formId ? { ...f, ...updates } : f)));
   };
 
-  const fetchItemsForForm = async (formId: string, childId: string, childName: string) => {
+  const fetchItemsForForm = async (
+    formId: string,
+    categoryId: string,
+    restrictToGroupId?: string
+  ) => {
     try {
       updateForm(formId, { loadingProducts: true });
       const client = getERPNextClient();
-      const byId = await client.getRawItemsByGroup(childId, 500);
-      const byName = childName && childName !== childId ? await client.getRawItemsByGroup(childName, 500) : [];
-      const merged = [...(byId || []), ...(byName || [])];
+      const groupIds = restrictToGroupId
+        ? [restrictToGroupId]
+        : collectDescendantItemGroupIds(categoryId, categoryTree);
+      const items = await client.getRawItemsByGroups(groupIds, 500);
       const unique = new Map<string, any>();
-      merged.forEach((item: any) => {
+      items.forEach((item: any) => {
         if (item?.name) unique.set(item.name, item);
       });
-      const dropdownItems: DropdownItem[] = Array.from(unique.values())
-        .filter((item: any) => Number(item?.disabled) !== 1)
-        .map((item: any) => ({
-          id: item.name,
-          name: item.item_name || item.name,
-          itemCode: item.name,
-        }));
+      const dropdownItems: DropdownItem[] = withOtherItemOption(
+        Array.from(unique.values())
+          .filter((item: any) => Number(item?.disabled) !== 1)
+          .map((item: any) => ({
+            id: item.name,
+            name: item.item_name || item.name,
+            itemCode: item.name,
+          }))
+      );
       setProductsByFormId((prev) => ({ ...prev, [formId]: dropdownItems }));
     } catch (error) {
       console.error('Error fetching items for form:', error);
@@ -166,31 +171,31 @@ export const SourcingRequestMultiScreen: React.FC = () => {
       return;
     }
 
-    const parentId = matchedParentRaw.name;
-    const parentName = matchedParentRaw.item_group_name || matchedParentRaw.name;
+    const categoryId = matchedParentRaw.name;
+    const categoryName = matchedParentRaw.item_group_name || matchedParentRaw.name;
 
-    const matchedChildRaw = allGroups.find((group: any) => {
+    const matchedSubcategoryRaw = allGroups.find((group: any) => {
       const parent = String(group?.parent_item_group || '').trim().toLowerCase();
       const name = String(group?.name || '').trim().toLowerCase();
       const label = String(group?.item_group_name || '').trim().toLowerCase();
-      return (parent === String(parentId).trim().toLowerCase() || parent === String(parentName).trim().toLowerCase())
-        && (name === childParam || label === childParam);
+      return (
+        (parent === String(categoryId).trim().toLowerCase() ||
+          parent === String(categoryName).trim().toLowerCase()) &&
+        (name === childParam || label === childParam)
+      );
     });
 
     updateForm(firstForm.id, {
-      selectedParentId: parentId,
-      selectedParentName: parentName,
-      selectedChildId: matchedChildRaw?.name || '',
-      selectedChildName: matchedChildRaw ? (matchedChildRaw.item_group_name || matchedChildRaw.name) : '',
+      selectedCategoryId: categoryId,
+      selectedCategoryName: categoryName,
       selectedProductId: '',
-      showParentPicker: false,
-      showChildPicker: false,
-      showItemPicker: false,
     });
 
-    if (matchedChildRaw?.name) {
-      fetchItemsForForm(firstForm.id, matchedChildRaw.name, matchedChildRaw.item_group_name || matchedChildRaw.name);
-    }
+    fetchItemsForForm(
+      firstForm.id,
+      categoryId,
+      matchedSubcategoryRaw?.name
+    );
 
     setDidAutoPrefill(true);
   }, [didAutoPrefill, loadingGroups, allGroups, forms, route?.params]);
@@ -216,36 +221,45 @@ export const SourcingRequestMultiScreen: React.FC = () => {
   };
 
   const submitAll = async () => {
-    const expandedForms = forms.filter((f) => f.selectedProductId);
-    if (expandedForms.length === 0) {
+    if (forms.length === 0) {
       Alert.alert('Missing Items', 'Please add at least one item request.');
       return;
     }
 
-    for (let i = 0; i < expandedForms.length; i += 1) {
-      const form = expandedForms[i];
+    for (let i = 0; i < forms.length; i += 1) {
+      const form = forms[i];
       const product = selectedProductFor(form);
       const qty = parseInt(form.quantity, 10);
       const rate = parseFloat(form.expectedRate);
-      const isOther = (product?.name || '').trim().toLowerCase() === 'other';
+      const requestNum = i + 1;
 
+      if (!form.selectedCategoryId) {
+        Alert.alert('Missing Category', `Item request #${requestNum}: please select an item category.`);
+        return;
+      }
       if (!product) {
-        Alert.alert('Missing Item', `Item request #${i + 1} has no selected item.`);
+        Alert.alert('Missing Item', `Item request #${requestNum}: please select an item.`);
+        return;
+      }
+      if (!form.itemDescription.trim()) {
+        Alert.alert('Description Required', `Item request #${requestNum}: please enter an item description.`);
+        return;
+      }
+      if (!form.referenceImageUri) {
+        Alert.alert('Preference Image Required', `Item request #${requestNum}: please upload a preference image.`);
         return;
       }
       if (!qty || qty < 1) {
-        Alert.alert('Invalid Quantity', `Item request #${i + 1} has invalid quantity.`);
+        Alert.alert('Invalid Quantity', `Item request #${requestNum}: quantity must be at least 1.`);
         return;
       }
       if (!rate || rate <= 0) {
-        Alert.alert('Invalid Rate', `Item request #${i + 1} has invalid expected rate.`);
-        return;
-      }
-      if (isOther && !form.itemDescription.trim()) {
-        Alert.alert('Description Required', `Item request #${i + 1} requires description for "Other".`);
+        Alert.alert('Invalid Rate', `Item request #${requestNum}: expected rate must be greater than 0.`);
         return;
       }
     }
+
+    const expandedForms = forms;
 
     try {
       setSubmitting(true);
@@ -278,10 +292,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
         const product = selectedProductFor(form) as DropdownItem;
         const qty = parseInt(form.quantity, 10);
         const rate = parseFloat(form.expectedRate);
-        const isOther = (product?.name || '').trim().toLowerCase() === 'other';
-        const description = isOther
-          ? form.itemDescription.trim()
-          : (form.itemDescription.trim() || `Sourcing request from China - ${form.selectedParentName} / ${form.selectedChildName}`);
+        const description = form.itemDescription.trim();
 
         return {
           item_code: product.itemCode || product.id,
@@ -345,11 +356,14 @@ export const SourcingRequestMultiScreen: React.FC = () => {
         <View style={styles.headerIconButton} />
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={styles.contentContainer}
+        keyboardShouldPersistTaps="handled"
+        nestedScrollEnabled
+      >
         {forms.map((form, idx) => {
           const product = selectedProductFor(form);
-          const isOther = (product?.name || '').trim().toLowerCase() === 'other';
-          const childGroups = childGroupListFor(form);
           const formProducts = productsByFormId[form.id] || [];
 
           return (
@@ -375,120 +389,51 @@ export const SourcingRequestMultiScreen: React.FC = () => {
 
               {form.expanded && (
                 <>
-                  <Text style={styles.label}>Parent Group</Text>
-                  <TouchableOpacity
-                    style={styles.selector}
-                    onPress={() => updateForm(form.id, { showParentPicker: !form.showParentPicker })}
-                  >
-                    <Text style={styles.selectorText}>{form.selectedParentName || 'Select parent group'}</Text>
-                    <Ionicons name={form.showParentPicker ? 'chevron-up' : 'chevron-down'} size={16} color={Colors.TEXT_SECONDARY} />
-                  </TouchableOpacity>
-                  {form.showParentPicker && (
-                    <View style={styles.optionsContainer}>
-                      {loadingGroups ? (
-                        <ActivityIndicator color={Colors.ROYAL_BLUE} />
-                      ) : (
-                        parentGroupList.map((parent) => (
-                          <TouchableOpacity
-                            key={parent.id}
-                            style={styles.option}
-                            onPress={() =>
-                              updateForm(form.id, {
-                                selectedParentId: parent.id,
-                                selectedParentName: parent.name,
-                                selectedChildId: '',
-                                selectedChildName: '',
-                                selectedProductId: '',
-                                showParentPicker: false,
-                                showChildPicker: false,
-                                showItemPicker: false,
-                              })
-                            }
-                          >
-                            <Text style={styles.optionText}>{parent.name}</Text>
-                          </TouchableOpacity>
-                        ))
-                      )}
-                    </View>
-                  )}
+                  <Text style={styles.label}>Item Category *</Text>
+                  <SearchableSelect
+                    options={parentCategoryList}
+                    selectedId={form.selectedCategoryId}
+                    selectedLabel={form.selectedCategoryName}
+                    onSelect={async (category) => {
+                      updateForm(form.id, {
+                        selectedCategoryId: category.id,
+                        selectedCategoryName: category.name,
+                        selectedProductId: '',
+                      });
+                      await fetchItemsForForm(form.id, category.id);
+                    }}
+                    placeholder="Select item category"
+                    searchPlaceholder="Search categories..."
+                    loading={loadingGroups}
+                    emptyText="No item categories available right now."
+                  />
 
-                  <Text style={styles.label}>Category</Text>
-                  <TouchableOpacity
-                    style={[styles.selector, !form.selectedParentId && styles.selectorDisabled]}
-                    disabled={!form.selectedParentId}
-                    onPress={() => updateForm(form.id, { showChildPicker: !form.showChildPicker })}
-                  >
-                    <Text style={styles.selectorText}>{form.selectedChildName || 'Select category'}</Text>
-                    <Ionicons name={form.showChildPicker ? 'chevron-up' : 'chevron-down'} size={16} color={Colors.TEXT_SECONDARY} />
-                  </TouchableOpacity>
-                  {form.showChildPicker && !!form.selectedParentId && (
-                    <View style={styles.optionsContainer}>
-                      {childGroups.length === 0 ? (
-                        <Text style={styles.emptyText}>No categories found under this parent group.</Text>
-                      ) : (
-                        childGroups.map((child) => (
-                          <TouchableOpacity
-                            key={child.id}
-                            style={styles.option}
-                            onPress={async () => {
-                              updateForm(form.id, {
-                                selectedChildId: child.id,
-                                selectedChildName: child.name,
-                                selectedProductId: '',
-                                showChildPicker: false,
-                                showItemPicker: false,
-                              });
-                              await fetchItemsForForm(form.id, child.id, child.name);
-                            }}
-                          >
-                            <Text style={styles.optionText}>{child.name}</Text>
-                          </TouchableOpacity>
-                        ))
-                      )}
-                    </View>
-                  )}
+                  <Text style={styles.label}>Item *</Text>
+                  <SearchableSelect
+                    options={formProducts}
+                    selectedId={form.selectedProductId}
+                    selectedLabel={product?.name}
+                    onSelect={(item) => updateForm(form.id, { selectedProductId: item.id })}
+                    placeholder={form.selectedCategoryId ? 'Select item' : 'Select item category first'}
+                    searchPlaceholder="Search items..."
+                    disabled={!form.selectedCategoryId}
+                    loading={form.loadingProducts}
+                    emptyText="No items found in this category."
+                    listMaxHeight={320}
+                  />
 
-                  <Text style={styles.label}>Item</Text>
-                  <TouchableOpacity
-                    style={[styles.selector, !form.selectedChildId && styles.selectorDisabled]}
-                    disabled={!form.selectedChildId}
-                    onPress={() => updateForm(form.id, { showItemPicker: !form.showItemPicker })}
-                  >
-                    <Text style={styles.selectorText}>{product?.name || 'Select item'}</Text>
-                    <Ionicons name={form.showItemPicker ? 'chevron-up' : 'chevron-down'} size={16} color={Colors.TEXT_SECONDARY} />
-                  </TouchableOpacity>
-                  {form.showItemPicker && !!form.selectedChildId && (
-                    <View style={styles.optionsContainer}>
-                      {form.loadingProducts ? (
-                        <ActivityIndicator color={Colors.ROYAL_BLUE} />
-                      ) : formProducts.length === 0 ? (
-                        <Text style={styles.emptyText}>No items found in this category.</Text>
-                      ) : (
-                        formProducts.map((item) => (
-                          <TouchableOpacity
-                            key={item.id}
-                            style={styles.option}
-                            onPress={() => updateForm(form.id, { selectedProductId: item.id, showItemPicker: false })}
-                          >
-                            <Text style={styles.optionText}>{item.name}</Text>
-                          </TouchableOpacity>
-                        ))
-                      )}
-                    </View>
-                  )}
-
-                  <Text style={styles.label}>{isOther ? 'Item Description *' : 'Item Description (Optional)'}</Text>
+                  <Text style={styles.label}>Item Description *</Text>
                   <TextInput
                     style={[styles.input, styles.textArea]}
                     value={form.itemDescription}
                     onChangeText={(v) => updateForm(form.id, { itemDescription: v })}
-                    placeholder={isOther ? 'Describe the "Other" item you need' : 'Add extra details (optional)'}
+                    placeholder="Describe the item you need"
                     placeholderTextColor={Colors.TEXT_SECONDARY}
                     multiline
                     textAlignVertical="top"
                   />
 
-                  <Text style={styles.label}>Reference Image (Optional)</Text>
+                  <Text style={styles.label}>Preference Image *</Text>
                   <TouchableOpacity style={styles.imagePickerButton} onPress={() => pickImageFor(form.id)}>
                     <Ionicons name="image-outline" size={16} color={Colors.ROYAL_BLUE} />
                     <Text style={styles.imagePickerButtonText}>
@@ -507,7 +452,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
                     </View>
                   )}
 
-                  <Text style={styles.label}>Quantity</Text>
+                  <Text style={styles.label}>Quantity *</Text>
                   <TextInput
                     style={styles.input}
                     value={form.quantity}
@@ -517,7 +462,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
                     placeholderTextColor={Colors.TEXT_SECONDARY}
                   />
 
-                  <Text style={styles.label}>Expected Rate (GH₵)</Text>
+                  <Text style={styles.label}>Expected Rate (GH₵) *</Text>
                   <TextInput
                     style={styles.input}
                     value={form.expectedRate}
@@ -577,31 +522,6 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: 13, fontWeight: '700', color: Colors.BLACK },
   cardSubtitle: { fontSize: 11, color: Colors.TEXT_SECONDARY, marginTop: 3 },
   label: { fontSize: 12, fontWeight: '600', color: Colors.BLACK, marginBottom: 6, marginTop: 10 },
-  selector: {
-    borderWidth: 1,
-    borderColor: Colors.BORDER,
-    borderRadius: 8,
-    backgroundColor: Colors.WHITE,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  selectorDisabled: { opacity: 0.6 },
-  selectorText: { fontSize: 13, color: Colors.BLACK, flex: 1, marginRight: 8 },
-  optionsContainer: {
-    marginTop: 8,
-    borderWidth: 1,
-    borderColor: Colors.BORDER,
-    borderRadius: 8,
-    backgroundColor: Colors.WHITE,
-    paddingVertical: 4,
-    maxHeight: 200,
-  },
-  option: { paddingVertical: 10, paddingHorizontal: 12, borderBottomWidth: 1, borderBottomColor: Colors.LIGHT_GRAY },
-  optionText: { fontSize: 13, color: Colors.BLACK },
-  emptyText: { fontSize: 12, color: Colors.TEXT_SECONDARY, padding: 12 },
   input: {
     borderWidth: 1,
     borderColor: Colors.BORDER,

@@ -1068,8 +1068,8 @@ export const HomeScreen: React.FC = () => {
 
 				<View style={styles.sourcewaveExplainCard}>
 					<Text style={styles.sourcewaveExplainBody}>
-						Sourcewave helps businesses source products globally, place custom requests,
-						and manage orders in one workflow.
+						Sourcewave connects you to global suppliers, submit custom requests, and manage
+						orders seamlessly in one unified workflow.
 					</Text>
 					<View style={styles.sourcewavePointRow}>
 						<View style={styles.sourcewaveDot} />
