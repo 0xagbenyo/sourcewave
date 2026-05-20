@@ -7,7 +7,9 @@
     "start:clear": "expo start -c",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "build:apk": "eas build --platform android --profile preview",
+    "build:apk:download": "eas build:download --platform android --profile preview"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

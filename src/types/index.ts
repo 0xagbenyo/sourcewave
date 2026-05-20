@@ -220,7 +220,12 @@ export type RootStackParamList = {
   Onboarding: undefined;
   Auth: undefined;
   Main: undefined;
-  SourcingRequest: { parentCategory?: string; subCategory?: string } | undefined;
+  SourcingRequest: {
+    parentCategory?: string;
+    parentCategoryId?: string;
+    subCategory?: string;
+    subCategoryId?: string;
+  } | undefined;
   ProductDetails: { productId: string };
   CategoryProducts: { categoryName: string; parentName: string };
   AllDeals: { deals: Product[] };

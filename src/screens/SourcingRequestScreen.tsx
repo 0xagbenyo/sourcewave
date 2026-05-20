@@ -17,7 +17,10 @@ import * as ImagePicker from 'expo-image-picker';
 import { Colors } from '../constants/colors';
 import { useUserSession } from '../context/UserContext';
 import { getERPNextClient } from '../services/erpnext';
-import { collectDescendantItemGroupIds } from '../utils/itemGroup';
+import {
+  buildSourcingCategoryOptions,
+  resolveItemGroupIdsForSourcingCategory,
+} from '../utils/itemGroup';
 import { Category } from '../types';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { withOtherItemOption, SourcingItemOption } from '../utils/sourcingItems';
@@ -68,21 +71,10 @@ export const SourcingRequestScreen: React.FC = () => {
     [allGroups]
   );
 
-  const parentCategoryList = useMemo(() => {
-    return allGroups
-      .filter((group: any) => {
-        const isGroup = Number(group?.is_group) === 1;
-        const parent = String(group?.parent_item_group || '').trim();
-        return (
-          isGroup &&
-          (parent === '' || parent === 'All Item Groups' || parent === 'All Items Group')
-        );
-      })
-      .map((group: any) => ({
-        id: group.name,
-        name: group.item_group_name || group.name,
-      }));
-  }, [allGroups]);
+  const itemCategoryList = useMemo(
+    () => buildSourcingCategoryOptions(allGroups),
+    [allGroups]
+  );
 
   useEffect(() => {
     const fetchProductsForCategory = async () => {
@@ -94,7 +86,7 @@ export const SourcingRequestScreen: React.FC = () => {
       try {
         setLoadingProducts(true);
         const client = getERPNextClient();
-        const groupIds = collectDescendantItemGroupIds(selectedCategoryId, categoryTree);
+        const groupIds = resolveItemGroupIdsForSourcingCategory(selectedCategoryId, categoryTree);
         const items = await client.getRawItemsByGroups(groupIds, 500);
         const uniqueMap = new Map<string, any>();
         items.forEach((item: any) => {
@@ -338,7 +330,7 @@ export const SourcingRequestScreen: React.FC = () => {
       >
         <Text style={styles.label}>Item Category *</Text>
         <SearchableSelect
-          options={parentCategoryList}
+          options={itemCategoryList}
           selectedId={selectedCategoryId}
           selectedLabel={selectedCategoryName}
           onSelect={handleCategorySelect}

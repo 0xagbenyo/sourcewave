@@ -42,6 +42,7 @@ import { Product, Order } from '../types';
 import { getERPNextClient } from '../services/erpnext';
 import { mapERPItemToProduct } from '../services/mappers';
 import { collectDescendantItemGroupIds } from '../utils/itemGroup';
+import { formatGhanaCedis } from '../utils/currency';
 
 const { width } = Dimensions.get('window');
 
@@ -892,25 +893,35 @@ export const HomeScreen: React.FC = () => {
 							<Ionicons name="image-outline" size={48} color={Colors.TEXT_SECONDARY} />
 						</View>
 					</View>
-					<View style={styles.carouselOverlay} />
+					<View style={styles.carouselOverlay} pointerEvents="none" />
 				</View>
 			);
 		}
 
+		const scrollToFlyer = (index: number) => {
+			setCurrentFlyerIndex(index);
+			flyerCarouselRef.current?.scrollTo({
+				x: index * width,
+				animated: true,
+			});
+		};
+
 		return (
-			<View style={styles.flyerCarouselContainer}>
+			<View style={styles.flyerCarouselContainer} pointerEvents="box-none">
 		<ScrollView
 			ref={flyerCarouselRef}
 			horizontal
 			pagingEnabled
-			showsHorizontalScrollIndicator={true}
+			showsHorizontalScrollIndicator={false}
 			scrollEventThrottle={16}
 			decelerationRate="fast"
+			nestedScrollEnabled
+			scrollEnabled
+			directionalLockEnabled
 			onMomentumScrollEnd={(event) => {
 				const newIndex = Math.round(event.nativeEvent.contentOffset.x / width);
 				setCurrentFlyerIndex(newIndex);
 			}}
-			nestedScrollEnabled={true}
 		>
 					{flyerMedia.map((item: any, index: number) => (
 						<View key={index} style={styles.flyerImageContainer}>
@@ -918,6 +929,7 @@ export const HomeScreen: React.FC = () => {
 								<Video
 									source={{ uri: item.uri }}
 									style={styles.flyerImage}
+									pointerEvents="none"
 									shouldPlay
 									isLooping={false}
 									useNativeControls={false}
@@ -932,11 +944,7 @@ export const HomeScreen: React.FC = () => {
 											console.log(`🎬 Video ${index} finished, moving to next slide`);
 											// Move to next slide when video ends
 											const nextIndex = (index + 1) % flyerMedia.length;
-											setCurrentFlyerIndex(nextIndex);
-											flyerCarouselRef.current?.scrollTo({
-												x: nextIndex * width,
-												animated: true,
-											});
+											scrollToFlyer(nextIndex);
 										}
 									}}
 								/>
@@ -958,18 +966,24 @@ export const HomeScreen: React.FC = () => {
 						</View>
 					))}
 				</ScrollView>
-				{/* Thin black overlay on carousel */}
-				<View style={styles.carouselOverlay} />
+				{/* Visual overlay only — must not block swipe gestures */}
+				<View style={styles.carouselOverlay} pointerEvents="none" />
 				{flyerMedia.length > 1 && (
-					<View style={styles.flyerIndicators}>
+					<View style={styles.flyerIndicators} pointerEvents="box-none">
 						{flyerMedia.map((_: any, index: number) => (
-							<View
+							<TouchableOpacity
 								key={index}
-								style={[
-									styles.flyerIndicator,
-									index === currentFlyerIndex && styles.flyerIndicatorActive,
-								]}
-							/>
+								activeOpacity={0.8}
+								onPress={() => scrollToFlyer(index)}
+								hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+							>
+								<View
+									style={[
+										styles.flyerIndicator,
+										index === currentFlyerIndex && styles.flyerIndicatorActive,
+									]}
+								/>
+							</TouchableOpacity>
 						))}
 					</View>
 				)}
@@ -1845,7 +1859,7 @@ export const HomeScreen: React.FC = () => {
 											</Text>
 										</View>
 										<View style={styles.recentOrderAmountWrap}>
-											<Text style={styles.recentOrderAmount}>GH₵{total.toFixed(2)}</Text>
+											<Text style={styles.recentOrderAmount}>{formatGhanaCedis(total)}</Text>
 											<Ionicons name="chevron-forward" size={16} color={Colors.WINE} />
 										</View>
 									</View>
@@ -2490,6 +2504,7 @@ export const HomeScreen: React.FC = () => {
 				renderItem={renderSection}
 				keyExtractor={(item) => item.id}
 				showsVerticalScrollIndicator={false}
+				nestedScrollEnabled
 				ListFooterComponent={null}
 				getItemLayout={getItemLayout}
 				onContentSizeChange={handleContentSizeChange}

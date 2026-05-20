@@ -507,12 +507,14 @@ export const CategoriesScreen: React.FC = () => {
                 image={image}
                 categoryName={categoryName}
                 index={index}
-                onPress={() => {
-                  (navigation as any).navigate('SourcingRequest', {
-                    parentCategory: selectedParentName || selectedParentId || '',
-                    subCategory: item.item_group_name || item.name || '',
-                  });
-                }}
+                  onPress={() => {
+                    (navigation as any).navigate('SourcingRequest', {
+                      parentCategoryId: selectedParentId || '',
+                      parentCategory: selectedParentName || '',
+                      subCategoryId: item.name || '',
+                      subCategory: item.item_group_name || item.name || '',
+                    });
+                  }}
               />
             );
           })}

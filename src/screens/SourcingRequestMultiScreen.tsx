@@ -17,7 +17,11 @@ import * as ImagePicker from 'expo-image-picker';
 import { Colors } from '../constants/colors';
 import { useUserSession } from '../context/UserContext';
 import { getERPNextClient } from '../services/erpnext';
-import { collectDescendantItemGroupIds } from '../utils/itemGroup';
+import {
+  buildSourcingCategoryOptions,
+  isTopLevelItemGroupParent,
+  resolveItemGroupIdsForSourcingCategory,
+} from '../utils/itemGroup';
 import { Category } from '../types';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { withOtherItemOption, SourcingItemOption } from '../utils/sourcingItems';
@@ -89,37 +93,20 @@ export const SourcingRequestMultiScreen: React.FC = () => {
     [allGroups]
   );
 
-  const parentCategoryList = useMemo(() => {
-    return allGroups
-      .filter((group: any) => {
-        const isGroup = Number(group?.is_group) === 1;
-        const parent = String(group?.parent_item_group || '').trim();
-        return (
-          isGroup &&
-          (parent === '' || parent === 'All Item Groups' || parent === 'All Items Group')
-        );
-      })
-      .map((group: any) => ({
-        id: group.name,
-        name: group.item_group_name || group.name,
-      }));
-  }, [allGroups]);
+  const itemCategoryList = useMemo(
+    () => buildSourcingCategoryOptions(allGroups),
+    [allGroups]
+  );
 
   const updateForm = (formId: string, updates: Partial<RequestForm>) => {
     setForms((prev) => prev.map((f) => (f.id === formId ? { ...f, ...updates } : f)));
   };
 
-  const fetchItemsForForm = async (
-    formId: string,
-    categoryId: string,
-    restrictToGroupId?: string
-  ) => {
+  const fetchItemsForForm = async (formId: string, categoryId: string) => {
     try {
       updateForm(formId, { loadingProducts: true });
       const client = getERPNextClient();
-      const groupIds = restrictToGroupId
-        ? [restrictToGroupId]
-        : collectDescendantItemGroupIds(categoryId, categoryTree);
+      const groupIds = resolveItemGroupIdsForSourcingCategory(categoryId, categoryTree);
       const items = await client.getRawItemsByGroups(groupIds, 500);
       const unique = new Map<string, any>();
       items.forEach((item: any) => {
@@ -152,38 +139,50 @@ export const SourcingRequestMultiScreen: React.FC = () => {
     if (!allGroups || allGroups.length === 0) return;
     if (!forms[0]) return;
 
-    const parentParam = String(route?.params?.parentCategory || '').trim().toLowerCase();
+    const subCategoryIdParam = String(route?.params?.subCategoryId || '').trim();
     const childParam = String(route?.params?.subCategory || '').trim().toLowerCase();
-    if (!parentParam || !childParam) return;
+    const parentIdParam = String(route?.params?.parentCategoryId || '').trim();
+    const parentParam = String(route?.params?.parentCategory || '').trim().toLowerCase();
+
+    if (!subCategoryIdParam && !childParam) return;
 
     const firstForm = forms[0];
-    const matchedParentRaw = allGroups.find((group: any) => {
-      const name = String(group?.name || '').trim().toLowerCase();
-      const label = String(group?.item_group_name || '').trim().toLowerCase();
-      const isGroup = Number(group?.is_group) === 1;
-      const parent = String(group?.parent_item_group || '').trim();
-      const isTopLevel = parent === '' || parent === 'All Item Groups';
-      return isGroup && isTopLevel && (name === parentParam || label === parentParam);
-    });
 
-    if (!matchedParentRaw) {
+    let matchedSubcategoryRaw = subCategoryIdParam
+      ? allGroups.find((group: any) => group.name === subCategoryIdParam)
+      : undefined;
+
+    if (!matchedSubcategoryRaw && childParam) {
+      matchedSubcategoryRaw = allGroups.find((group: any) => {
+        const name = String(group?.name || '').trim().toLowerCase();
+        const label = String(group?.item_group_name || '').trim().toLowerCase();
+        if (name !== childParam && label !== childParam) return false;
+
+        const parent = String(group?.parent_item_group || '').trim();
+        if (isTopLevelItemGroupParent(parent)) return false;
+
+        if (!parentIdParam && !parentParam) return true;
+
+        const parentGroup = allGroups.find((g: any) => g.name === parentIdParam);
+        const parentNameLower = String(
+          parentGroup?.item_group_name || parentParam || ''
+        ).toLowerCase();
+        return (
+          parent === parentIdParam ||
+          parent.toLowerCase() === parentNameLower ||
+          parent.toLowerCase() === parentParam
+        );
+      });
+    }
+
+    if (!matchedSubcategoryRaw) {
       setDidAutoPrefill(true);
       return;
     }
 
-    const categoryId = matchedParentRaw.name;
-    const categoryName = matchedParentRaw.item_group_name || matchedParentRaw.name;
-
-    const matchedSubcategoryRaw = allGroups.find((group: any) => {
-      const parent = String(group?.parent_item_group || '').trim().toLowerCase();
-      const name = String(group?.name || '').trim().toLowerCase();
-      const label = String(group?.item_group_name || '').trim().toLowerCase();
-      return (
-        (parent === String(categoryId).trim().toLowerCase() ||
-          parent === String(categoryName).trim().toLowerCase()) &&
-        (name === childParam || label === childParam)
-      );
-    });
+    const categoryId = matchedSubcategoryRaw.name;
+    const categoryName =
+      matchedSubcategoryRaw.item_group_name || matchedSubcategoryRaw.name;
 
     updateForm(firstForm.id, {
       selectedCategoryId: categoryId,
@@ -191,11 +190,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
       selectedProductId: '',
     });
 
-    fetchItemsForForm(
-      firstForm.id,
-      categoryId,
-      matchedSubcategoryRaw?.name
-    );
+    fetchItemsForForm(firstForm.id, categoryId);
 
     setDidAutoPrefill(true);
   }, [didAutoPrefill, loadingGroups, allGroups, forms, route?.params]);
@@ -391,7 +386,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
                 <>
                   <Text style={styles.label}>Item Category *</Text>
                   <SearchableSelect
-                    options={parentCategoryList}
+                    options={itemCategoryList}
                     selectedId={form.selectedCategoryId}
                     selectedLabel={form.selectedCategoryName}
                     onSelect={async (category) => {
