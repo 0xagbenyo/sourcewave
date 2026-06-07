@@ -1,9 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
-import { useNavigation, useNavigationState } from '@react-navigation/native';
+import { useNavigation, useNavigationState, useFocusEffect } from '@react-navigation/native';
 import { Spacing } from '../constants/spacing';
+import { useUserSession } from '../context/UserContext';
+import { useRavenUnread } from '../context/RavenUnreadContext';
+import { RavenGlobalSearchModal } from './RavenGlobalSearchModal';
 
 interface HeaderProps {
   onSearchPress?: () => void;
@@ -39,11 +42,20 @@ export const Header: React.FC<HeaderProps> = ({
   headerBackgroundColor: customHeaderBackgroundColor,
 }) => {
   const navigation = useNavigation();
+  const { user } = useUserSession();
+  const { unreadTotal, refreshUnreadCounts } = useRavenUnread();
   const [localSearchValue, setLocalSearchValue] = useState('');
+  const [ravenSearchOpen, setRavenSearchOpen] = useState(false);
   const searchInputRef = useRef<TextInput>(null);
   const preventFocusNavigationRef = useRef(false);
   const previousRouteNameRef = useRef<string | undefined>(undefined);
   
+  useFocusEffect(
+    useCallback(() => {
+      void refreshUnreadCounts();
+    }, [refreshUnreadCounts])
+  );
+
   // Get current route name using navigation state
   const currentRouteName = useNavigationState((state) => {
     const route = state?.routes[state?.index || 0];
@@ -140,7 +152,14 @@ export const Header: React.FC<HeaderProps> = ({
   const handleMailPress = () => {
     if (onMailPress) {
       onMailPress();
+      return;
     }
+    if (!user?.email) {
+      (navigation as any).navigate('Auth');
+      return;
+    }
+    // Dedicated inbox (channels / DMs), separate from the Suppliers tab.
+    (navigation as any).navigate('RavenChatInbox');
   };
 
   const handleSourcingPress = () => {
@@ -223,14 +242,21 @@ export const Header: React.FC<HeaderProps> = ({
             </TouchableOpacity>
           ) : (
             <>
-              <TouchableOpacity 
-                style={styles.iconButton} 
-                onPress={handleMailPress}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <Ionicons name="mail-outline" size={18} color={iconColor} />
-              </TouchableOpacity>
-              
+              <View style={styles.chatIconWrap}>
+                <TouchableOpacity
+                  style={styles.iconButton}
+                  onPress={handleMailPress}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Ionicons name="chatbubbles-outline" size={18} color={iconColor} />
+                </TouchableOpacity>
+                {user?.email && unreadTotal > 0 ? (
+                  <View style={styles.chatBadge} pointerEvents="none">
+                    <Text style={styles.chatBadgeText}>{unreadTotal > 99 ? '99+' : String(unreadTotal)}</Text>
+                  </View>
+                ) : null}
+              </View>
+
               <TouchableOpacity 
                 style={styles.iconButton} 
                 onPress={handleCalendarPress}
@@ -270,6 +296,16 @@ export const Header: React.FC<HeaderProps> = ({
               pointerEvents={currentRouteName === 'Search' ? 'auto' : 'none'}
             />
             <View style={styles.searchIconsContainer} pointerEvents="box-none">
+              {user?.email ? (
+                <TouchableOpacity
+                  style={styles.searchIconButton}
+                  onPress={() => setRavenSearchOpen(true)}
+                  hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
+                  accessibilityLabel="Search team messages and channels"
+                >
+                  <Ionicons name="people-outline" size={18} color={Colors.TEXT_SECONDARY} />
+                </TouchableOpacity>
+              ) : null}
               <TouchableOpacity 
                 style={styles.cameraButton} 
                 onPress={handleCameraPress}
@@ -306,6 +342,18 @@ export const Header: React.FC<HeaderProps> = ({
           </TouchableOpacity>
         </View>
       </View>
+
+      <RavenGlobalSearchModal
+        visible={ravenSearchOpen}
+        onClose={() => setRavenSearchOpen(false)}
+        title="Team search"
+        onChannelPicked={(workspaceId, channelId) => {
+          (navigation as { navigate: (name: string, params?: object) => void }).navigate('RavenChatInbox', {
+            openWorkspaceId: workspaceId,
+            openChannelId: channelId,
+          });
+        }}
+      />
     </View>
   );
 };
@@ -361,6 +409,30 @@ const styles = StyleSheet.create({
     height: 20,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  chatIconWrap: {
+    position: 'relative',
+    width: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  chatBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -8,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 4,
+    borderRadius: 8,
+    backgroundColor: '#E53935',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chatBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: Colors.WHITE,
   },
   rightIcons: {
     flexDirection: 'row',

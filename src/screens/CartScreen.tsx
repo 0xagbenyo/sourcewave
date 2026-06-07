@@ -8,7 +8,6 @@ import {
   FlatList,
   ActivityIndicator,
   RefreshControl,
-  Image,
   TextInput,
   Alert,
 } from 'react-native';
@@ -22,6 +21,7 @@ import { useFocusEffect, useNavigation, CommonActions } from '@react-navigation/
 import * as Updates from 'expo-updates';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { getERPNextClient } from '../services/erpnext';
+import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 
 export const CartScreen: React.FC = () => {
   const navigation = useNavigation();
@@ -412,8 +412,8 @@ export const CartScreen: React.FC = () => {
             activeOpacity={0.7}
           >
             {product.images && product.images.length > 0 ? (
-              <Image
-                source={{ uri: product.images[0] }}
+              <ErpAuthenticatedImage
+                uri={product.images[0]}
                 style={styles.itemImageContent}
                 resizeMode="cover"
               />

@@ -41,6 +41,19 @@ export interface PaystackChargeResponse {
   };
 }
 
+/**
+ * True when Paystack reports the charge completed (mobile money can still be pending in other shapes).
+ * Uses `data.status` and `gateway_response` (e.g. "Approved").
+ */
+export const isPaystackChargeTransactionSuccessful = (res: PaystackChargeResponse): boolean => {
+  const tx = res.data;
+  if (!tx) return false;
+  if (tx.status === 'success') return true;
+  const gw = String(tx.gateway_response || '').toLowerCase();
+  if (gw === 'approved' || gw.includes('success')) return true;
+  return false;
+};
+
 export interface PaystackVerifyResponse {
   status: boolean;
   message: string;
@@ -76,8 +89,15 @@ export const initializePaystackCharge = async (
 
     // Log the full response for debugging
     console.log('Paystack charge response:', JSON.stringify(response.data, null, 2));
-    console.log('Paystack response status:', response.status);
-    console.log('Paystack response.data.status:', response.data?.status);
+    console.log('Paystack HTTP:', response.status);
+    const envelope = response.data as PaystackChargeResponse | undefined;
+    console.log(
+      'Paystack API envelope:',
+      'status=' + String(envelope?.status),
+      '· tx=',
+      envelope?.data?.status,
+      envelope?.data?.gateway_response ? `· gateway=${envelope.data.gateway_response}` : ''
+    );
 
     // Check if Paystack returned an error in the response body
     // Paystack can return 200 status but with status: false in the body

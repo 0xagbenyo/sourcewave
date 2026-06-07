@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
-  Image,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -21,6 +20,7 @@ import { getERPNextClient } from '../services/erpnext';
 import { useCartActions } from '../hooks/erpnext';
 import { useUserSession } from '../context/UserContext';
 import { Toast } from '../components/Toast';
+import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 
 interface BundleItem {
   itemCode: string;
@@ -227,11 +227,7 @@ export const ViewBundleScreen: React.FC = () => {
         {/* Item Image Container */}
         <View style={styles.imageContainer}>
           {imageUrl ? (
-            <Image
-              source={{ uri: imageUrl }}
-              style={styles.itemImage}
-              resizeMode="contain"
-            />
+            <ErpAuthenticatedImage uri={imageUrl} style={styles.itemImage} resizeMode="contain" />
           ) : (
             <View style={styles.imagePlaceholder}>
               <Ionicons name="image-outline" size={48} color={Colors.MEDIUM_GRAY} />

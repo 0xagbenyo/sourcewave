@@ -1,9 +1,20 @@
 import React, { createContext, useContext, useState, ReactNode } from 'react';
+import { clearFrappeWebCredentials } from '../services/sessionCredentials';
+import { clearFrappeRavenSession } from '../services/frappeRavenSession';
+import { clearRavenMessagingLocalCache } from '../utils/ravenMessagingLocalCache';
 
-interface UserSession {
+/** Buyer = retail customer flow; Supplier = linked Supplier portal (buying docs + chat). */
+export type AppMode = 'buyer' | 'supplier';
+
+export interface UserSession {
   email: string;
   fullName?: string;
+  /** Frappe `User.name` (login id), not Supplier doc name — use `supplierId` for ERPNext Supplier links. */
   user?: string;
+  appMode?: AppMode;
+  /** ERPNext `Supplier.name` (document id for Purchase Order, Supplier Quotation, etc.). */
+  supplierId?: string;
+  supplierName?: string;
 }
 
 interface UserContextType {
@@ -24,7 +35,11 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const clearUser = () => {
+    const email = user?.email;
     setUserState(null);
+    clearFrappeRavenSession();
+    void clearFrappeWebCredentials();
+    void clearRavenMessagingLocalCache(email);
   };
 
   return (

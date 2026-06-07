@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   FlatList,
   Dimensions,
-  Image,
   RefreshControl,
   Animated,
   ActivityIndicator,
@@ -22,6 +21,7 @@ import { useUserSession } from '../context/UserContext';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { ProductCard } from '../components/ProductCard';
 import { Header } from '../components/Header';
+import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 import { SortOption } from '../components/PriceFilter';
 import { getProductDiscount } from '../utils/pricingRules';
 import { getERPNextClient } from '../services/erpnext';
@@ -131,12 +131,12 @@ const AnimatedCategoryItem: React.FC<{
       >
         {image ? (
           <View style={styles.childCategoryCircle}>
-            <Image
-              source={{ uri: image }}
+            <ErpAuthenticatedImage
+              uri={image}
               style={styles.childCategoryImage}
               resizeMode="cover"
-              onError={(error) => {
-                console.warn(`Failed to load image for category ${category.name}:`, image, error);
+              onError={() => {
+                console.warn(`Failed to load image for category ${category.name}:`, image);
               }}
             />
           </View>

@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
@@ -27,6 +28,7 @@ export const RegisterScreen: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState<{[key: string]: string}>({});
   const navigation = useNavigation();
+  const { t } = useTranslation();
 
   const validateEmail = (email: string) => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -45,23 +47,23 @@ export const RegisterScreen: React.FC = () => {
     const newErrors: {[key: string]: string} = {};
 
     if (!email.trim()) {
-      newErrors.email = 'Email is required';
+      newErrors.email = 'register.errors.emailRequired';
     } else if (!validateEmail(email.trim())) {
-      newErrors.email = 'Please enter a valid email address';
+      newErrors.email = 'register.errors.emailInvalid';
     }
 
     if (!firstName.trim()) {
-      newErrors.firstName = 'First name is required';
+      newErrors.firstName = 'register.errors.firstRequired';
     }
 
     if (!lastName.trim()) {
-      newErrors.lastName = 'Last name is required';
+      newErrors.lastName = 'register.errors.lastRequired';
     }
 
     if (!phone.trim()) {
-      newErrors.phone = 'Phone number is required';
+      newErrors.phone = 'register.errors.phoneRequired';
     } else if (!validatePhone(phone.trim())) {
-      newErrors.phone = 'Please enter a valid phone number';
+      newErrors.phone = 'register.errors.phoneInvalid';
     }
 
     setErrors(newErrors);
@@ -122,8 +124,8 @@ export const RegisterScreen: React.FC = () => {
     } catch (error: any) {
       setIsLoading(false);
       // Handle error - show error message to user
-      const errorMessage = error?.message || 'Failed to send verification link. Please try again.';
-      Alert.alert('Registration Error', errorMessage);
+      const errorMessage = error?.message || t('register.alerts.sendFailed');
+      Alert.alert(t('register.alerts.registrationError'), errorMessage);
       console.error('Registration error:', error);
     }
   };
@@ -145,44 +147,44 @@ export const RegisterScreen: React.FC = () => {
             <TouchableOpacity style={styles.backButton} onPress={handleBack}>
               <Ionicons name="arrow-back" size={20} color={Colors.BLACK} />
             </TouchableOpacity>
-            <Text style={styles.title}>Create your SOURCEWAVE account</Text>
-            <Text style={styles.subtitle}>It's quick and easy.</Text>
+            <Text style={styles.title}>{t('register.title')}</Text>
+            <Text style={styles.subtitle}>{t('register.subtitle')}</Text>
           </View>
 
           {/* Form */}
           <View style={styles.formContainer}>
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Email</Text>
+              <Text style={styles.label}>{t('register.email')}</Text>
               <TextInput
                 style={[styles.input, errors.email && styles.inputError]}
-                placeholder="Enter your email"
+                placeholder={t('register.emailPlaceholder')}
                 value={email}
                 onChangeText={setEmail}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 autoCorrect={false}
               />
-              {errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
+              {errors.email && <Text style={styles.errorText}>{t(errors.email)}</Text>}
             </View>
 
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>First Name</Text>
+              <Text style={styles.label}>{t('register.firstName')}</Text>
               <TextInput
                 style={[styles.input, errors.firstName && styles.inputError]}
-                placeholder="Enter your first name"
+                placeholder={t('register.firstNamePlaceholder')}
                 value={firstName}
                 onChangeText={setFirstName}
                 autoCapitalize="words"
                 autoCorrect={false}
               />
-              {errors.firstName && <Text style={styles.errorText}>{errors.firstName}</Text>}
+              {errors.firstName && <Text style={styles.errorText}>{t(errors.firstName)}</Text>}
             </View>
 
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Middle Name (Optional)</Text>
+              <Text style={styles.label}>{t('register.middleName')}</Text>
               <TextInput
                 style={styles.input}
-                placeholder="Enter your middle name"
+                placeholder={t('register.middleNamePlaceholder')}
                 value={middleName}
                 onChangeText={setMiddleName}
                 autoCapitalize="words"
@@ -191,30 +193,30 @@ export const RegisterScreen: React.FC = () => {
             </View>
 
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Last Name</Text>
+              <Text style={styles.label}>{t('register.lastName')}</Text>
               <TextInput
                 style={[styles.input, errors.lastName && styles.inputError]}
-                placeholder="Enter your last name"
+                placeholder={t('register.lastNamePlaceholder')}
                 value={lastName}
                 onChangeText={setLastName}
                 autoCapitalize="words"
                 autoCorrect={false}
               />
-              {errors.lastName && <Text style={styles.errorText}>{errors.lastName}</Text>}
+              {errors.lastName && <Text style={styles.errorText}>{t(errors.lastName)}</Text>}
             </View>
 
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Phone Number</Text>
+              <Text style={styles.label}>{t('register.phone')}</Text>
               <TextInput
                 style={[styles.input, errors.phone && styles.inputError]}
-                placeholder="Enter your phone number"
+                placeholder={t('register.phonePlaceholder')}
                 value={phone}
                 onChangeText={setPhone}
                 keyboardType="phone-pad"
                 autoCapitalize="none"
                 autoCorrect={false}
               />
-              {errors.phone && <Text style={styles.errorText}>{errors.phone}</Text>}
+              {errors.phone && <Text style={styles.errorText}>{t(errors.phone)}</Text>}
             </View>
 
             {/* Send Verification Link Button */}
@@ -224,32 +226,32 @@ export const RegisterScreen: React.FC = () => {
               disabled={isLoading}
             >
               <Text style={styles.registerButtonText}>
-                {isLoading ? 'SENDING...' : 'SEND VERIFICATION LINK'}
+                {isLoading ? t('register.sending') : t('register.sendLink')}
               </Text>
             </TouchableOpacity>
 
             <View style={styles.signinSection}>
-              <Text style={styles.signinText}>Already have an account? </Text>
+              <Text style={styles.signinText}>{t('register.haveAccount')}</Text>
               <TouchableOpacity onPress={() => navigation.navigate('Login' as never)}>
-                <Text style={styles.signinLink}>Sign in</Text>
+                <Text style={styles.signinLink}>{t('register.signIn')}</Text>
               </TouchableOpacity>
             </View>
 
             {/* Info Banner */}
             <View style={styles.infoBanner}>
               <Ionicons name="information-circle-outline" size={16} color={Colors.ELECTRIC_BLUE} />
-              <Text style={styles.infoText}>
-                We'll send you a verification link. Click it to set your password and complete registration.
-              </Text>
+              <Text style={styles.infoText}>{t('register.infoBanner')}</Text>
             </View>
           </View>
 
           {/* Legal Text */}
           <Text style={styles.legalText}>
-            By registering, you agree to our{' '}
-            <Text style={styles.linkText}>Privacy & Cookie Policy</Text>
-            {' '}and{' '}
-            <Text style={styles.linkText}>Terms & Conditions</Text>.
+            {t('register.legalPrefix')}{' '}
+            <Text style={styles.linkText}>{t('register.privacy')}</Text>
+            {' '}
+            {t('register.and')}{' '}
+            <Text style={styles.linkText}>{t('register.terms')}</Text>
+            {t('register.legalSuffix')}
           </Text>
         </ScrollView>
       </KeyboardAvoidingView>

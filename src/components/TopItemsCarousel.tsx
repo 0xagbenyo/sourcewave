@@ -3,7 +3,6 @@ import {
   View,
   StyleSheet,
   FlatList,
-  Image,
   TouchableOpacity,
   Dimensions,
 } from 'react-native';
@@ -13,6 +12,8 @@ import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { getERPNextClient } from '../services/erpnext';
 import { mapERPItemToProduct } from '../services/mappers';
+import { encodeErpFileUrl } from '../utils/erpImageUrl';
+import { ErpAuthenticatedImage } from './ErpAuthenticatedImage';
 
 const { width } = Dimensions.get('window');
 const ITEM_SIZE = 60; // Fixed size for circular/square images
@@ -42,23 +43,10 @@ export const TopItemsCarousel: React.FC<TopItemsCarouselProps> = ({
   // Limit to first 20 items
   const displayItems = items.slice(0, 20);
 
-  // Helper function to convert relative image path to full URL
   const getImageUrl = (imagePath: string | null): string | null => {
     if (!imagePath) return null;
-    
-    // If it's already a full URL, return as is
-    if (imagePath.startsWith('http')) {
-      return imagePath;
-    }
-    
-    // Convert relative path to full URL
-    // URL encode the path to handle spaces and special characters
-    const pathParts = imagePath.split('/');
-    const encodedParts = pathParts.map((part, idx) => {
-      return idx === 0 && part === '' ? '' : encodeURIComponent(part);
-    });
-    const encodedPath = encodedParts.join('/');
-    return `https://glamora.rxcue.net${encodedPath.startsWith('/') ? encodedPath : '/' + encodedPath}`;
+    const u = encodeErpFileUrl(imagePath);
+    return u || null;
   };
 
   const handleItemPress = async (item: TopItem) => {
@@ -108,11 +96,7 @@ export const TopItemsCarousel: React.FC<TopItemsCarouselProps> = ({
         activeOpacity={0.7}
       >
         {imageUrl ? (
-          <Image
-            source={{ uri: imageUrl }}
-            style={styles.itemImage}
-            resizeMode="contain"
-          />
+          <ErpAuthenticatedImage uri={imageUrl} style={styles.itemImage} resizeMode="contain" />
         ) : (
           <View style={styles.placeholderImage}>
             <Ionicons name="image-outline" size={24} color={Colors.TEXT_SECONDARY} />

@@ -9,7 +9,6 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
-  Image,
   Dimensions,
   Pressable,
 } from 'react-native';
@@ -21,6 +20,7 @@ import { useUserSession } from '../context/UserContext';
 import { useNavigation } from '@react-navigation/native';
 import { getERPNextClient } from '../services/erpnext';
 import { mapERPItemToProduct } from '../services/mappers';
+import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 
 interface BundleItem {
   id: string;
@@ -217,10 +217,7 @@ export const CreateBundleScreen: React.FC = () => {
     >
       <View style={styles.searchItemContent}>
         {item.images && item.images[0] && (
-          <Image
-            source={{ uri: item.images[0] }}
-            style={styles.searchItemImage}
-          />
+          <ErpAuthenticatedImage uri={item.images[0]} style={styles.searchItemImage} resizeMode="cover" />
         )}
         <View style={styles.searchItemText}>
           <Text style={styles.searchItemName} numberOfLines={2}>{item.item_name}</Text>

@@ -2,16 +2,16 @@ import React, { useRef } from 'react';
 import {
   View,
   Text,
-  Image,
   TouchableOpacity,
   StyleSheet,
   Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { Product } from '../types';
+import { ErpAuthenticatedImage } from './ErpAuthenticatedImage';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
 import { Spacing } from '../constants/spacing';
+import { Product } from '../types';
 
 const { width } = Dimensions.get('window');
 const cardWidth = (width - Spacing.SCREEN_PADDING * 4) / 2;
@@ -155,11 +155,7 @@ export const ProductCard: React.FC<ProductCardProps> = React.memo(({
         style={[styles.imageContainer, { height: imageHeight }]}
       >
         {product.images && product.images.length > 0 && product.images[0] ? (
-          <Image
-            source={{ uri: product.images[0] }}
-            style={styles.image}
-            resizeMode="cover"
-          />
+          <ErpAuthenticatedImage uri={product.images[0]} style={styles.image} resizeMode="cover" />
         ) : (
           <View style={styles.placeholderImage}>
             <Ionicons name="image-outline" size={40} color={Colors.TEXT_SECONDARY} />

@@ -8,7 +8,7 @@
  * Use getWebsiteItemAllFields() to fetch all fields from a Website Item for reference.
  */
 
-import axios, { AxiosInstance, AxiosError } from 'axios';
+import axios, { AxiosInstance, AxiosError, AxiosResponse } from 'axios';
 
 // Configuration
 const ERPNEXT_BASE_URL = process.env.EXPO_PUBLIC_ERPNEXT_URL || 'http://localhost:8000';
@@ -170,6 +170,77 @@ export interface ERPNextError {
   [key: string]: any; // Allow other properties
 }
 
+/** Frappe `/api/*` must return JSON; HTML means wrong base URL, auth wall, or proxy misrouting. */
+function responseBodyLooksLikeHtml(data: unknown, contentType: string | undefined): boolean {
+  const ct = (contentType || '').toLowerCase();
+  if (ct.includes('text/html')) return true;
+  if (typeof data === 'string') {
+    const probe = data.slice(0, 2500).trimStart().toLowerCase();
+    if (probe.startsWith('<!doctype') || probe.startsWith('<html')) return true;
+    if (
+      probe.startsWith('<') &&
+      (data.includes('<head') || data.includes('<body') || data.includes('</html>') || data.includes('<script'))
+    ) {
+      return true;
+    }
+  }
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const o = data as Record<string, unknown>;
+    const msg = o.message;
+    if (typeof msg === 'string' && msg.length > 100) {
+      const p = msg.slice(0, 600).trimStart().toLowerCase();
+      if (p.startsWith('<!doctype') || p.startsWith('<html')) return true;
+    }
+    const exc = o.exception;
+    if (typeof exc === 'string' && exc.includes('<!DOCTYPE')) return true;
+  }
+  return false;
+}
+
+/**
+ * Frappe REST lives at `{site}/api/...`. If EXPO_PUBLIC_ERPNEXT_URL is a Raven or Desk URL,
+ * axios joins `/api/...` under that path (e.g. `.../raven/Raven/api/...`) and the server returns HTML.
+ */
+export function normalizeFrappeApiBaseUrl(raw: string): string {
+  const trimmed = raw.trim().replace(/\/+$/, '');
+  if (!trimmed) return 'http://localhost:8000';
+  const withProto = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  let u: URL;
+  try {
+    u = new URL(withProto);
+  } catch {
+    return trimmed;
+  }
+  let path = (u.pathname || '').replace(/\/+$/, '') || '';
+  const lower = path.toLowerCase();
+
+  if (lower.startsWith('/raven/') || lower === '/raven') {
+    path = '';
+  } else {
+    const stripTail = ['/app', '/desk', '/login'];
+    for (const tail of stripTail) {
+      if (lower.endsWith(tail) && path.length >= tail.length) {
+        path = path.slice(0, -tail.length).replace(/\/+$/, '') || '';
+        break;
+      }
+    }
+  }
+  if (path.toLowerCase().endsWith('/api')) {
+    path = path.slice(0, -4).replace(/\/+$/, '') || '';
+  }
+  const suffix = path && path !== '/' ? path : '';
+  return `${u.origin}${suffix}`.replace(/\/$/, '');
+}
+
+function htmlInsteadOfJsonError(url?: string): Error {
+  const path = url ? ` (${url})` : '';
+  return new Error(
+    `The server returned HTML instead of JSON${path}. ` +
+      'Set EXPO_PUBLIC_ERPNEXT_URL to your site root only (e.g. https://yoursite.com) — not /app, /desk, or /login. ' +
+      'Check API credentials and that /api is reachable (proxies must forward /api).'
+  );
+}
+
 /**
  * Legacy filters targeted `Website Item`. Catalog + images use the `Item` doctype instead.
  */
@@ -193,6 +264,17 @@ function mapWebsiteItemFiltersToItem(filters: any[][]): any[][] {
     out.push(['Item', field, op, val]);
   }
   return out;
+}
+
+/** Frappe `TimestampMismatchError` — document changed on server between fetch and submit; submit can be retried. */
+function isFrappeTimestampMismatchMessage(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes('timestampmismatch') ||
+    m.includes('timestamp mismatch') ||
+    m.includes('modified after you have opened') ||
+    m.includes('please refresh to get the latest document')
+  );
 }
 
 // API Client Class
@@ -241,7 +323,22 @@ class ERPNextClient {
 
     // Add retry logic with error interceptor
     this.client.interceptors.response.use(
-      (response) => response,
+      (response: AxiosResponse) => {
+        const cfgUrl = response.config?.url || '';
+        const abs =
+          typeof (response.request as { responseURL?: string } | undefined)?.responseURL === 'string'
+            ? String((response.request as { responseURL: string }).responseURL)
+            : '';
+        const hitsApi = cfgUrl.includes('/api/') || abs.includes('/api/');
+        if (hitsApi) {
+          const h = response.headers;
+          const ct = (h['content-type'] || h['Content-Type']) as string | undefined;
+          if (responseBodyLooksLikeHtml(response.data, ct)) {
+            return Promise.reject(htmlInsteadOfJsonError(abs || cfgUrl));
+          }
+        }
+        return response;
+      },
       async (error: AxiosError<ERPNextError>) => {
         const originalRequest = error.config as any;
 
@@ -294,8 +391,16 @@ class ERPNextClient {
             (serverMessages && 
               typeof serverMessages === 'string' && 
               (serverMessages as string).includes('not found'));
-          
-          if (!isNotFoundError) {
+
+          const excStr = String(errorData?.exception || errorData?.exc_type || '');
+          const isTimestampMismatch =
+            errorData?.exc_type === 'TimestampMismatchError' ||
+            excStr.includes('TimestampMismatchError') ||
+            (typeof serverMessages === 'string' &&
+              (serverMessages.includes('modified after you have opened') ||
+                serverMessages.includes('TimestampMismatchError')));
+
+          if (!isNotFoundError && !isTimestampMismatch) {
             console.error('ERPNext API Error:', errorData);
           }
         } else {
@@ -388,16 +493,21 @@ class ERPNextClient {
       
       // Check if login was successful
       if (response.data && (response.data.message === 'Logged In' || response.data.message === 'No App')) {
+        const ravenHeaders: Array<Record<string, unknown>> = [response.headers as Record<string, unknown>];
         // Optionally verify the logged-in user
         try {
           const userInfoResponse = await loginClient.get('/api/method/frappe.auth.get_logged_user');
+          ravenHeaders.push(userInfoResponse.headers as Record<string, unknown>);
           console.log('User info response:', userInfoResponse.data);
-          
+
           // Extract user info from response
           const userInfo = userInfoResponse?.data?.message;
           const userName = userInfo?.user || email;
           const fullName = userInfo?.full_name || userInfo?.name || undefined;
-          
+
+          const { establishFrappeRavenSessionFromLoginResponses } = await import('./frappeRavenSession');
+          establishFrappeRavenSessionFromLoginResponses(this.config.baseUrl, ...ravenHeaders);
+
           return {
             ...response.data,
             user: userName,
@@ -406,6 +516,8 @@ class ERPNextClient {
         } catch (userInfoError) {
           // If getting user info fails, still return login success
           console.warn('Login successful but could not fetch user info:', userInfoError);
+          const { establishFrappeRavenSessionFromLoginResponses } = await import('./frappeRavenSession');
+          establishFrappeRavenSessionFromLoginResponses(this.config.baseUrl, ...ravenHeaders);
           return {
             ...response.data,
             user: email,
@@ -421,6 +533,120 @@ class ERPNextClient {
       const loginError = new Error(errorMessage);
       (loginError as any).originalError = error;
       throw loginError;
+    }
+  }
+
+  /**
+   * Whitelisted `/api/method/...` calls using the same API key auth as `/api/resource`.
+   * Returns full `response.data` — use `.message` for the method result.
+   */
+  async callFrappeMethod(method: string, kwargs: Record<string, unknown> = {}): Promise<any> {
+    try {
+      const response = await this.client.post(`/api/method/${method}`, kwargs);
+      const h = response.headers;
+      const ct = (h['content-type'] || h['Content-Type']) as string | undefined;
+      if (responseBodyLooksLikeHtml(response.data, ct)) {
+        throw htmlInsteadOfJsonError(`/api/method/${method}`);
+      }
+      return response.data;
+    } catch (error) {
+      throw this.handleError(error);
+    }
+  }
+
+  /**
+   * GET `/api/resource/{DocType}` list rows (used for Raven DocTypes, etc.).
+   */
+  async listResourceRows(
+    doctype: string,
+    options?: {
+      filters?: any[][];
+      fields?: string[];
+      order_by?: string;
+      limit_page_length?: number;
+      limit_start?: number;
+    }
+  ): Promise<any[]> {
+    try {
+      const params: Record<string, string> = {
+        limit_page_length: String(options?.limit_page_length ?? 50),
+      };
+      if (options?.limit_start != null && options.limit_start > 0) {
+        params.limit_start = String(options.limit_start);
+      }
+      if (options?.filters) params.filters = JSON.stringify(options.filters);
+      if (options?.fields) params.fields = JSON.stringify(options.fields);
+      if (options?.order_by) params.order_by = options.order_by;
+      const response = await this.client.get(`${API_VERSION}/${encodeURIComponent(doctype)}`, { params });
+      const h = response.headers;
+      const ct = (h['content-type'] || h['Content-Type']) as string | undefined;
+      if (responseBodyLooksLikeHtml(response.data, ct)) {
+        throw htmlInsteadOfJsonError(`${API_VERSION}/${doctype}`);
+      }
+      return response.data?.data || [];
+    } catch (error) {
+      throw this.handleError(error);
+    }
+  }
+
+  /**
+   * POST `/api/resource/{DocType}` — create a document (same path Raven web uses for new channels).
+   */
+  async createResourceDoc(doctype: string, data: Record<string, unknown>): Promise<any> {
+    try {
+      const response = await this.client.post(`${API_VERSION}/${encodeURIComponent(doctype)}`, data);
+      const h = response.headers;
+      const ct = (h['content-type'] || h['Content-Type']) as string | undefined;
+      if (responseBodyLooksLikeHtml(response.data, ct)) {
+        throw htmlInsteadOfJsonError(`POST ${API_VERSION}/${doctype}`);
+      }
+      return response.data?.data ?? response.data;
+    } catch (error) {
+      throw this.handleError(error);
+    }
+  }
+
+  /** Basic auth header value for authenticated file URLs (e.g. private Raven attachments). */
+  getAuthorizationHeader(): string | undefined {
+    if (!this.config.apiKey || !this.config.apiSecret) return undefined;
+    const credentials = `${this.config.apiKey}:${this.config.apiSecret}`;
+    return `Basic ${base64Encode(credentials)}`;
+  }
+
+  /**
+   * GET a same-origin URL with this client's API key auth (identical to `/api` calls).
+   * Native image components never receive the browser Frappe session cookie; use this for
+   * `/private/files/...` when expo-image must not depend on optional header behaviour.
+   */
+  async fetchBinaryWithAuth(absoluteUrl: string): Promise<{ data: ArrayBuffer; contentType: string }> {
+    const url = absoluteUrl.trim();
+    const response = await this.client.get(url, {
+      responseType: 'arraybuffer',
+      headers: { Accept: '*/*' },
+    });
+    const ct = String(
+      response.headers['content-type'] || response.headers['Content-Type'] || 'application/octet-stream'
+    );
+    return { data: response.data as ArrayBuffer, contentType: ct };
+  }
+
+  /**
+   * POST `/api/method/...` with multipart body (e.g. Raven `upload_file_with_message`).
+   * Do not set Content-Type manually — axios sets the multipart boundary.
+   */
+  async callMultipartFrappeMethod(method: string, formData: FormData): Promise<any> {
+    try {
+      const response = await this.client.post(`/api/method/${method}`, formData, {
+        headers: { 'Content-Type': undefined } as any,
+      });
+      const h = response.headers;
+      const ct = (h['content-type'] || h['Content-Type']) as string | undefined;
+      if (responseBodyLooksLikeHtml(response.data, ct)) {
+        throw htmlInsteadOfJsonError(`/api/method/${method}`);
+      }
+      return response.data;
+    } catch (error) {
+      throw this.handleError(error);
     }
   }
 
@@ -556,34 +782,196 @@ class ERPNextClient {
     middle_name?: string;
     phone?: string;
     send_welcome_email?: boolean;
+    /**
+     * When false (default), assigns **Raven User** alongside **Customer** so Raven’s `User` hooks
+     * (`raven_user.add_user_to_raven`) create a **Raven User** row for in-app chat. Set true only if
+     * your site does not have the Raven app or that role is intentionally omitted.
+     * After a successful create with the Raven role, we set **Raven User.custom_customer** from the
+     * portal-linked Customer (retries briefly while hooks create the Raven User row).
+     */
+    skipRavenMessagingRole?: boolean;
   }): Promise<any> {
-    try {
-      // ERPNext User doctype fields - matching exact API structure
-      const userPayload: any = {
-        email: userData.email.trim(),
-        first_name: userData.first_name.trim(),
-        last_name: userData.last_name.trim(),
-        send_welcome_email: userData.send_welcome_email !== false ? 1 : 0, // 1 = true, 0 = false
-        roles: [
-          { role: 'Customer' }
-        ],
-      };
+    const userPayload: any = {
+      email: userData.email.trim(),
+      first_name: userData.first_name.trim(),
+      last_name: userData.last_name.trim(),
+      send_welcome_email: userData.send_welcome_email !== false ? 1 : 0, // 1 = true, 0 = false
+    };
 
-      // Add middle name if provided
-      if (userData.middle_name?.trim()) {
-        userPayload.middle_name = userData.middle_name.trim();
-      }
-
-      // Add mobile number if provided
-      if (userData.phone?.trim()) {
-        userPayload.mobile_no = userData.phone.trim();
-      }
-
-      const response = await this.client.post(`${API_VERSION}/User`, userPayload);
-      return response.data.data;
-    } catch (error) {
-      throw this.handleError(error);
+    if (userData.middle_name?.trim()) {
+      userPayload.middle_name = userData.middle_name.trim();
     }
+
+    if (userData.phone?.trim()) {
+      userPayload.mobile_no = userData.phone.trim();
+    }
+
+    const roleAttempts: { role: string }[][] = userData.skipRavenMessagingRole
+      ? [[{ role: 'Customer' }]]
+      : [
+          [{ role: 'Customer' }, { role: 'Raven User' }],
+          [{ role: 'Customer' }],
+        ];
+
+    for (let i = 0; i < roleAttempts.length; i++) {
+      const roles = roleAttempts[i];
+      try {
+        const response = await this.client.post(`${API_VERSION}/User`, { ...userPayload, roles });
+        const data = response.data.data;
+        const frappeUserName = String(data?.name ?? userPayload.email ?? '').trim();
+        const hadRavenRole = roles.some((r) => r.role === 'Raven User');
+        if (frappeUserName && hadRavenRole) {
+          try {
+            await this.addNewUserToAllRavenWorkspaces(frappeUserName);
+          } catch (e) {
+            console.warn('[ERPNext] createUser: add to Raven workspaces failed', e);
+          }
+          try {
+            await this.ensureRavenUserCustomCustomerForUser(frappeUserName);
+          } catch (e) {
+            console.warn('[ERPNext] createUser: ensureRavenUserCustomCustomerForUser failed', e);
+          }
+        }
+        return data;
+      } catch (error) {
+        const isLast = i === roleAttempts.length - 1;
+        const hadRaven = roles.some((r) => r.role === 'Raven User');
+        if (!isLast && hadRaven) {
+          console.warn('[ERPNext] createUser: retrying without Raven User role (role may be missing on site)', error);
+          continue;
+        }
+        throw this.handleError(error);
+      }
+    }
+    throw new Error('[ERPNext] createUser: unreachable');
+  }
+
+  /**
+   * Add a Frappe **`User.name`** to **every Raven Workspace** the API user can list, using
+   * **`raven.api.workspaces.add_workspace_members`** (same as desk bulk add; runs with
+   * `ignore_permissions` on the server for each member insert).
+   *
+   * **Listing:** Paginates `GET /api/resource/Raven Workspace` with **no type filter** so **Public and
+   * Private** workspaces are included, as long as your integration user can **read** them (e.g.
+   * **Administrator** / **System Manager**).
+   *
+   * **Adding:** Stock Raven still checks workspace **write** before `add_workspace_members` runs; that
+   * is usually limited to **workspace admins**. If some workspaces fail, make the API user a **workspace
+   * admin** on those rows, or add a small custom whitelisted method on the site that uses
+   * `ignore_permissions` for bulk membership.
+   */
+  async addNewUserToAllRavenWorkspaces(userName: string): Promise<void> {
+    const key = (userName || '').trim();
+    if (!key) return;
+    const pageSize = 100;
+    const seenWs = new Set<string>();
+
+    for (let start = 0; ; start += pageSize) {
+      let batch: Array<Record<string, unknown>> = [];
+      try {
+        batch = await this.listResourceRows('Raven Workspace', {
+          fields: ['name', 'type'],
+          limit_page_length: pageSize,
+          limit_start: start,
+        });
+      } catch (e) {
+        console.warn('[ERPNext] addNewUserToAllRavenWorkspaces: list Raven Workspace failed', e);
+        return;
+      }
+      if (!Array.isArray(batch) || batch.length === 0) break;
+
+      for (const ws of batch) {
+        const wid = String(ws.name ?? '').trim();
+        if (!wid || seenWs.has(wid)) continue;
+        seenWs.add(wid);
+        try {
+          await this.callFrappeMethod('raven.api.workspaces.add_workspace_members', {
+            workspace: wid,
+            members: [key],
+          });
+        } catch (e: unknown) {
+          const err = e as { message?: string; response?: { data?: { message?: string; exc?: string } } };
+          const msg = `${err?.message ?? ''} ${err?.response?.data?.message ?? ''} ${err?.response?.data?.exc ?? ''}`.toLowerCase();
+          if (
+            msg.includes('duplicate') ||
+            msg.includes('already exists') ||
+            msg.includes('unique') ||
+            msg.includes('same document') ||
+            msg.includes('link already exists')
+          ) {
+            continue;
+          }
+          console.warn(`[ERPNext] add_workspace_members workspace=${wid} user=${key}`, e);
+        }
+      }
+
+      if (batch.length < pageSize) break;
+    }
+  }
+
+  /**
+   * After signup, **Raven User** is created by server hooks. Set **`custom_customer`** to the same **Customer**
+   * resolved from portal / User so billing and lookups can read it from **Raven User** alone.
+   */
+  async ensureRavenUserCustomCustomerForUser(
+    frappeUserName: string,
+    opts?: { maxAttempts?: number; delayMs?: number }
+  ): Promise<void> {
+    const u = String(frappeUserName || '').trim();
+    if (!u) return;
+    const maxAttempts = opts?.maxAttempts ?? 8;
+    const delayMs = opts?.delayMs ?? 450;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      let customerId: string | null = null;
+      try {
+        customerId = await this.getCustomerIdForFrappeUserName(u);
+      } catch {
+        customerId = null;
+      }
+      if (!customerId && attempt === maxAttempts - 1) {
+        console.warn('[ERPNext] ensureRavenUserCustomCustomerForUser: no Customer resolved for user', u);
+        return;
+      }
+      if (!customerId) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+
+      let rows: any[] = [];
+      try {
+        rows = await this.listResourceRows('Raven User', {
+          filters: [['user', '=', u]],
+          fields: ['name', 'custom_customer'],
+          limit_page_length: 20,
+        });
+      } catch {
+        rows = [];
+      }
+      if (Array.isArray(rows) && rows.length > 0) {
+        for (const row of rows) {
+          const ruName = String(row?.name || '').trim();
+          if (!ruName) continue;
+          const existing = String(row?.custom_customer || '').trim();
+          if (existing === customerId) continue;
+          try {
+            await this.callFrappeMethod('frappe.client.set_value', {
+              doctype: 'Raven User',
+              name: ruName,
+              fieldname: 'custom_customer',
+              value: customerId,
+            });
+          } catch (e) {
+            console.warn(`[ERPNext] set_value Raven User.custom_customer name=${ruName}`, e);
+          }
+        }
+        return;
+      }
+      if (attempt < maxAttempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+    console.warn('[ERPNext] ensureRavenUserCustomCustomerForUser: no Raven User row found for user', u);
   }
 
   async getUserByPhone(phone: string): Promise<any> {
@@ -655,7 +1043,17 @@ class ERPNextClient {
     try {
       const response = await this.client.get(`${API_VERSION}/User`, {
         params: {
-          fields: JSON.stringify(['name', 'email', 'full_name', 'first_name', 'last_name', 'middle_name', 'phone', 'location']),
+          fields: JSON.stringify([
+            'name',
+            'email',
+            'full_name',
+            'first_name',
+            'last_name',
+            'middle_name',
+            'phone',
+            'mobile_no',
+            'location',
+          ]),
           filters: JSON.stringify([
             ['email', '=', email]
           ]),
@@ -670,7 +1068,16 @@ class ERPNextClient {
           try {
             const fullUser = await this.client.get(`${API_VERSION}/User/${user.name}`);
             if (fullUser.data.data) {
-              return { ...user, image: fullUser.data.data.image, location: fullUser.data.data.location };
+              const d = fullUser.data.data;
+              const userImage = d.user_image || d.image || null;
+              return {
+                ...user,
+                user_image: userImage,
+                image: userImage,
+                location: d.location,
+                mobile_no: d.mobile_no ?? user.mobile_no,
+                phone: d.phone ?? user.phone,
+              };
             }
           } catch (error) {
             // If fetching full document fails, return user without image
@@ -689,28 +1096,41 @@ class ERPNextClient {
     }
   }
 
-  async updateUser(userEmail: string, userData: { phone?: string; location?: string }): Promise<any> {
+  async updateUser(
+    userEmail: string,
+    userData: {
+      phone?: string;
+      mobile_no?: string;
+      location?: string;
+      /** ERPNext User attach field (file URL after upload_file). */
+      user_image?: string | null;
+    }
+  ): Promise<any> {
     try {
-      // Use session client for user-specific operations
-      const sessionClient = this.getSessionClient();
-      
-      // First, get the user by email to get their name (ID)
       const user = await this.getUserByEmail(userEmail);
       if (!user || !user.name) {
         throw new Error('User not found');
       }
 
-      // Update the user document
-      const updateData: any = {};
+      const updateData: Record<string, unknown> = {};
       if (userData.phone !== undefined) {
         updateData.phone = userData.phone;
+      }
+      if (userData.mobile_no !== undefined) {
+        updateData.mobile_no = userData.mobile_no;
       }
       if (userData.location !== undefined) {
         updateData.location = userData.location;
       }
+      if (userData.user_image !== undefined) {
+        updateData.user_image = userData.user_image === '' ? null : userData.user_image;
+      }
 
-      const response = await sessionClient.put(`${API_VERSION}/User/${user.name}`, updateData);
-      
+      const response = await this.client.put(
+        `${API_VERSION}/User/${encodeURIComponent(user.name)}`,
+        updateData
+      );
+
       console.log('User updated successfully:', response.data);
       return response.data.data || response.data;
     } catch (error) {
@@ -1583,69 +2003,66 @@ class ERPNextClient {
   }
 
   /**
-   * Submit a Sales Invoice
-   * Submits the Sales Invoice (sets docstatus to 1)
-   * 
-   * @param invoiceName - Sales Invoice name (e.g., "ACC-SINV-2025-00007")
-   * @returns Submitted Sales Invoice
+   * Submit a Sales Invoice using Frappe **`frappe.client.submit`** (same path as Supplier Quotation submit).
+   * Falls back to a direct `docstatus` PUT only if submit fails (some older deployments).
    */
   async submitSalesInvoice(invoiceName: string): Promise<any> {
+    const n = String(invoiceName || '').trim();
+    if (!n) throw new Error('Sales Invoice name required');
+
+    const fresh = await this.getSalesInvoiceRaw(n);
+    if (!fresh) throw new Error('Sales Invoice not found.');
+    if (Number(fresh.docstatus) === 1) return fresh;
+
+    const { hasFrappeRavenSession, ravenCallFrappeMethod } = await import('./frappeRavenSession');
+    const doc: Record<string, unknown> =
+      typeof fresh === 'object' && String((fresh as { name?: unknown }).name || '').trim() === n
+        ? ({ ...fresh } as Record<string, unknown>)
+        : { doctype: 'Sales Invoice', name: n };
+
+    const unwrapSubmit = (raw: any): any => {
+      if (raw == null) return null;
+      if (typeof raw === 'object' && 'message' in raw && raw.message != null) return raw.message;
+      return raw;
+    };
+
     try {
-      // Use direct docstatus update via PUT request with ignore_version query parameter
-      // This avoids TimestampMismatchError by bypassing the submit API entirely
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Fetch latest version first to get current state
-      const latestInvoice = await this.client.get(`${API_VERSION}/Sales Invoice/${invoiceName}`);
-      console.log('Fetched latest Sales Invoice before submission, modified:', latestInvoice.data.data.modified);
-      
-      // Wait a bit more to ensure we have the absolute latest
-      await new Promise(resolve => setTimeout(resolve, 300));
-      
-      // Update docstatus directly using PUT with ignore_version query parameter
-      const updateResponse = await this.client.put(
-        `${API_VERSION}/Sales Invoice/${invoiceName}?ignore_version=1`,
-        {
-          docstatus: 1,
-        }
-      );
-      
-      // Verify submission by checking docstatus
-      await new Promise(resolve => setTimeout(resolve, 500));
-      const verifyInvoice = await this.client.get(`${API_VERSION}/Sales Invoice/${invoiceName}`);
-      const invoice = verifyInvoice.data.data;
-      
-      if (invoice.docstatus === 1) {
-        console.log('Sales Invoice submitted successfully (docstatus = 1) via direct update');
-        return invoice;
-      } else {
-        throw new Error('Sales Invoice docstatus is not 1 after update');
+      const raw = hasFrappeRavenSession()
+        ? await ravenCallFrappeMethod('frappe.client.submit', { doc })
+        : await this.callFrappeMethod('frappe.client.submit', { doc });
+      const submitted = unwrapSubmit(raw);
+      await new Promise((r) => setTimeout(r, 300));
+      const verified = await this.getSalesInvoiceRaw(n);
+      if (verified && Number(verified.docstatus) === 1) return verified;
+      if (submitted && typeof submitted === 'object' && Number((submitted as any).docstatus) === 1) {
+        return submitted;
       }
+      throw new Error('Sales Invoice submit did not return a submitted document.');
     } catch (error) {
-      // If direct update fails, try one more time with a longer wait
       try {
-        console.warn('Direct docstatus update failed, retrying with longer wait');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        const retryResponse = await this.client.put(
-          `${API_VERSION}/Sales Invoice/${invoiceName}?ignore_version=1`,
-          {
-            docstatus: 1,
-          }
-        );
-        
-        // Verify
-        await new Promise(resolve => setTimeout(resolve, 500));
-        const verifyInvoice = await this.client.get(`${API_VERSION}/Sales Invoice/${invoiceName}`);
-        return verifyInvoice.data.data;
-      } catch (retryError) {
-        throw this.handleError(error);
+        await new Promise((r) => setTimeout(r, 400));
+        await this.client.put(`${API_VERSION}/Sales Invoice/${encodeURIComponent(n)}?ignore_version=1`, {
+          docstatus: 1,
+        });
+        await new Promise((r) => setTimeout(r, 400));
+        const verifyInvoice = await this.getSalesInvoiceRaw(n);
+        if (verifyInvoice && Number(verifyInvoice.docstatus) === 1) return verifyInvoice;
+      } catch {
+        /* use primary error */
       }
+      throw this.handleError(error);
     }
   }
 
   async getCustomerByEmail(email: string): Promise<any | null> {
     try {
+      const emailNorm = (email || '').trim().toLowerCase();
+      if (!emailNorm) return null;
+
+      // Note: We do not GET /api/resource/Portal User here — many API keys lack Select on that child
+      // doctype and Frappe returns 403, which our axios interceptor logs as ERROR. Resolution uses
+      // Customer + portal_users below (and email_id fallbacks).
+
       // Customer doctype has a child table 'portal_users' with field 'user' containing the email
       // Use API key/secret client for admin-level access to query Customer doctype
       
@@ -1655,7 +2072,7 @@ class ERPNextClient {
         const response = await this.client.get(`${API_VERSION}/Customer`, {
           params: {
             fields: JSON.stringify(['name', 'customer_name', 'email_id']),
-            limit_page_length: 100, // Fetch in batches to optimize
+            limit_page_length: 500,
           },
         });
         
@@ -1673,7 +2090,9 @@ class ERPNextClient {
                 const customerData = fullCustomer.data.data;
                 // Check if portal_users child table contains the matching email
                 if (customerData.portal_users && Array.isArray(customerData.portal_users)) {
-                  const hasMatch = customerData.portal_users.some((pu: any) => pu.user === email);
+                  const hasMatch = customerData.portal_users.some(
+                    (pu: any) => String(pu?.user || '').trim().toLowerCase() === emailNorm
+                  );
                   if (hasMatch) {
                     console.log('Customer found via portal_users (API key):', customerData.name);
                     return {
@@ -1695,30 +2114,385 @@ class ERPNextClient {
       }
       
       // Approach 2: Try email_id as fallback (if customer has email_id field set)
+      for (const tryEmail of [...new Set([email.trim(), emailNorm].filter((e) => e.length > 0))]) {
+        try {
+          const filters = [['email_id', '=', tryEmail]];
+          const response = await this.client.get(`${API_VERSION}/Customer`, {
+            params: {
+              fields: JSON.stringify(['name', 'customer_name', 'email_id']),
+              filters: JSON.stringify(filters),
+              limit_page_length: 1,
+            },
+          });
+
+          if (response.data && response.data.data && response.data.data.length > 0) {
+            console.log('Customer found via email_id (API key):', response.data.data[0].name);
+            return response.data.data[0];
+          }
+        } catch (emailError: any) {
+          console.warn('Email ID filter failed:', emailError?.response?.status || emailError.message);
+        }
+      }
+
+      // Approach 3: case-insensitive email_id scan (ERP may store different casing than login email)
       try {
-        const filters = [['email_id', '=', email]];
         const response = await this.client.get(`${API_VERSION}/Customer`, {
           params: {
             fields: JSON.stringify(['name', 'customer_name', 'email_id']),
-            filters: JSON.stringify(filters),
-            limit_page_length: 1,
+            limit_page_length: 500,
           },
         });
-        
-        if (response.data && response.data.data && response.data.data.length > 0) {
-          console.log('Customer found via email_id (API key):', response.data.data[0].name);
-          return response.data.data[0];
+        for (const row of response.data?.data || []) {
+          if (String(row?.email_id || '').trim().toLowerCase() === emailNorm) {
+            console.log('Customer found via email_id case-insensitive scan:', row.name);
+            return row;
+          }
         }
-      } catch (emailError: any) {
-        console.warn('Email ID filter failed:', emailError?.response?.status || emailError.message);
+      } catch (scanError: any) {
+        console.warn('Email ID scan failed:', scanError?.response?.status || scanError.message);
       }
       
-      console.warn('No customer found for email:', email);
+      console.warn('No customer found for email:', emailNorm);
       return null;
     } catch (error: any) {
       console.error('Error fetching customer by email:', error?.response?.data || error?.message || error);
       return null;
     }
+  }
+
+  /**
+   * Resolve ERPNext **Customer** `name` for a Frappe **User** (`User.name`, email, or Raven owner string).
+   * Prefer **Portal User** rows on **Customer** (`parenttype = Customer`, **`user`** = portal login) — the standard
+   * “customer portal” link between User and Customer — then Customer by id, email, User emails, child filters, Raven User, Contact, full portal scan.
+   */
+  async getCustomerIdForFrappeUserName(frappeUserName: string): Promise<string | null> {
+    const u = String(frappeUserName || '').trim();
+    if (!u) return null;
+
+    const listRows = async (
+      doctype: string,
+      options?: {
+        filters?: any[][];
+        fields?: string[];
+        order_by?: string;
+        limit_page_length?: number;
+        limit_start?: number;
+      }
+    ) => {
+      const { hasFrappeRavenSession, ravenListResourceRows } = await import('./frappeRavenSession');
+      if (hasFrappeRavenSession()) {
+        return ravenListResourceRows(doctype, options);
+      }
+      return this.listResourceRows(doctype, options);
+    };
+
+    /** `tabPortal User`: each row ties a **Customer** (`parent`) to a portal **User** (`user`). */
+    const tryCustomerFromPortalUserTable = async (candidates: string[]): Promise<string | null> => {
+      const uniq = [...new Set(candidates.map((c) => String(c || '').trim()).filter(Boolean))];
+      for (const cand of uniq) {
+        try {
+          const rows = await listRows('Portal User', {
+            filters: [
+              ['parenttype', '=', 'Customer'],
+              ['user', '=', cand],
+            ],
+            fields: ['parent', 'parenttype', 'user'],
+            limit_page_length: 15,
+          });
+          for (const r of rows || []) {
+            const pt = String((r as { parenttype?: string }).parenttype || '').trim();
+            const parent = String((r as { parent?: string }).parent || '').trim();
+            if (parent && pt === 'Customer') return parent;
+          }
+        } catch {
+          /* list on child DocType may be forbidden for this API key / site */
+        }
+      }
+      return null;
+    };
+
+    /** Optional site DocType **Customer User** linking `user` → `customer` (Customer name). */
+    const tryCustomerUserDoc = async (candidates: string[]): Promise<string | null> => {
+      const uniq = [...new Set(candidates.map((c) => String(c || '').trim()).filter(Boolean))];
+      for (const cand of uniq) {
+        try {
+          const rows = await listRows('Customer User', {
+            filters: [['user', '=', cand]],
+            fields: ['name', 'customer'],
+            limit_page_length: 10,
+          });
+          for (const r of rows || []) {
+            const cid = String((r as { customer?: string }).customer || '').trim();
+            if (!cid) continue;
+            try {
+              const ok = await listRows('Customer', {
+                filters: [['name', '=', cid]],
+                fields: ['name'],
+                limit_page_length: 1,
+              });
+              if (ok?.[0]?.name) return String(ok[0].name).trim();
+            } catch {
+              /* ignore */
+            }
+          }
+        } catch {
+          /* DocType missing or no permission */
+        }
+      }
+      return null;
+    };
+
+    const fromPortalEarly = await tryCustomerFromPortalUserTable([u]);
+    if (fromPortalEarly) return fromPortalEarly;
+
+    const fromCustomerUserEarly = await tryCustomerUserDoc([u]);
+    if (fromCustomerUserEarly) return fromCustomerUserEarly;
+
+    try {
+      const rows = await listRows('Customer', {
+        filters: [['name', '=', u]],
+        fields: ['name'],
+        limit_page_length: 1,
+      });
+      const hit = rows?.[0]?.name;
+      if (hit != null && String(hit).trim()) return String(hit).trim();
+    } catch {
+      /* ignore */
+    }
+
+    if (u.includes('@')) {
+      const byMail = await this.getCustomerByEmail(u);
+      if (byMail?.name) return String(byMail.name).trim();
+    }
+
+    let userDoc: any = null;
+    try {
+      const { hasFrappeRavenSession, ravenGetResourceDoc } = await import('./frappeRavenSession');
+      if (hasFrappeRavenSession()) {
+        userDoc = await ravenGetResourceDoc('User', u);
+      } else {
+        const res = await this.client.get(`${API_VERSION}/User/${encodeURIComponent(u)}`);
+        userDoc = res.data?.data ?? null;
+      }
+    } catch {
+      userDoc = null;
+    }
+
+    if (userDoc && typeof userDoc === 'object') {
+      for (const mailField of ['email', 'user_email']) {
+        const mail = String((userDoc as any)[mailField] || '')
+          .trim()
+          .toLowerCase();
+        if (mail.includes('@')) {
+          const c = await this.getCustomerByEmail(mail);
+          if (c?.name) return String(c.name).trim();
+        }
+      }
+      const username = String((userDoc as any).username || '').trim();
+      if (username.includes('@')) {
+        const c2 = await this.getCustomerByEmail(username);
+        if (c2?.name) return String(c2.name).trim();
+      }
+      const uname = String((userDoc as any).name || '').trim();
+      if (uname && uname !== u && uname.includes('@')) {
+        const c3 = await this.getCustomerByEmail(uname);
+        if (c3?.name) return String(c3.name).trim();
+      }
+    }
+
+    /** Portal rows usually store **User.name**; Raven may pass email — re-query Portal User / Customer User with every id on the User doc. */
+    const portalUserCandidates: string[] = [u];
+    if (userDoc && typeof userDoc === 'object') {
+      for (const k of ['name', 'email', 'user_email', 'username'] as const) {
+        const v = String((userDoc as any)[k] || '').trim();
+        if (v) portalUserCandidates.push(v);
+      }
+    }
+    if (u.includes('@') && (!userDoc || !String((userDoc as any)?.name || '').trim())) {
+      try {
+        const urows = await listRows('User', {
+          filters: [
+            ['enabled', '=', 1],
+            ['email', '=', u.trim()],
+          ],
+          fields: ['name', 'email', 'user_email', 'username'],
+          limit_page_length: 3,
+        });
+        const first = urows?.[0] as Record<string, unknown> | undefined;
+        if (first) {
+          for (const k of ['name', 'email', 'user_email', 'username'] as const) {
+            const v = String(first[k] || '').trim();
+            if (v) portalUserCandidates.push(v);
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    const fromPortalUserDoc = await tryCustomerFromPortalUserTable(portalUserCandidates);
+    if (fromPortalUserDoc) return fromPortalUserDoc;
+    const fromCustomerUserDoc = await tryCustomerUserDoc(portalUserCandidates);
+    if (fromCustomerUserDoc) return fromCustomerUserDoc;
+
+    const uniqPortalCands = [...new Set(portalUserCandidates.map((c) => c.trim()).filter(Boolean))];
+
+    for (const child of ['Portal User', 'Customer Portal User']) {
+      for (const cand of uniqPortalCands) {
+        try {
+          const rows = await listRows('Customer', {
+            filters: [[child, 'user', '=', cand]],
+            fields: ['name'],
+            limit_page_length: 5,
+          });
+          const hit = rows?.[0]?.name;
+          if (hit != null && String(hit).trim()) return String(hit).trim();
+        } catch {
+          /* child table name differs by ERPNext version */
+        }
+      }
+    }
+
+    try {
+      const seenRu = new Set<string>();
+      for (const cand of uniqPortalCands) {
+        let ruRows: any[] = [];
+        try {
+          ruRows = await listRows('Raven User', {
+            filters: [['user', '=', cand]],
+            fields: ['name', 'custom_customer', 'customer', 'default_customer', 'party'],
+            limit_page_length: 8,
+          });
+        } catch {
+          ruRows = [];
+        }
+        for (const ru of ruRows || []) {
+          const ruDocName = String((ru as { name?: string }).name || '').trim();
+          if (!ruDocName || seenRu.has(ruDocName)) continue;
+          seenRu.add(ruDocName);
+          const ruRec = ru as Record<string, unknown>;
+          /** Site field **custom_customer** on Raven User (preferred). */
+          for (const key of ['custom_customer', 'customer', 'default_customer', 'party'] as const) {
+            const pid = String(ruRec[key] || '').trim();
+            if (!pid) continue;
+            try {
+              const cr = await listRows('Customer', {
+                filters: [['name', '=', pid]],
+                fields: ['name'],
+                limit_page_length: 1,
+              });
+              if (cr?.[0]?.name) return String(cr[0].name).trim();
+            } catch {
+              /* ignore */
+            }
+          }
+          try {
+            const custHit = await listRows('Customer', {
+              filters: [['name', '=', ruDocName]],
+              fields: ['name'],
+              limit_page_length: 1,
+            });
+            if (custHit?.[0]?.name) return String(custHit[0].name).trim();
+          } catch {
+            /* ignore */
+          }
+          try {
+            const { hasFrappeRavenSession, ravenGetResourceDoc } = await import('./frappeRavenSession');
+            let ruFull: any = null;
+            if (hasFrappeRavenSession()) {
+              ruFull = await ravenGetResourceDoc('Raven User', ruDocName);
+            } else {
+              const rres = await this.client.get(`${API_VERSION}/Raven User/${encodeURIComponent(ruDocName)}`);
+              ruFull = rres.data?.data ?? null;
+            }
+            if (ruFull && typeof ruFull === 'object') {
+              for (const key of ['custom_customer', 'customer', 'default_customer', 'party']) {
+                const pid = String((ruFull as Record<string, unknown>)[key] || '').trim();
+                if (!pid) continue;
+                const cr = await listRows('Customer', {
+                  filters: [['name', '=', pid]],
+                  fields: ['name'],
+                  limit_page_length: 1,
+                });
+                if (cr?.[0]?.name) return String(cr[0].name).trim();
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    } catch {
+      /* Raven User doctype missing or no access */
+    }
+
+    for (const cand of uniqPortalCands) {
+      for (const uf of ['user_id', 'user'] as const) {
+        try {
+          const contacts = await listRows('Contact', {
+            filters: [[uf, '=', cand]],
+            fields: ['name'],
+            limit_page_length: 12,
+          });
+          for (const ct of contacts || []) {
+            const cn = String((ct as { name?: string }).name || '').trim();
+            if (!cn) continue;
+            try {
+              const full = await this.client.get(`${API_VERSION}/Contact/${encodeURIComponent(cn)}`, {
+                params: { fields: JSON.stringify(['name', 'links']) },
+              });
+              const links = full.data?.data?.links;
+              if (Array.isArray(links)) {
+                for (const L of links) {
+                  if (String(L?.link_doctype || '').trim() === 'Customer' && L?.link_name) {
+                    const cname = String(L.link_name).trim();
+                    if (cname) return cname;
+                  }
+                }
+              }
+            } catch {
+              continue;
+            }
+          }
+        } catch {
+          /* Contact field name differs */
+        }
+      }
+    }
+
+    try {
+      const response = await this.client.get(`${API_VERSION}/Customer`, {
+        params: {
+          fields: JSON.stringify(['name']),
+          limit_page_length: 400,
+        },
+      });
+      for (const cust of response.data?.data || []) {
+        try {
+          const fullCustomer = await this.client.get(`${API_VERSION}/Customer/${encodeURIComponent(cust.name)}`, {
+            params: {
+              fields: JSON.stringify(['name', 'portal_users']),
+            },
+          });
+          const customerData = fullCustomer.data?.data;
+          if (customerData?.portal_users && Array.isArray(customerData.portal_users)) {
+            const hit = customerData.portal_users.some((pu: { user?: string }) => {
+              const v = String(pu?.user || '').trim();
+              if (!v) return false;
+              return uniqPortalCands.some(
+                (c) => v === c || (c.length > 0 && v.toLowerCase() === c.toLowerCase())
+              );
+            });
+            if (hit) return String(customerData.name).trim();
+          }
+        } catch {
+          continue;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+
+    return null;
   }
 
   async getSalesOrder(orderName: string): Promise<any> {
@@ -2016,18 +2790,6 @@ class ERPNextClient {
     }
   }
 
-  async updateSalesOrder(orderName: string, orderData: any): Promise<any> {
-    try {
-      const response = await this.client.put(
-        `${API_VERSION}/Sales Order/${orderName}`,
-        orderData
-      );
-      return response.data.data;
-    } catch (error) {
-      throw this.handleError(error);
-    }
-  }
-
   // SALES INVOICES
   async getSalesInvoices(
     userEmail: string,
@@ -2207,7 +2969,7 @@ class ERPNextClient {
    * Get item price from Item Price doctype
    * Tries multiple price lists: configured default, then "Standard Selling", then any available
    */
-async getFlyers(limit: number = 10): Promise<Flyer[]> {
+  async getFlyers(limit: number = 10): Promise<any[]> {
     try {
       // Use only permitted fields (description not queryable in list view)
       const fields = ['name', 'flyer_name', 'image'];
@@ -2230,7 +2992,7 @@ async getFlyers(limit: number = 10): Promise<Flyer[]> {
         });
       });
       
-      return flyers.map((flyer: any): Flyer => ({
+      return flyers.map((flyer: any) => ({
         name: flyer.name,
         flyer_name: flyer.flyer_name,
         image: flyer.image || null,
@@ -2326,28 +3088,6 @@ async getFlyers(limit: number = 10): Promise<Flyer[]> {
     } catch (error) {
       console.warn(`Error fetching price for item ${itemCode}:`, error);
       return 0;
-    }
-  }
-
-  // PAYMENT ENTRIES
-  async createPaymentEntry(paymentData: {
-    payment_type: 'Receive' | 'Pay';
-    party_type: 'Customer' | 'Supplier';
-    party: string;
-    company: string;
-    posting_date: string;
-    amount: number;
-    mode_of_payment?: string;
-    reference_no?: string;
-  }): Promise<any> {
-    try {
-      const response = await this.client.post(
-        `${API_VERSION}/Payment Entry`,
-        paymentData
-      );
-      return response.data.data;
-    } catch (error) {
-      throw this.handleError(error);
     }
   }
 
@@ -2720,7 +3460,8 @@ async getFlyers(limit: number = 10): Promise<Flyer[]> {
     fileName: string,
     doctype: string,
     docname: string,
-    isPrivate: boolean = true
+    isPrivate: boolean = true,
+    mimeType: string = 'image/jpeg'
   ): Promise<any> {
     try {
       const formData = new FormData();
@@ -2732,7 +3473,7 @@ async getFlyers(limit: number = 10): Promise<Flyer[]> {
         // React Native file payload
         uri: fileUri,
         name: fileName,
-        type: 'image/jpeg',
+        type: mimeType,
       } as any);
 
       const response = await this.client.post('/api/method/upload_file', formData, {
@@ -3472,7 +4213,17 @@ async getFlyers(limit: number = 10): Promise<Flyer[]> {
     
     // Handle API response errors
     if (error.response?.data) {
-      const erpError = error.response.data as ERPNextError;
+      const raw = error.response.data as unknown;
+      const h = error.response.headers || {};
+      const ct = (h['content-type'] || h['Content-Type']) as string | undefined;
+      if (typeof raw === 'string' && responseBodyLooksLikeHtml(raw, ct)) {
+        return htmlInsteadOfJsonError(error.config?.url);
+      }
+      if (raw && typeof raw === 'object' && responseBodyLooksLikeHtml(raw, ct)) {
+        return htmlInsteadOfJsonError(error.config?.url);
+      }
+
+      const erpError = raw as ERPNextError;
       
       // Try to extract message from _server_messages
       if (erpError._server_messages) {
@@ -3496,9 +4247,9 @@ async getFlyers(limit: number = 10): Promise<Flyer[]> {
         }
       }
       
-      return new Error(
-        erpError.message || erpError.exc || 'ERPNext API Error'
-      );
+      const st = error.response?.status;
+      const base = erpError.message || erpError.exc || 'Request failed';
+      return new Error(st && st !== 200 ? `${base} (HTTP ${st})` : base);
     }
     
     // Handle other errors
@@ -3517,6 +4268,113 @@ async getFlyers(limit: number = 10): Promise<Flyer[]> {
     } catch (error) {
       console.error('ERPNext connection test failed:', error);
       return false;
+    }
+  }
+
+  /**
+   * List **Supplier** (Buying) documents for the SourceWave directory.
+   * Requires API credentials with read on Supplier.
+   */
+  async listSuppliers(limit: number = 300): Promise<Record<string, unknown>[]> {
+    const fullFields = [
+      'name',
+      'supplier_name',
+      'supplier_type',
+      'supplier_group',
+      'country',
+      'is_transporter',
+      'disabled',
+      'default_currency',
+      'default_bank_account',
+      'default_price_list',
+      'supplier_details',
+      'website',
+      'language',
+    ];
+    const minimalFields = ['name', 'supplier_name', 'supplier_type', 'supplier_group', 'country', 'disabled'];
+
+    const fetchList = async (fields: string[]) => {
+      const response = await this.client.get(`${API_VERSION}/Supplier`, {
+        params: {
+          fields: JSON.stringify(fields),
+          filters: JSON.stringify([]),
+          limit_page_length: limit,
+          order_by: 'modified desc',
+        },
+      });
+      return (response.data?.data as Record<string, unknown>[]) || [];
+    };
+
+    try {
+      return await fetchList(fullFields);
+    } catch (e) {
+      console.warn('[ERPNext] listSuppliers: retrying with minimal fields', e);
+      return await fetchList(minimalFields);
+    }
+  }
+
+  /** Full **Supplier** document by `name` (includes child tables when returned by REST). */
+  async getSupplier(supplierName: string): Promise<Record<string, unknown> | null> {
+    const key = (supplierName || '').trim();
+    if (!key) return null;
+    try {
+      const response = await this.client.get(`${API_VERSION}/Supplier/${encodeURIComponent(key)}`);
+      const data = response.data?.data;
+      return data && typeof data === 'object' ? (data as Record<string, unknown>) : null;
+    } catch (error) {
+      console.warn('[ERPNext] getSupplier:', supplierName, error);
+      return null;
+    }
+  }
+
+  /**
+   * List ERPNext **Subscription** rows for a Customer (Accounts module).
+   * Requires API user with read on Subscription.
+   */
+  async listSubscriptionsForCustomer(customerName: string): Promise<any[]> {
+    const filters = [
+      ['Subscription', 'party_type', '=', 'Customer'],
+      ['Subscription', 'party', '=', customerName],
+    ];
+    const baseFields = ['name', 'status', 'start_date', 'end_date', 'company', 'party'];
+    const params = {
+      filters: JSON.stringify(filters),
+      limit_page_length: 50,
+      order_by: 'modified desc',
+    };
+    // Some Frappe versions error when listing child table `plans` on GET list; retry without it.
+    try {
+      const response = await this.client.get(`${API_VERSION}/Subscription`, {
+        params: {
+          ...params,
+          fields: JSON.stringify([...baseFields, 'plans']),
+        },
+      });
+      return response.data?.data || [];
+    } catch (withPlansError) {
+      console.warn('listSubscriptionsForCustomer (with plans) failed, retrying:', withPlansError);
+    }
+    try {
+      const response = await this.client.get(`${API_VERSION}/Subscription`, {
+        params: {
+          ...params,
+          fields: JSON.stringify(baseFields),
+        },
+      });
+      return response.data?.data || [];
+    } catch (error) {
+      console.warn('listSubscriptionsForCustomer:', error);
+      return [];
+    }
+  }
+
+  /** Create **Subscription** (draft); status is set by ERPNext workflow. */
+  async createSubscriptionDoc(payload: Record<string, any>): Promise<any> {
+    try {
+      const response = await this.client.post(`${API_VERSION}/Subscription`, payload);
+      return response.data?.data;
+    } catch (error) {
+      throw this.handleError(error);
     }
   }
 
@@ -3651,14 +4509,1524 @@ async getFlyers(limit: number = 10): Promise<Flyer[]> {
       return [];
     }
   }
+
+  /** Frappe `User.roles` role names (e.g. Supplier, Purchase User). */
+  async getRolesForUser(frappeUserName: string): Promise<string[]> {
+    const extractRoles = (data: unknown): string[] => {
+      const d = data as { roles?: unknown };
+      if (!d?.roles || !Array.isArray(d.roles)) return [];
+      return d.roles
+        .map((r: { role?: string }) => String((r as { role?: string })?.role || '').trim())
+        .filter(Boolean);
+    };
+    const fetchByName = async (userName: string): Promise<string[]> => {
+      for (const withFields of [true, false]) {
+        try {
+          const res = await this.client.get(
+            `${API_VERSION}/User/${encodeURIComponent(userName)}`,
+            withFields ? { params: { fields: JSON.stringify(['name', 'roles']) } } : undefined
+          );
+          const roles = extractRoles(res.data?.data);
+          if (roles.length) return roles;
+        } catch {
+          // try full document next
+        }
+      }
+      return [];
+    };
+
+    let roles = await fetchByName(frappeUserName.trim());
+    if (roles.length) return roles;
+
+    const trimmed = frappeUserName.trim();
+    if (trimmed.toLowerCase() !== trimmed) {
+      roles = await fetchByName(trimmed.toLowerCase());
+      if (roles.length) return roles;
+    }
+
+    // User.name may differ from login id (e.g. list User by email then load roles).
+    if (trimmed.includes('@')) {
+      try {
+        const listRes = await this.client.get(`${API_VERSION}/User`, {
+          params: {
+            fields: JSON.stringify(['name']),
+            filters: JSON.stringify([['email', '=', trimmed]]),
+            limit_page_length: 1,
+          },
+        });
+        const row = listRes.data?.data?.[0] as { name?: string } | undefined;
+        const resolved = row?.name ? String(row.name).trim() : '';
+        if (resolved && resolved !== trimmed) {
+          roles = await fetchByName(resolved);
+          if (roles.length) return roles;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    return [];
+  }
+
+  /**
+   * Find Supplier linked to this login (portal / email).
+   * Tries Supplier `name` / `email_id`, child-table filters on Supplier, then **Portal User** rows
+   * (`parenttype = Supplier`, `user` = Frappe User name) which mirror the Supplier form’s portal users table.
+   */
+  async findSupplierForPortalUser(
+    userEmail: string,
+    frappeUserName: string
+  ): Promise<{ name: string; supplier_name: string } | null> {
+    const tryList = async (filters: unknown[]): Promise<{ name: string; supplier_name?: string } | null> => {
+      try {
+        const res = await this.client.get(`${API_VERSION}/Supplier`, {
+          params: {
+            fields: JSON.stringify(['name', 'supplier_name']),
+            filters: JSON.stringify(filters),
+            limit_page_length: 1,
+          },
+        });
+        const row = res.data?.data?.[0];
+        return row?.name ? row : null;
+      } catch {
+        return null;
+      }
+    };
+
+    /** Resolve Supplier `name` from standalone Portal User child rows (tabPortal User). */
+    const trySupplierFromPortalUserTable = async (candidates: string[]): Promise<{ name: string; supplier_name: string } | null> => {
+      const uniq = [...new Set(candidates.map((c) => c.trim()).filter(Boolean))];
+      for (const cand of uniq) {
+        try {
+          const res = await this.client.get(`${API_VERSION}/${encodeURIComponent('Portal User')}`, {
+            params: {
+              fields: JSON.stringify(['parent', 'parenttype', 'user']),
+              filters: JSON.stringify([
+                ['parenttype', '=', 'Supplier'],
+                ['user', '=', cand],
+              ]),
+              limit_page_length: 5,
+            },
+          });
+          const h = res.headers;
+          const ct = (h['content-type'] || h['Content-Type']) as string | undefined;
+          if (responseBodyLooksLikeHtml(res.data, ct)) continue;
+          const rows: any[] = Array.isArray(res.data?.data) ? res.data.data : [];
+          const hit = rows.find((r) => r?.parenttype === 'Supplier' && String(r?.parent || '').trim());
+          const parent = hit?.parent != null ? String(hit.parent).trim() : '';
+          if (!parent) continue;
+          const sup = await tryList([['name', '=', parent]]);
+          if (sup) return { name: sup.name, supplier_name: String(sup.supplier_name || sup.name) };
+          return { name: parent, supplier_name: parent };
+        } catch {
+          /* next candidate */
+        }
+      }
+      return null;
+    };
+
+    /** Frappe User.name for this email (portal user link often stores User.name, not email). */
+    const tryFrappeUserNameForEmail = async (email: string): Promise<string | null> => {
+      const em = email.trim();
+      if (!em) return null;
+      try {
+        const res = await this.client.get(`${API_VERSION}/User`, {
+          params: {
+            fields: JSON.stringify(['name']),
+            filters: JSON.stringify([['email', '=', em]]),
+            limit_page_length: 1,
+          },
+        });
+        const n = res.data?.data?.[0]?.name;
+        return n != null && String(n).trim() ? String(n).trim() : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const email = userEmail.trim();
+    const u = frappeUserName.trim();
+    let row = await tryList([['name', '=', u]]);
+    if (row) return { name: row.name, supplier_name: String(row.supplier_name || row.name) };
+    if (email && email !== u) {
+      row = await tryList([['name', '=', email]]);
+      if (row) return { name: row.name, supplier_name: String(row.supplier_name || row.name) };
+    }
+    row = await tryList([['email_id', '=', email]]);
+    if (row) return { name: row.name, supplier_name: String(row.supplier_name || row.name) };
+    row = await tryList([['Supplier Portal User', 'user', '=', u]]);
+    if (row) return { name: row.name, supplier_name: String(row.supplier_name || row.name) };
+    row = await tryList([['Supplier Portal User', 'user', '=', email]]);
+    if (row) return { name: row.name, supplier_name: String(row.supplier_name || row.name) };
+    row = await tryList([['Portal User', 'user', '=', u]]);
+    if (row) return { name: row.name, supplier_name: String(row.supplier_name || row.name) };
+    row = await tryList([['Portal User', 'user', '=', email]]);
+    if (row) return { name: row.name, supplier_name: String(row.supplier_name || row.name) };
+
+    const userNameFromEmail = await tryFrappeUserNameForEmail(email);
+    const portalCandidates = [u, email, userNameFromEmail || ''].filter(Boolean);
+    const fromPortal = await trySupplierFromPortalUserTable(portalCandidates);
+    if (fromPortal) return fromPortal;
+
+    return null;
+  }
+
+  async listPurchaseOrdersForSupplier(
+    supplierDocName: string,
+    opts?: { limit?: number; start?: number }
+  ): Promise<any[]> {
+    const limit = opts?.limit ?? 40;
+    const start = opts?.start ?? 0;
+    const res = await this.client.get(`${API_VERSION}/Purchase Order`, {
+      params: {
+        fields: JSON.stringify([
+          'name',
+          'transaction_date',
+          'status',
+          'grand_total',
+          'company',
+          'supplier',
+          'currency',
+        ]),
+        filters: JSON.stringify([['supplier', '=', supplierDocName], ['docstatus', '!=', 2]]),
+        order_by: 'modified desc',
+        limit_page_length: limit,
+        limit_start: start,
+      },
+    });
+    return res.data?.data && Array.isArray(res.data.data) ? res.data.data : [];
+  }
+
+  async getPurchaseOrderByName(name: string): Promise<any | null> {
+    try {
+      const res = await this.client.get(`${API_VERSION}/Purchase Order/${encodeURIComponent(name)}`);
+      return res.data?.data ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async listPurchaseInvoicesForSupplier(
+    supplierDocName: string,
+    opts?: { limit?: number; start?: number }
+  ): Promise<any[]> {
+    const limit = opts?.limit ?? 40;
+    const start = opts?.start ?? 0;
+    const res = await this.client.get(`${API_VERSION}/Purchase Invoice`, {
+      params: {
+        fields: JSON.stringify([
+          'name',
+          'posting_date',
+          'status',
+          'grand_total',
+          'supplier',
+          'currency',
+        ]),
+        filters: JSON.stringify([['supplier', '=', supplierDocName], ['docstatus', '!=', 2]]),
+        order_by: 'modified desc',
+        limit_page_length: limit,
+        limit_start: start,
+      },
+    });
+    return res.data?.data && Array.isArray(res.data.data) ? res.data.data : [];
+  }
+
+  async getPurchaseInvoiceByName(name: string): Promise<any | null> {
+    try {
+      const res = await this.client.get(`${API_VERSION}/Purchase Invoice/${encodeURIComponent(name)}`);
+      return res.data?.data ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async listSupplierQuotationsForSupplier(
+    supplierDocName: string,
+    opts?: { limit?: number; start?: number }
+  ): Promise<any[]> {
+    const limit = opts?.limit ?? 40;
+    const start = opts?.start ?? 0;
+    const res = await this.client.get(`${API_VERSION}/Supplier Quotation`, {
+      params: {
+        fields: JSON.stringify([
+          'name',
+          'transaction_date',
+          'valid_till',
+          'status',
+          'workflow_state',
+          'docstatus',
+          'grand_total',
+          'supplier',
+          'currency',
+        ]),
+        filters: JSON.stringify([['supplier', '=', supplierDocName], ['docstatus', '!=', 2]]),
+        order_by: 'modified desc',
+        limit_page_length: limit,
+        limit_start: start,
+      },
+    });
+    return res.data?.data && Array.isArray(res.data.data) ? res.data.data : [];
+  }
+
+  async getSupplierQuotationByName(name: string): Promise<any | null> {
+    const n = String(name || '').trim();
+    if (!n) return null;
+    try {
+      const { hasFrappeRavenSession, ravenGetResourceDoc } = await import('./frappeRavenSession');
+      if (hasFrappeRavenSession()) {
+        const row = await ravenGetResourceDoc('Supplier Quotation', n);
+        return row ?? null;
+      }
+      const res = await this.client.get(`${API_VERSION}/Supplier Quotation/${encodeURIComponent(n)}`);
+      return res.data?.data ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async listPurchaseReceiptsForSupplier(
+    supplierDocName: string,
+    opts?: { limit?: number; start?: number }
+  ): Promise<any[]> {
+    const limit = opts?.limit ?? 40;
+    const start = opts?.start ?? 0;
+    const res = await this.client.get(`${API_VERSION}/Purchase Receipt`, {
+      params: {
+        fields: JSON.stringify(['name', 'posting_date', 'status', 'supplier']),
+        filters: JSON.stringify([['supplier', '=', supplierDocName], ['docstatus', '!=', 2]]),
+        order_by: 'modified desc',
+        limit_page_length: limit,
+        limit_start: start,
+      },
+    });
+    return res.data?.data && Array.isArray(res.data.data) ? res.data.data : [];
+  }
+
+  async getPurchaseReceiptByName(name: string): Promise<any | null> {
+    try {
+      const res = await this.client.get(`${API_VERSION}/Purchase Receipt/${encodeURIComponent(name)}`);
+      return res.data?.data ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async getGlobalDefaultCompany(): Promise<string | null> {
+    try {
+      const res = await this.client.get(`${API_VERSION}/Global Defaults/Global Defaults`);
+      const c = res.data?.data?.default_company;
+      return c != null && String(c).trim() ? String(c).trim() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async getFirstCompanyName(): Promise<string | null> {
+    try {
+      const rows = await this.listResourceRows('Company', {
+        fields: ['name'],
+        limit_page_length: 1,
+      });
+      const n = rows?.[0]?.name;
+      return n != null && String(n).trim() ? String(n).trim() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Search purchasable Items for supplier quotation lines (Item master, not Website Item).
+   * Matches item code or item name; excludes disabled items.
+   * Only Items whose **Supplier** link `custom_supplier` equals the given supplier document name are returned.
+   * Optional **`image`** in each row is the Item master **image** field only (not `website_image`).
+   */
+  async searchItemsForQuotation(opts: {
+    /** ERPNext **Supplier** document name linked on Item `custom_supplier`. */
+    supplier: string;
+    q: string;
+    limit?: number;
+  }): Promise<
+    Array<{ name: string; item_code: string; item_name: string; stock_uom?: string; image?: string }>
+  > {
+    const supplier = String(opts.supplier || '').trim();
+    if (!supplier) return [];
+
+    const limit = Math.min(Math.max(opts.limit ?? 25, 1), 50);
+    const q = String(opts.q || '').trim();
+    /** Item master Attach field only (not Website Item / `website_image`). */
+    const fields = ['name', 'item_code', 'item_name', 'stock_uom', 'image'];
+    const baseDisabled: any[] = [['disabled', '=', 0], ['custom_supplier', '=', supplier]];
+
+    const pickItemImage = (r: any): string | undefined => {
+      const v = r?.image;
+      if (v != null && String(v).trim() !== '') return String(v).trim();
+      return undefined;
+    };
+
+    const mergeDedupe = (
+      rows: any[]
+    ): Array<{ name: string; item_code: string; item_name: string; stock_uom?: string; image?: string }> => {
+      const seen = new Set<string>();
+      const out: Array<{
+        name: string;
+        item_code: string;
+        item_name: string;
+        stock_uom?: string;
+        image?: string;
+      }> = [];
+      for (const r of rows || []) {
+        const code = String(r.item_code ?? r.name ?? '').trim();
+        if (!code || seen.has(code)) continue;
+        seen.add(code);
+        const img = pickItemImage(r);
+        const row: {
+          name: string;
+          item_code: string;
+          item_name: string;
+          stock_uom?: string;
+          image?: string;
+        } = {
+          name: String(r.name ?? code).trim(),
+          item_code: code,
+          item_name: String(r.item_name ?? '').trim() || code,
+          stock_uom: r.stock_uom != null ? String(r.stock_uom).trim() : undefined,
+        };
+        if (img) row.image = img;
+        out.push(row);
+        if (out.length >= limit) break;
+      }
+      return out;
+    };
+
+    if (!q) {
+      const rows = await this.listResourceRows('Item', {
+        filters: baseDisabled,
+        fields,
+        order_by: 'modified desc',
+        limit_page_length: limit,
+      });
+      return mergeDedupe(rows);
+    }
+
+    const esc = q.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+    const like = `%${esc}%`;
+    const [byCode, byName] = await Promise.all([
+      this.listResourceRows('Item', {
+        filters: [...baseDisabled, ['item_code', 'like', like]],
+        fields,
+        limit_page_length: limit,
+      }),
+      this.listResourceRows('Item', {
+        filters: [...baseDisabled, ['item_name', 'like', like]],
+        fields,
+        limit_page_length: limit,
+      }),
+    ]);
+    return mergeDedupe([...(byCode || []), ...(byName || [])]);
+  }
+
+  /**
+   * Create a draft Supplier Quotation from in-app chat (supplier portal).
+   * One or more lines with valid Item `item_code` (matches ERPNext Supplier Quotation items table).
+   * Uses **REST create first** (minimal child rows — no `amount`, no client `docstatus`), then **`frappe.client.insert`** if that fails.
+   * Throws if the saved document is not `docstatus === 0` (site auto-submit / workflow must be fixed server-side).
+   * When a Frappe **session** exists (supplier or buyer after password login), the quotation is created **as that user**.
+   * Ensure ERPNext grants that role **Create** on Supplier Quotation. Session requests include CSRF when the login cookies provide `csrf_token`.
+   */
+  async createSupplierQuotationFromChat(args: {
+    supplier: string;
+    currency?: string;
+    /** Shown on the in-chat quotation card */
+    referenceTitle?: string;
+    lines: Array<{ item_code: string; qty: number; rate: number; uom?: string | null }>;
+  }): Promise<{ name: string; grand_total: number; currency: string }> {
+    const supplier = String(args.supplier || '').trim();
+    if (!supplier) throw new Error('Supplier is required');
+
+    const linesIn = Array.isArray(args.lines) ? args.lines : [];
+    const lines = linesIn
+      .map((l) => ({
+        item_code: String(l.item_code || '').trim(),
+        qty: Number(l.qty),
+        rate: Number(l.rate),
+        uom: l.uom != null ? String(l.uom).trim() : '',
+      }))
+      .filter((l) => l.item_code.length > 0 && Number.isFinite(l.qty) && l.qty > 0 && Number.isFinite(l.rate) && l.rate >= 0);
+
+    if (lines.length === 0) {
+      throw new Error('Add at least one line with an item, quantity greater than zero, and a rate.');
+    }
+
+    const company = (await this.getGlobalDefaultCompany()) || (await this.getFirstCompanyName());
+    if (!company) throw new Error('No default company found in ERPNext. Set Global Defaults → default company.');
+
+    const currency = String(args.currency || 'USD').trim() || 'USD';
+
+    const today = new Date();
+    const y = today.getFullYear();
+    const m = String(today.getMonth() + 1).padStart(2, '0');
+    const d = String(today.getDate()).padStart(2, '0');
+    const transaction_date = `${y}-${m}-${d}`;
+    const vt = new Date(today.getTime() + 30 * 86400000);
+    const valid_till = `${vt.getFullYear()}-${String(vt.getMonth() + 1).padStart(2, '0')}-${String(vt.getDate()).padStart(2, '0')}`;
+
+    const itemRows: Record<string, unknown>[] = lines.map((l) => {
+      const row: Record<string, unknown> = {
+        item_code: l.item_code,
+        qty: l.qty,
+        rate: l.rate,
+      };
+      if (l.uom) row.uom = l.uom;
+      return row;
+    });
+
+    const referenceTitle = String(args.referenceTitle || '').trim();
+    /** Omit `docstatus` and line `amount` — many sites return **417** if the client sets read-only / server-calculated values. */
+    const payload: Record<string, unknown> = {
+      doctype: 'Supplier Quotation',
+      supplier,
+      company,
+      currency,
+      transaction_date,
+      valid_till,
+      items: itemRows,
+    };
+    if (referenceTitle) payload.title = referenceTitle;
+
+    /** Child rows for `frappe.client.insert` fallback (no `amount` — ERPNext recalculates). */
+    const insertItems = itemRows.map((row, idx) => ({
+      ...row,
+      doctype: 'Supplier Quotation Item',
+      parentfield: 'items',
+      parenttype: 'Supplier Quotation',
+      idx: idx + 1,
+    }));
+    const insertDoc: Record<string, unknown> = {
+      doctype: 'Supplier Quotation',
+      supplier,
+      company,
+      currency,
+      transaction_date,
+      valid_till,
+      items: insertItems,
+    };
+    if (referenceTitle) insertDoc.title = referenceTitle;
+
+    const { hasFrappeRavenSession, ravenCreateResourceDoc, ravenCallFrappeMethod } = await import('./frappeRavenSession');
+
+    const unwrapMethod = (data: any): any => {
+      if (data == null) return null;
+      if (typeof data.message !== 'undefined') return data.message;
+      return data;
+    };
+
+    let doc: any = null;
+    try {
+      if (hasFrappeRavenSession()) {
+        doc = await ravenCreateResourceDoc('Supplier Quotation', payload);
+      } else {
+        const res = await this.client.post(`${API_VERSION}/Supplier Quotation`, payload);
+        const h = res.headers;
+        const ct = (h['content-type'] || h['Content-Type']) as string | undefined;
+        if (responseBodyLooksLikeHtml(res.data, ct)) {
+          throw htmlInsteadOfJsonError('POST Supplier Quotation');
+        }
+        doc = res.data?.data;
+      }
+    } catch (restErr) {
+      try {
+        const raw = hasFrappeRavenSession()
+          ? await ravenCallFrappeMethod('frappe.client.insert', { doc: insertDoc })
+          : await this.callFrappeMethod('frappe.client.insert', { doc: insertDoc });
+        doc = unwrapMethod(raw);
+      } catch {
+        throw this.handleError(restErr);
+      }
+    }
+
+    const name = doc?.name != null ? String(doc.name).trim() : '';
+    if (!name) throw new Error('ERPNext did not return a quotation name.');
+
+    const refreshed = await this.getSupplierQuotationByName(name);
+    const dsRaw = refreshed?.docstatus ?? doc?.docstatus;
+    const docstatus = dsRaw != null ? Number(dsRaw) : 0;
+    if (docstatus !== 0) {
+      throw new Error(
+        `ERPNext created supplier quotation ${name} as submitted (docstatus ${docstatus}) instead of draft. ` +
+          'Disable auto-submit on Supplier Quotation (workflow transition on save, or a server script) so new quotations stay draft until the buyer accepts in chat.'
+      );
+    }
+    const sumLines = lines.reduce((s, l) => s + l.qty * l.rate, 0);
+    const grand_total = doc?.grand_total != null ? Number(doc.grand_total) : sumLines;
+    return {
+      name,
+      grand_total: Number.isFinite(grand_total) ? grand_total : sumLines,
+      currency,
+    };
+  }
+
+  /**
+   * Submit a Supplier Quotation (e.g. buyer accepts draft in chat).
+   * Uses the Frappe **session** user when logged in with password so submit / workflow runs as that user.
+   */
+  async submitSupplierQuotation(name: string): Promise<any> {
+    const n = String(name || '').trim();
+    if (!n) throw new Error('Quotation name required');
+    const { hasFrappeRavenSession, ravenCallFrappeMethod } = await import('./frappeRavenSession');
+    const submitDoc = async (doc: Record<string, unknown>) =>
+      hasFrappeRavenSession()
+        ? ravenCallFrappeMethod('frappe.client.submit', { doc })
+        : this.callFrappeMethod('frappe.client.submit', { doc });
+
+    const maxAttempts = 6;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        if (attempt > 1) {
+          await new Promise((resolve) => setTimeout(resolve, 400 + attempt * 150));
+        }
+        const fresh = await this.getSupplierQuotationByName(n);
+        const doc: Record<string, unknown> =
+          fresh && typeof fresh === 'object' && String((fresh as { name?: unknown }).name || '').trim() === n
+            ? (fresh as Record<string, unknown>)
+            : { doctype: 'Supplier Quotation', name: n };
+        return await submitDoc(doc);
+      } catch (error) {
+        lastError = error;
+        const err = this.handleError(error);
+        const msg = err.message;
+        const retryable = attempt < maxAttempts && isFrappeTimestampMismatchMessage(msg);
+        if (!retryable) {
+          throw err;
+        }
+      }
+    }
+    throw this.handleError(lastError);
+  }
+
+  /**
+   * Sales Invoice custom Link field → Supplier Quotation (default **`custom_quotation`**).
+   * Override with **`EXPO_PUBLIC_ERPNEXT_SI_QUOTATION_LINK_FIELD`** if your site uses another field name.
+   */
+  private salesInvoiceSupplierQuotationLinkField(): string {
+    const f = String(process.env.EXPO_PUBLIC_ERPNEXT_SI_QUOTATION_LINK_FIELD || 'custom_quotation').trim();
+    return f || 'custom_quotation';
+  }
+
+  /**
+   * Sales Invoices linked to a Supplier Quotation via custom field **`custom_quotation`** (Link → Supplier Quotation).
+   * Requires that field on Sales Invoice in ERPNext.
+   */
+  async listSalesInvoicesByCustomQuotation(supplierQuotationName: string): Promise<any[]> {
+    const n = String(supplierQuotationName || '').trim();
+    if (!n) return [];
+    const linkField = this.salesInvoiceSupplierQuotationLinkField();
+    return await this.listResourceRows('Sales Invoice', {
+      filters: [[linkField, '=', n]],
+      fields: [
+        'name',
+        'customer',
+        'company',
+        'grand_total',
+        'outstanding_amount',
+        'docstatus',
+        'currency',
+        'status',
+        'posting_date',
+      ],
+      limit_page_length: 15,
+      order_by: 'modified desc',
+    });
+  }
+
+  /**
+   * **Sales Invoices** raised against this supplier’s **Supplier Quotations** (via link field, default **`custom_quotation`**).
+   * Supplier Quotation list uses only **`name`** (some sites forbid **`customer`** on that doctype in API queries).
+   * Customer filters apply to **Sales Invoice** rows (`customerId` exact, or `customerSubstring` on id/name).
+   */
+  async listSalesInvoicesForSupplier(
+    supplierDocId: string,
+    opts?: {
+      /** Exact **Customer.name** on the Sales Invoice. */
+      customerId?: string;
+      /** Case-insensitive contains match on **Sales Invoice** `customer` / `customer_name`. */
+      customerSubstring?: string;
+      fromDate?: string;
+      toDate?: string;
+      limit?: number;
+    }
+  ): Promise<any[]> {
+    const sid = String(supplierDocId || '').trim();
+    if (!sid) return [];
+    const linkField = this.salesInvoiceSupplierQuotationLinkField();
+    const maxOut = Math.min(Math.max(1, opts?.limit ?? 120), 300);
+
+    let sqRows: any[] = [];
+    try {
+      sqRows = await this.listResourceRows('Supplier Quotation', {
+        filters: [['supplier', '=', sid]],
+        fields: ['name'],
+        limit_page_length: 500,
+        order_by: 'modified desc',
+      });
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(sqRows) || sqRows.length === 0) return [];
+
+    const sqNames = [...new Set(sqRows.map((r) => String(r?.name || '').trim()).filter(Boolean))];
+    if (sqNames.length === 0) return [];
+
+    const fromD = (opts?.fromDate || '').trim();
+    const toD = (opts?.toDate || '').trim();
+    const custId = (opts?.customerId || '').trim();
+    const custSub = (opts?.customerSubstring || '').trim().toLowerCase();
+    const chunkSize = 12;
+    const seen = new Set<string>();
+    const merged: any[] = [];
+
+    const siFieldSets = [
+      [
+        'name',
+        'customer',
+        'customer_name',
+        'posting_date',
+        'grand_total',
+        'status',
+        'currency',
+        'outstanding_amount',
+        'docstatus',
+        linkField,
+      ],
+      ['name', 'customer', 'posting_date', 'grand_total', 'status', 'currency', 'outstanding_amount', 'docstatus', linkField],
+    ];
+
+    for (let i = 0; i < sqNames.length; i += chunkSize) {
+      const chunk = sqNames.slice(i, i + chunkSize);
+      let rows: any[] = [];
+      for (const fields of siFieldSets) {
+        try {
+          rows = await this.listResourceRows('Sales Invoice', {
+            filters: [[linkField, 'in', chunk]],
+            fields,
+            limit_page_length: maxOut,
+            order_by: 'posting_date desc',
+          });
+          if (Array.isArray(rows)) break;
+        } catch {
+          rows = [];
+        }
+      }
+      for (const r of rows || []) {
+        const n = String(r?.name || '').trim();
+        if (!n || seen.has(n)) continue;
+        const pd = String(r?.posting_date || '').trim().slice(0, 10);
+        if (fromD && pd && pd < fromD) continue;
+        if (toD && pd && pd > toD) continue;
+        const cId = String(r?.customer || '').trim();
+        const cNm = String(r?.customer_name || '').trim().toLowerCase();
+        if (custId && cId !== custId) continue;
+        if (!custId && custSub) {
+          const hit =
+            cId.toLowerCase().includes(custSub) ||
+            cNm.includes(custSub) ||
+            String(r?.customer_name || '')
+              .trim()
+              .toLowerCase()
+              .includes(custSub);
+          if (!hit) continue;
+        }
+        seen.add(n);
+        merged.push(r);
+      }
+    }
+
+    merged.sort((a, b) => String(b.posting_date || '').localeCompare(String(a.posting_date || '')));
+    return merged.slice(0, maxOut);
+  }
+
+  /**
+   * **Customers** for pickers (`name`, `customer_name`). Paginates until no more rows or **`limit`** total (default 5000, max 10000).
+   * Falls back to **`name`** only if `customer_name` is not permitted on the list API.
+   */
+  async listCustomerRowsForPicker(opts?: { limit?: number }): Promise<Array<{ name: string; customer_name?: string }>> {
+    const pageSize = 500;
+    const maxTotal = Math.min(Math.max(1, opts?.limit ?? 5000), 10000);
+    const map = new Map<string, { name: string; customer_name?: string }>();
+    const addRows = (rows: any[]) => {
+      for (const r of rows || []) {
+        if (map.size >= maxTotal) return;
+        const n = String(r?.name || '').trim();
+        if (!n) continue;
+        map.set(n, {
+          name: n,
+          customer_name: r?.customer_name != null ? String(r.customer_name) : undefined,
+        });
+      }
+    };
+    const fetchAllPages = async (fields: string[]) => {
+      let start = 0;
+      while (map.size < maxTotal) {
+        const rows = await this.listResourceRows('Customer', {
+          filters: [],
+          fields,
+          limit_page_length: pageSize,
+          limit_start: start,
+          order_by: 'name asc',
+        });
+        if (!rows?.length) break;
+        const before = map.size;
+        addRows(rows);
+        if (rows.length < pageSize) break;
+        if (map.size === before) break;
+        start += pageSize;
+      }
+    };
+    try {
+      await fetchAllPages(['name', 'customer_name']);
+      return [...map.values()];
+    } catch {
+      map.clear();
+      try {
+        await fetchAllPages(['name']);
+        return [...map.values()];
+      } catch {
+        return [];
+      }
+    }
+  }
+
+  /**
+   * **Payment Entries** that reference a **Sales Invoice** linked to this supplier’s quotations (Receive / pay flows).
+   */
+  async listPaymentEntriesForSupplier(
+    supplierDocId: string,
+    opts?: {
+      customerId?: string;
+      customerSubstring?: string;
+      fromDate?: string;
+      toDate?: string;
+      limit?: number;
+      /** Only payment entries referencing this **Sales Invoice** (avoids scanning other invoices). */
+      salesInvoiceName?: string;
+      salesInvoiceCustomer?: string;
+      salesInvoiceCustomerName?: string;
+    }
+  ): Promise<any[]> {
+    const maxOut = Math.min(Math.max(1, opts?.limit ?? 80), 150);
+    const fromD = (opts?.fromDate || '').trim();
+    const toD = (opts?.toDate || '').trim();
+    const seenPe = new Set<string>();
+    const out: any[] = [];
+
+    const tryListPeForSi = async (siName: string, siRow: any, pePageLimit: number): Promise<void> => {
+      const filterSets: any[][][] = [
+        [
+          ['Payment Entry Reference', 'reference_doctype', '=', 'Sales Invoice'],
+          ['Payment Entry Reference', 'reference_name', '=', siName],
+        ],
+        [
+          ['references', 'reference_doctype', '=', 'Sales Invoice'],
+          ['references', 'reference_name', '=', siName],
+        ],
+      ];
+      for (const filters of filterSets) {
+        try {
+          const rows = await this.listResourceRows('Payment Entry', {
+            filters,
+            fields: [
+              'name',
+              'posting_date',
+              'party',
+              'party_type',
+              'paid_amount',
+              'received_amount',
+              'payment_type',
+              'docstatus',
+            ],
+            limit_page_length: pePageLimit,
+            order_by: 'posting_date desc',
+          });
+          for (const pe of rows || []) {
+            const pn = String(pe?.name || '').trim();
+            if (!pn || seenPe.has(pn)) continue;
+            const pd = String(pe?.posting_date || '').trim().slice(0, 10);
+            if (fromD && pd && pd < fromD) continue;
+            if (toD && pd && pd > toD) continue;
+            seenPe.add(pn);
+            out.push({
+              ...pe,
+              _linked_sales_invoice: siName,
+              _customer: siRow?.customer,
+              _customer_name: siRow?.customer_name,
+            });
+          }
+          return;
+        } catch {
+          /* try next filter shape */
+        }
+      }
+    };
+
+    const siFocus = String(opts?.salesInvoiceName || '').trim();
+    if (siFocus) {
+      const siRow = {
+        customer: opts?.salesInvoiceCustomer,
+        customer_name: opts?.salesInvoiceCustomerName,
+      };
+      await tryListPeForSi(siFocus, siRow, 80);
+      out.sort((a, b) => String(b.posting_date || '').localeCompare(String(a.posting_date || '')));
+      return out.slice(0, maxOut);
+    }
+
+    const sis = await this.listSalesInvoicesForSupplier(supplierDocId, {
+      customerId: opts?.customerId,
+      customerSubstring: opts?.customerSubstring,
+      fromDate: opts?.fromDate,
+      toDate: opts?.toDate,
+      limit: 120,
+    });
+
+    for (const si of sis.slice(0, 40)) {
+      const siName = String(si?.name || '').trim();
+      if (!siName) continue;
+      await tryListPeForSi(siName, si, 20);
+      if (out.length >= maxOut) break;
+    }
+
+    out.sort((a, b) => String(b.posting_date || '').localeCompare(String(a.posting_date || '')));
+    return out.slice(0, maxOut);
+  }
+
+  /** **Sales Invoices** for a **Customer** (`Customer.name`). */
+  async listSalesInvoicesForCustomer(
+    customerDocName: string,
+    opts?: { fromDate?: string; toDate?: string; limit?: number }
+  ): Promise<any[]> {
+    const c = String(customerDocName || '').trim();
+    if (!c) return [];
+    const filters: any[][] = [
+      ['customer', '=', c],
+      ['docstatus', '!=', 2],
+    ];
+    const fromD = (opts?.fromDate || '').trim();
+    const toD = (opts?.toDate || '').trim();
+    if (fromD) filters.push(['posting_date', '>=', fromD]);
+    if (toD) filters.push(['posting_date', '<=', toD]);
+    const lim = Math.min(Math.max(1, opts?.limit ?? 80), 150);
+    try {
+      return await this.listResourceRows('Sales Invoice', {
+        filters,
+        fields: [
+          'name',
+          'customer',
+          'customer_name',
+          'posting_date',
+          'grand_total',
+          'status',
+          'currency',
+          'outstanding_amount',
+          'docstatus',
+        ],
+        limit_page_length: lim,
+        order_by: 'posting_date desc',
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  /** **Payment Entries** where **party** is this **Customer** (typical Receive payments). */
+  async listPaymentEntriesForCustomer(
+    customerDocName: string,
+    opts?: { fromDate?: string; toDate?: string; limit?: number }
+  ): Promise<any[]> {
+    const c = String(customerDocName || '').trim();
+    if (!c) return [];
+    const filters: any[][] = [
+      ['party_type', '=', 'Customer'],
+      ['party', '=', c],
+      ['docstatus', '!=', 2],
+    ];
+    const fromD = (opts?.fromDate || '').trim();
+    const toD = (opts?.toDate || '').trim();
+    if (fromD) filters.push(['posting_date', '>=', fromD]);
+    if (toD) filters.push(['posting_date', '<=', toD]);
+    const lim = Math.min(Math.max(1, opts?.limit ?? 80), 150);
+    try {
+      return await this.listResourceRows('Payment Entry', {
+        filters,
+        fields: [
+          'name',
+          'posting_date',
+          'party',
+          'party_type',
+          'paid_amount',
+          'received_amount',
+          'payment_type',
+          'docstatus',
+        ],
+        limit_page_length: lim,
+        order_by: 'posting_date desc',
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Outstanding for UI / payment caps. Some sites return `outstanding_amount` as 0 or omit it while
+   * `grand_total` and `status` still indicate an unpaid submitted invoice.
+   */
+  effectiveSalesInvoiceOutstanding(doc: Record<string, unknown> | null | undefined): number {
+    if (!doc) return 0;
+    const parseMoney = (v: unknown): number | undefined => {
+      if (v == null) return undefined;
+      if (typeof v === 'string' && !String(v).trim()) return undefined;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const gt = parseMoney(doc.grand_total) ?? 0;
+    const out = parseMoney(doc.outstanding_amount);
+    const baseOut = parseMoney(doc.base_outstanding_amount);
+    const primary = out ?? baseOut;
+
+    if (primary != null && primary > 1e-9) return primary;
+
+    const st = String(doc.status ?? '')
+      .trim()
+      .toLowerCase();
+    const clearlyPaid =
+      st === 'paid' ||
+      st === 'credit note issued' ||
+      (st.includes('return') && !st.includes('unpaid') && !st.includes('debit'));
+
+    if (clearlyPaid) return Math.max(0, primary ?? 0);
+
+    const ds = Number(doc.docstatus);
+    if (Number.isFinite(ds) && ds === 1 && gt > 1e-9 && (primary == null || primary <= 1e-9)) {
+      return gt;
+    }
+
+    return Math.max(0, primary ?? 0);
+  }
+
+  /** Full Sales Invoice by name (API key client — use for supplier portal / shared reads). */
+  async getSalesInvoiceRaw(invoiceName: string): Promise<any | null> {
+    const n = String(invoiceName || '').trim();
+    if (!n) return null;
+    try {
+      const res = await this.client.get(`${API_VERSION}/Sales Invoice/${encodeURIComponent(n)}`);
+      return res.data?.data ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * **Raven User.custom_customer** (Link → Customer) for rows where **`user`** matches the bill-to Frappe user
+   * (`User.name`, email on `User.email`, or `username`). Used first when creating Sales Invoices for that party.
+   */
+  async getCustomerIdFromRavenUserCustomCustomer(frappeUserName: string): Promise<string | null> {
+    const primary = String(frappeUserName || '').trim();
+    if (!primary) return null;
+
+    const listRows = async (
+      doctype: string,
+      options?: {
+        filters?: any[][];
+        fields?: string[];
+        order_by?: string;
+        limit_page_length?: number;
+        limit_start?: number;
+      }
+    ) => {
+      const { hasFrappeRavenSession, ravenListResourceRows } = await import('./frappeRavenSession');
+      if (hasFrappeRavenSession()) {
+        return ravenListResourceRows(doctype, options);
+      }
+      return this.listResourceRows(doctype, options);
+    };
+
+    const candidates = new Set<string>([primary]);
+    if (primary.includes('@')) {
+      try {
+        const urows = await listRows('User', {
+          filters: [['email', '=', primary.toLowerCase()]],
+          fields: ['name', 'username'],
+          limit_page_length: 5,
+        });
+        for (const row of urows || []) {
+          const n = String((row as { name?: string }).name || '').trim();
+          if (n) candidates.add(n);
+          const un = String((row as { username?: string }).username || '').trim();
+          if (un) candidates.add(un);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    console.warn('[SupplierQuotation SI][customer][ravenUser]', {
+      billToInput: primary,
+      userLookupCandidates: [...candidates],
+    });
+
+    const validateCustomer = async (customerName: string): Promise<string | null> => {
+      const cid = String(customerName || '').trim();
+      if (!cid) return null;
+      try {
+        const ok = await listRows('Customer', {
+          filters: [['name', '=', cid]],
+          fields: ['name'],
+          limit_page_length: 1,
+        });
+        if (ok?.[0]?.name) return String(ok[0].name).trim();
+      } catch {
+        /* ignore */
+      }
+      return null;
+    };
+
+    const seenCustomer = new Set<string>();
+    for (const cand of candidates) {
+      const c = cand.trim();
+      if (!c) continue;
+      try {
+        const rows = await listRows('Raven User', {
+          filters: [['user', '=', c]],
+          fields: ['name', 'custom_customer'],
+          limit_page_length: 20,
+        });
+        for (const r of rows || []) {
+          const raw = String((r as { custom_customer?: string }).custom_customer || '').trim();
+          if (!raw || seenCustomer.has(raw)) continue;
+          seenCustomer.add(raw);
+          const resolved = await validateCustomer(raw);
+          if (resolved) {
+            console.warn('[SupplierQuotation SI][customer][ravenUser]', {
+              billToInput: primary,
+              matchedRavenUser: (r as { name?: string }).name ?? null,
+              custom_customer: raw,
+              resolvedCustomer: resolved,
+            });
+            return resolved;
+          }
+        }
+      } catch {
+        /* Raven User list may be forbidden */
+      }
+    }
+    console.warn('[SupplierQuotation SI][customer][ravenUser]', {
+      billToInput: primary,
+      userLookupCandidates: [...candidates],
+      outcome: 'no custom_customer linked to a valid Customer',
+    });
+    return null;
+  }
+
+  /**
+   * Resolve **Customer** for a Sales Invoice created from a Supplier Quotation.
+   * Order: env → **Raven User.custom_customer** (bill-to user) → other **bill-to** resolution (portal, etc.) → SQ **`custom_bill_to_customer`** / **`customer`** → Customer whose **`name`** equals Supplier Quotation **`supplier`**.
+   */
+  async resolveCustomerForSupplierQuotationBilling(
+    sq: Record<string, unknown>,
+    opts?: { billToFrappeUserId?: string | null }
+  ): Promise<string | null> {
+    const LOG = '[SupplierQuotation SI][customer]';
+    const sqName = String((sq as { name?: unknown }).name || '').trim() || '(unknown SQ)';
+
+    const envCust = String(process.env.EXPO_PUBLIC_ERPNEXT_SUPPLIER_QUOTATION_INVOICE_CUSTOMER || '').trim();
+    if (envCust) {
+      console.warn(LOG, 'using env EXPO_PUBLIC_ERPNEXT_SUPPLIER_QUOTATION_INVOICE_CUSTOMER', { sqName, customer: envCust });
+      return envCust;
+    }
+
+    const billTo = String(opts?.billToFrappeUserId || '').trim();
+    const sqSupplier = String((sq as any).supplier || '').trim();
+    const fromSqRaw =
+      String((sq as any).custom_bill_to_customer || (sq as any).customer || '').trim() ||
+      String((sq as any).bill_to || '').trim();
+
+    console.warn(LOG, 'resolve start', {
+      sqName,
+      billToFrappeUserId: billTo || null,
+      billToLength: billTo.length,
+      sqSupplier: sqSupplier || null,
+      sqCustomerLikeFields: {
+        custom_bill_to_customer: (sq as any).custom_bill_to_customer ?? null,
+        customer: (sq as any).customer ?? null,
+        bill_to: (sq as any).bill_to ?? null,
+      },
+    });
+
+    if (billTo) {
+      let fromRaven: string | null = null;
+      let byUser: string | null = null;
+      try {
+        fromRaven = await this.getCustomerIdFromRavenUserCustomCustomer(billTo);
+      } catch (e) {
+        console.warn(LOG, 'getCustomerIdFromRavenUserCustomCustomer threw', {
+          billTo,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+      if (fromRaven) {
+        console.warn(LOG, 'resolved via Raven User.custom_customer', { billTo, customer: fromRaven });
+        return fromRaven;
+      }
+      console.warn(LOG, 'Raven User.custom_customer path: no customer', { billTo });
+
+      try {
+        byUser = await this.getCustomerIdForFrappeUserName(billTo);
+      } catch (e) {
+        console.warn(LOG, 'getCustomerIdForFrappeUserName threw', {
+          billTo,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+      if (byUser) {
+        console.warn(LOG, 'resolved via getCustomerIdForFrappeUserName', { billTo, customer: byUser });
+        return byUser;
+      }
+      console.warn(LOG, 'getCustomerIdForFrappeUserName: no customer', { billTo });
+    } else {
+      console.warn(LOG, 'no billToFrappeUserId in opts — skipping bill-to user resolution', { sqName });
+    }
+
+    const fromSq =
+      String((sq as any).custom_bill_to_customer || (sq as any).customer || '').trim() ||
+      String((sq as any).bill_to || '').trim();
+    if (fromSq) {
+      console.warn(LOG, 'resolved from Supplier Quotation fields', { sqName, customer: fromSq });
+      return fromSq;
+    }
+
+    const supplierName = String((sq as any).supplier || '').trim();
+    if (!supplierName) {
+      console.warn(LOG, 'FAILED: no supplier on SQ and no other customer source', { sqName, billTo: billTo || null });
+      return null;
+    }
+
+    try {
+      const rows = await this.listResourceRows('Customer', {
+        filters: [['name', '=', supplierName]],
+        fields: ['name'],
+        limit_page_length: 1,
+      });
+      const hit = rows?.[0]?.name;
+      if (hit != null && String(hit).trim()) {
+        const c = String(hit).trim();
+        console.warn(LOG, 'resolved via Customer.name = SQ.supplier', { sqName, supplierName, customer: c });
+        return c;
+      }
+      console.warn(LOG, 'Customer.name = supplier: no row', { sqName, supplierName });
+    } catch (e) {
+      console.warn(LOG, 'Customer.name = supplier list failed', {
+        sqName,
+        supplierName,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+    console.warn(LOG, 'FAILED: exhausted resolution', {
+      sqName,
+      billToFrappeUserId: billTo || null,
+      sqSupplier: supplierName,
+      fromSqFieldsEmpty: !fromSqRaw,
+    });
+    return null;
+  }
+
+  /**
+   * Create and **submit** a Sales Invoice from a submitted Supplier Quotation, setting **`custom_quotation`**.
+   * Throws if quotation is not submitted (`docstatus !== 1`) or lines are empty.
+   */
+  async createSalesInvoiceFromSupplierQuotation(
+    supplierQuotationName: string,
+    opts?: { billToFrappeUserId?: string | null }
+  ): Promise<any> {
+    const n = String(supplierQuotationName || '').trim();
+    if (!n) throw new Error('Supplier Quotation name required');
+
+    const sq = await this.getSupplierQuotationByName(n);
+    if (!sq) throw new Error('Supplier Quotation not found.');
+
+    const ds = Number(sq.docstatus);
+    if (!Number.isFinite(ds) || ds !== 1) {
+      throw new Error('Supplier Quotation must be submitted before an invoice can be created.');
+    }
+
+    const company =
+      String(sq.company || '')
+        .trim()
+        .slice(0, 140) ||
+      (await this.getGlobalDefaultCompany()) ||
+      (await this.getFirstCompanyName());
+    if (!company) throw new Error('No company on the quotation — set company on Supplier Quotation or Global Defaults.');
+
+    const customer = await this.resolveCustomerForSupplierQuotationBilling(sq as Record<string, unknown>, opts);
+    if (!customer) {
+      const billTo = String(opts?.billToFrappeUserId || '').trim();
+      const detail =
+        `billToFrappeUserId=${JSON.stringify(billTo || null)} (${billTo.length} chars), ` +
+        `SQ=${JSON.stringify(n)}, supplier=${JSON.stringify(String((sq as any).supplier || '').trim() || null)}, ` +
+        `sq.customer=${JSON.stringify((sq as any).customer ?? null)}, ` +
+        `sq.custom_bill_to_customer=${JSON.stringify((sq as any).custom_bill_to_customer ?? null)}`;
+      console.warn('[SupplierQuotation SI][customer] createSalesInvoiceFromSupplierQuotation: no customer', detail);
+      throw new Error(
+        'Could not resolve Customer for the sales invoice. The invoice must bill the **customer receiving the quotation**, not the supplier. ' +
+          'Set **Raven User.custom_customer** for that user, or link a Customer via portal / **custom_bill_to_customer** (or **customer**) on the Supplier Quotation, ' +
+          'or set **EXPO_PUBLIC_ERPNEXT_SUPPLIER_QUOTATION_INVOICE_CUSTOMER**. ' +
+          `Debug: ${detail}`
+      );
+    }
+
+    const rawItems = Array.isArray(sq.items) ? sq.items : [];
+    const items = rawItems
+      .map((row: any) => ({
+        item_code: String(row?.item_code || row?.item || '').trim(),
+        qty: Number(row?.qty ?? row?.qty_consumed ?? row?.stock_qty),
+        rate: Number(row?.rate ?? row?.net_rate ?? row?.price_list_rate),
+      }))
+      .filter(
+        (it: { item_code: string; qty: number; rate: number }) =>
+          it.item_code.length > 0 && Number.isFinite(it.qty) && it.qty > 0 && Number.isFinite(it.rate) && it.rate >= 0
+      );
+
+    if (items.length === 0) {
+      throw new Error('Supplier Quotation has no billable item lines (need item_code + qty + rate on each row).');
+    }
+
+    const posting_date = new Date().toISOString().split('T')[0];
+    const vt = sq.valid_till != null ? String(sq.valid_till).trim().slice(0, 10) : '';
+    const due_date = vt.length >= 8 ? vt : posting_date;
+    const currency = String(sq.currency || 'GHS').trim() || 'GHS';
+
+    const linkField = this.salesInvoiceSupplierQuotationLinkField();
+    const payload: Record<string, unknown> = {
+      doctype: 'Sales Invoice',
+      company,
+      customer,
+      posting_date,
+      due_date,
+      currency,
+      items: items.map((it: { item_code: string; qty: number; rate: number }) => ({
+        item_code: it.item_code,
+        qty: it.qty,
+        rate: it.rate,
+      })),
+      [linkField]: n,
+    };
+
+    const { hasFrappeRavenSession, ravenCreateResourceDoc } = await import('./frappeRavenSession');
+    let inv: any;
+    if (hasFrappeRavenSession()) {
+      inv = await ravenCreateResourceDoc('Sales Invoice', payload);
+    } else {
+      const res = await this.client.post(`${API_VERSION}/Sales Invoice`, payload);
+      inv = res.data?.data;
+    }
+    const invName = inv?.name != null ? String(inv.name).trim() : '';
+    if (!invName) throw new Error('ERPNext did not return a Sales Invoice name.');
+
+    await this.submitSalesInvoice(invName);
+    const fresh = await this.getSalesInvoiceRaw(invName);
+    return fresh ?? inv;
+  }
+
+  /**
+   * If the quotation is submitted and no active Sales Invoice exists yet for the configured link field
+   * (default **`custom_quotation`** → Supplier Quotation), create one.
+   * Safe to call repeatedly (idempotent).
+   */
+  async ensureSalesInvoiceForSupplierQuotation(
+    supplierQuotationName: string,
+    opts?: { billToFrappeUserId?: string | null }
+  ): Promise<{ invoice: any | null; created: boolean; error?: string }> {
+    const n = String(supplierQuotationName || '').trim();
+    if (!n) return { invoice: null, created: false, error: 'Quotation name is missing.' };
+
+    let existing: any[] = [];
+    try {
+      existing = await this.listSalesInvoicesByCustomQuotation(n);
+    } catch (e) {
+      const linkField = this.salesInvoiceSupplierQuotationLinkField();
+      const msg = this.handleError(e).message;
+      return {
+        invoice: null,
+        created: false,
+        error:
+          `Could not list Sales Invoices (${msg}). Ensure Sales Invoice has a Link field **${linkField}** to Supplier Quotation, ` +
+          `or set **EXPO_PUBLIC_ERPNEXT_SI_QUOTATION_LINK_FIELD** to your field name.`,
+      };
+    }
+
+    const active = existing.find((d) => Number(d?.docstatus) !== 2);
+    if (active?.name) {
+      const full = await this.getSalesInvoiceRaw(String(active.name));
+      return { invoice: full ?? active, created: false };
+    }
+
+    const sq = await this.getSupplierQuotationByName(n);
+    if (!sq) {
+      return {
+        invoice: null,
+        created: false,
+        error: 'Supplier Quotation was not found (wrong name or no read permission on Supplier Quotation).',
+      };
+    }
+    if (Number(sq.docstatus) !== 1) {
+      return {
+        invoice: null,
+        created: false,
+        error: 'This quotation is not submitted in ERPNext (docstatus must be 1) before a sales invoice can be created.',
+      };
+    }
+
+    try {
+      const inv = await this.createSalesInvoiceFromSupplierQuotation(n, opts);
+      return { invoice: inv, created: true };
+    } catch (e) {
+      const errMsg = this.handleError(e).message;
+      const billTo = String(opts?.billToFrappeUserId || '').trim();
+      console.warn('[SupplierQuotation SI][customer] ensureSalesInvoiceForSupplierQuotation failed', {
+        supplierQuotationName: n,
+        billToFrappeUserId: billTo || null,
+        billToLength: billTo.length,
+        errorMessage: errMsg,
+        raw: e instanceof Error ? { name: e.name, message: e.message } : String(e),
+      });
+      return { invoice: null, created: false, error: errMsg };
+    }
+  }
+
+  private async callFrappeMethodRavenOrApi(method: string, kwargs: Record<string, unknown>): Promise<any> {
+    const { hasFrappeRavenSession, ravenCallFrappeMethod } = await import('./frappeRavenSession');
+    if (hasFrappeRavenSession()) {
+      return ravenCallFrappeMethod(method, kwargs);
+    }
+    return this.callFrappeMethod(method, kwargs);
+  }
+
+  /**
+   * Record a **Receive** payment against a submitted Sales Invoice (partial or full).
+   * Uses ERPNext **`get_payment_entry`** to fill bank / GL accounts, then creates and submits the Payment Entry.
+   */
+  async recordReceivePaymentAgainstSalesInvoice(args: {
+    salesInvoiceName: string;
+    amount: number;
+  }): Promise<any> {
+    const invName = String(args.salesInvoiceName || '').trim();
+    const amt = Number(args.amount);
+    if (!invName) throw new Error('Invoice name required');
+    if (!Number.isFinite(amt) || amt <= 0) throw new Error('Enter an amount greater than zero.');
+
+    const inv = await this.getSalesInvoiceRaw(invName);
+    if (!inv) throw new Error('Sales Invoice not found.');
+    if (Number(inv.docstatus) !== 1) throw new Error('Sales Invoice must be submitted to record payment.');
+
+    const outstanding = this.effectiveSalesInvoiceOutstanding(inv as Record<string, unknown>);
+    if (!Number.isFinite(outstanding) || outstanding <= 0) {
+      throw new Error('This invoice has no outstanding balance.');
+    }
+
+    const pay = Math.min(amt, outstanding);
+    if (pay <= 0) throw new Error('Nothing to allocate.');
+
+    const methodPath = 'erpnext.accounts.doctype.payment_entry.payment_entry.get_payment_entry';
+    const raw = await this.callFrappeMethodRavenOrApi(methodPath, {
+      dt: 'Sales Invoice',
+      dn: invName,
+      party_amount: pay,
+    });
+
+    const msg = raw != null && typeof raw === 'object' && 'message' in raw ? (raw as any).message : raw;
+    let peDoc: any = Array.isArray(msg) ? msg[0] : msg;
+    if (peDoc != null && typeof peDoc === 'object' && peDoc.docs && Array.isArray(peDoc.docs)) {
+      peDoc = peDoc.docs[0];
+    }
+    if (!peDoc || typeof peDoc !== 'object') {
+      throw new Error(
+        'Could not build payment entry. Check ERPNext accounts permissions and Payment Entry defaults for this company.'
+      );
+    }
+
+    peDoc.paid_amount = pay;
+    peDoc.received_amount = pay;
+    if (Array.isArray(peDoc.references)) {
+      for (const row of peDoc.references) {
+        if (String(row?.reference_doctype || '') === 'Sales Invoice' && String(row?.reference_name || '') === invName) {
+          row.allocated_amount = pay;
+        }
+      }
+    }
+
+    const stripMeta = (d: Record<string, unknown>) => {
+      const o = { ...d };
+      for (const k of Object.keys(o)) {
+        if (k.startsWith('__')) delete o[k];
+      }
+      delete o.name;
+      delete o.owner;
+      delete o.creation;
+      delete o.modified;
+      delete o.modified_by;
+      return o;
+    };
+    const toSave = stripMeta(peDoc as Record<string, unknown>);
+
+    const { hasFrappeRavenSession, ravenCreateResourceDoc } = await import('./frappeRavenSession');
+    let saved: any;
+    if (hasFrappeRavenSession()) {
+      saved = await ravenCreateResourceDoc('Payment Entry', toSave);
+    } else {
+      const res = await this.client.post(`${API_VERSION}/Payment Entry`, toSave);
+      saved = res.data?.data;
+    }
+    const peName = saved?.name != null ? String(saved.name).trim() : '';
+    if (!peName) throw new Error('ERPNext did not return a Payment Entry name.');
+    await this.submitPaymentEntry(peName);
+    return await this.getPaymentEntry(peName);
+  }
+
+  /**
+   * Buyer rejects a draft Supplier Quotation: set **`workflow_state`** to **Rejected** (workflow on site).
+   * Uses Frappe session when logged in with password; otherwise API key.
+   */
+  async rejectSupplierQuotationDraft(name: string): Promise<void> {
+    const n = String(name || '').trim();
+    if (!n) return;
+    try {
+      const { hasFrappeRavenSession, ravenCallFrappeMethod } = await import('./frappeRavenSession');
+      const kwargs = {
+        doctype: 'Supplier Quotation',
+        name: n,
+        fieldname: 'workflow_state',
+        value: 'Rejected',
+      };
+      if (hasFrappeRavenSession()) {
+        await ravenCallFrappeMethod('frappe.client.set_value', kwargs);
+      } else {
+        await this.callFrappeMethod('frappe.client.set_value', kwargs);
+      }
+    } catch (e) {
+      throw this.handleError(e);
+    }
+  }
 }
 
 let erpNextClient: ERPNextClient | null = null;
 let erpNextBaseUrl: string = ERPNEXT_BASE_URL; // Default to env variable
 
 export const initializeERPNext = (config: ERPNextConfig): ERPNextClient => {
-  erpNextClient = new ERPNextClient(config);
-  erpNextBaseUrl = config.baseUrl; // Store the base URL when initializing
+  const raw = (config.baseUrl || ERPNEXT_BASE_URL || '').trim();
+  const baseUrl = normalizeFrappeApiBaseUrl(raw);
+  if (baseUrl.replace(/\/$/, '') !== raw.replace(/\/+$/, '')) {
+    console.warn('[ERPNext] Normalized EXPO_PUBLIC_ERPNEXT_URL for JSON API:', raw, '→', baseUrl);
+  }
+  const resolved: ERPNextConfig = { ...config, baseUrl };
+  erpNextClient = new ERPNextClient(resolved);
+  erpNextBaseUrl = baseUrl;
   return erpNextClient;
 };
 
@@ -3668,6 +6036,55 @@ export const getERPNextClient = (): ERPNextClient => {
   }
   return erpNextClient;
 };
+
+/** `Authorization` header for Basic auth (private file images, etc.). */
+export function getERPNextAuthorizationHeader(): string | undefined {
+  try {
+    return getERPNextClient().getAuthorizationHeader();
+  } catch {
+    return undefined;
+  }
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const G = globalThis as { Buffer?: { from(data: ArrayBuffer): { toString(enc: string): string } } };
+  if (G.Buffer) {
+    return G.Buffer.from(buffer).toString('base64');
+  }
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const slice = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, Array.from(slice) as unknown as number[]);
+  }
+  return btoa(binary);
+}
+
+/**
+ * Download a site file and return a `data:` URI for `<Image />`.
+ * Uses the **Raven session cookie** when present (after password login); otherwise API-key Basic auth
+ * (same as other `/api` calls). React Native image requests do not send browser cookies automatically.
+ */
+export async function fetchErpSiteFileAsDataUri(absoluteUrl: string): Promise<string | null> {
+  try {
+    const { ravenFetchBinary } = await import('./frappeRavenSession');
+    const { data, contentType } = await ravenFetchBinary(absoluteUrl);
+    const mime = (contentType || '').split(';')[0].trim().toLowerCase();
+    if (mime.includes('text/html') || mime.includes('json')) {
+      console.warn(
+        '[ERPNext] fetchErpSiteFileAsDataUri: non-image response (login/forbidden/JSON). Check API user File permissions.',
+        absoluteUrl
+      );
+      return null;
+    }
+    const imageMime = mime.startsWith('image/') ? mime : 'image/jpeg';
+    return `data:${imageMime};base64,${arrayBufferToBase64(data)}`;
+  } catch (e) {
+    console.warn('[ERPNext] fetchErpSiteFileAsDataUri failed', absoluteUrl, e);
+    return null;
+  }
+}
 
 /**
  * Get the ERPNext base URL for constructing file paths

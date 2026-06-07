@@ -8,7 +8,6 @@ import {
   FlatList,
   Dimensions,
   SafeAreaView,
-  Image,
   RefreshControl,
   ActivityIndicator,
 } from 'react-native';
@@ -26,6 +25,7 @@ import { useUserSession } from '../context/UserContext';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { ProductCardSkeletonList } from '../components/ProductCardSkeletonList';
 import { ProductCard } from '../components/ProductCard';
+import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 import { PriceFilter, SortOption } from '../components/PriceFilter';
 import { getProductDiscount } from '../utils/pricingRules';
 import { getERPNextClient } from '../services/erpnext';
@@ -261,12 +261,12 @@ export const CategoryProductsScreen: React.FC = () => {
             >
               {image ? (
                 <View style={styles.siblingTabImageContainer}>
-                  <Image
-                    source={{ uri: image }}
+                  <ErpAuthenticatedImage
+                    uri={image}
                     style={styles.siblingTabImage}
                     resizeMode="cover"
-                    onError={(error) => {
-                      console.warn(`❌ Failed to load image for category ${category.name}:`, image, error);
+                    onError={() => {
+                      console.warn(`❌ Failed to load image for category ${category.name}:`, image);
                     }}
                     onLoad={() => {
                       console.log(`✅ Successfully loaded image for category ${category.name}`);

@@ -1,18 +1,15 @@
+import './src/i18n';
 import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { Platform, View, Text, StyleSheet } from 'react-native';
+import { Platform } from 'react-native';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { initializeERPNext, initializeNetworkAwareTimeout } from './src/services/erpnext';
 import { UserProvider } from './src/context/UserContext';
+import { RavenUnreadProvider } from './src/context/RavenUnreadContext';
+import { SubscriptionProvider } from './src/context/SubscriptionContext';
 
-// Initialize ERPNext client at module load time
-// This ensures the client is available before any components mount
-// Preferring environment variables for security, but with hardcoded fallback for development
-// For production: Use a .env file with:
-// EXPO_PUBLIC_ERPNEXT_URL=https://your-instance.com
-// EXPO_PUBLIC_API_KEY=your_api_key
-// EXPO_PUBLIC_API_SECRET=your_api_secret
+// Backend API client — use environment variables in production builds.
 initializeERPNext({
   baseUrl: process.env.EXPO_PUBLIC_ERPNEXT_URL || 'https://sourcewave.frappe.cloud',
   apiKey: process.env.EXPO_PUBLIC_API_KEY || '8de58d4ec8cd19c',
@@ -27,10 +24,14 @@ export default function App() {
 
   return (
     <UserProvider>
-    <SafeAreaProvider>
-      <StatusBar style={Platform.OS === 'ios' ? 'dark' : 'light'} />
-      <AppNavigator />
-    </SafeAreaProvider>
+      <RavenUnreadProvider>
+        <SubscriptionProvider>
+          <SafeAreaProvider>
+            <StatusBar style={Platform.OS === 'ios' ? 'dark' : 'light'} />
+            <AppNavigator />
+          </SafeAreaProvider>
+        </SubscriptionProvider>
+      </RavenUnreadProvider>
     </UserProvider>
   );
 }

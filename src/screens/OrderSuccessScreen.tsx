@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Image,
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -16,8 +15,10 @@ import { Button } from '../components/Button';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
 import { Spacing } from '../constants/spacing';
+import { GRAY_PIXEL_DATA_URI } from '../constants/inlinePlaceholder';
+import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 
-// Mock order data
+// Sample order details shown until a live order is wired through navigation params.
 const mockOrder = {
   orderNumber: 'GLM-2024-001234',
   orderDate: 'December 15, 2024',
@@ -31,7 +32,7 @@ const mockOrder = {
       quantity: 1,
       color: 'Blue Floral',
       size: 'S',
-      image: 'https://via.placeholder.com/80x120/FF4D6D/FFFFFF?text=Dress+1',
+      image: GRAY_PIXEL_DATA_URI,
     },
     {
       id: '2',
@@ -40,7 +41,7 @@ const mockOrder = {
       quantity: 2,
       color: 'Light Blue',
       size: 'M',
-      image: 'https://via.placeholder.com/80x120/007AFF/FFFFFF?text=Jeans+1',
+      image: GRAY_PIXEL_DATA_URI,
     },
     {
       id: '3',
@@ -49,7 +50,7 @@ const mockOrder = {
       quantity: 1,
       color: 'White',
       size: 'S',
-      image: 'https://via.placeholder.com/80x120/98D8C8/FFFFFF?text=Blouse+1',
+      image: GRAY_PIXEL_DATA_URI,
     },
   ],
   shippingAddress: {
@@ -128,7 +129,7 @@ export const OrderSuccessScreen: React.FC = () => {
       <Text style={styles.sectionTitle}>Order Items</Text>
       {mockOrder.items.map((item) => (
         <View key={item.id} style={styles.orderItem}>
-          <Image source={{ uri: item.image }} style={styles.itemImage} />
+          <ErpAuthenticatedImage uri={item.image} style={styles.itemImage} resizeMode="cover" />
           <View style={styles.itemDetails}>
             <Text style={styles.itemName}>{item.name}</Text>
             <Text style={styles.itemDetails}>

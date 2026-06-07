@@ -6,7 +6,6 @@ import {
 	TouchableOpacity,
 	FlatList,
 	Dimensions,
-	Image,
 	ScrollView,
 	ActivityIndicator,
 	RefreshControl,
@@ -37,6 +36,7 @@ import { Header } from '../components/Header';
 import { Toast } from '../components/Toast';
 import { PriceFilter, SortOption } from '../components/PriceFilter';
 import { CartAnimation } from '../components/CartAnimation';
+import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 import { getProductDiscount } from '../utils/pricingRules';
 import { Product, Order } from '../types';
 import { getERPNextClient } from '../services/erpnext';
@@ -950,12 +950,12 @@ export const HomeScreen: React.FC = () => {
 								/>
 							) : (
 								<View style={styles.flyerImageWrapper}>
-									<Image
-										source={{ uri: item.uri }}
+									<ErpAuthenticatedImage
+										uri={item.uri}
 										style={styles.flyerImage}
 										resizeMode="cover"
-										onError={(error: any) => {
-											console.error(`🖼️ Error loading flyer image ${index}:`, item.uri, error.nativeEvent.error);
+										onError={() => {
+											console.error(`🖼️ Error loading flyer image ${index}:`, item.uri);
 										}}
 										onLoad={() => {
 											console.log(`🖼️ Successfully loaded flyer image ${index}:`, item.uri);
@@ -1149,8 +1149,8 @@ export const HomeScreen: React.FC = () => {
 						>
 							<View style={styles.productImage}>
 								{item.images && item.images.length > 0 && item.images[0] ? (
-									<Image 
-										source={{ uri: item.images[0] }} 
+									<ErpAuthenticatedImage
+										uri={item.images[0]}
 										style={styles.productImageContent}
 										resizeMode="cover"
 									/>
@@ -1233,8 +1233,8 @@ export const HomeScreen: React.FC = () => {
 						>
 						<View style={styles.productImage}>
 								{item.images && item.images.length > 0 && item.images[0] ? (
-									<Image 
-										source={{ uri: item.images[0] }} 
+									<ErpAuthenticatedImage
+										uri={item.images[0]}
 										style={styles.productImageContent}
 										resizeMode="cover"
 									/>
@@ -2013,7 +2013,7 @@ export const HomeScreen: React.FC = () => {
 				return renderFlyerCarousel();
 			case 'recentOrders':
 				return renderRecentOrders();
-	case 'topCustomerAward':
+			case 'topCustomerAward':
 				return null;
 			case 'topItemsCarousel':
 				// This case is now handled within topCustomerAward case
@@ -2550,7 +2550,7 @@ const styles = StyleSheet.create({
 	recentOrdersSection: {
 		marginHorizontal: 16,
 		marginTop: 12,
-		marginBottom: 90,
+		marginBottom: 12,
 		borderRadius: 10,
 		overflow: 'hidden',
 		backgroundColor: Colors.WHITE,

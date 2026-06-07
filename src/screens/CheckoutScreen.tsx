@@ -10,15 +10,19 @@ import {
   Alert,
   TextInput,
   FlatList,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
+import { GRAY_PIXEL_DATA_URI } from '../constants/inlinePlaceholder';
 import { useShoppingCart, useCartActions } from '../hooks/erpnext';
 import { useUserSession } from '../context/UserContext';
 import { LoadingScreen } from '../components/LoadingScreen';
+import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 import { getERPNextClient } from '../services/erpnext';
 import { ModernAlert } from '../components/ModernAlert';
 import { 
@@ -900,8 +904,8 @@ export const CheckoutScreen: React.FC = () => {
                 onPress={handleImagePress}
                 activeOpacity={0.7}
               >
-                <Image
-                  source={{ uri: product.image || product.images?.[0] || 'https://via.placeholder.com/100' }}
+                <ErpAuthenticatedImage
+                  uri={product.image || product.images?.[0] || GRAY_PIXEL_DATA_URI}
                   style={styles.itemImage}
                   resizeMode="cover"
                 />
@@ -1118,32 +1122,38 @@ export const CheckoutScreen: React.FC = () => {
 
   return (
     <SafeAreaView style={styles.container}>
-      {renderHeader()}
-      <ScrollView showsVerticalScrollIndicator={false}>
-        {renderShippingBanner()}
-        {renderShippingAddress()}
-        {renderOrderItems()}
-        {renderShippingMethod()}
-        {renderPaymentMethods()}
-        {renderOrderSummary()}
-      </ScrollView>
+      <KeyboardAvoidingView
+        style={styles.keyboardFlex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+      >
+        {renderHeader()}
+        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
+          {renderShippingBanner()}
+          {renderShippingAddress()}
+          {renderOrderItems()}
+          {renderShippingMethod()}
+          {renderPaymentMethods()}
+          {renderOrderSummary()}
+        </ScrollView>
 
-      <View style={styles.footer}>
-        <TouchableOpacity
-          style={[
-            styles.continueButton,
-            (!selectedPayment || !selectedAddress) && styles.continueButtonDisabled,
-          ]}
-          onPress={handlePlaceOrder}
-          disabled={!selectedPayment || !selectedAddress || isPlacingOrder}
-        >
-          {isPlacingOrder ? (
-            <ActivityIndicator size="small" color={Colors.WHITE} />
-          ) : (
-            <Text style={styles.continueButtonText}>Continue</Text>
-          )}
-        </TouchableOpacity>
-      </View>
+        <View style={styles.footer}>
+          <TouchableOpacity
+            style={[
+              styles.continueButton,
+              (!selectedPayment || !selectedAddress) && styles.continueButtonDisabled,
+            ]}
+            onPress={handlePlaceOrder}
+            disabled={!selectedPayment || !selectedAddress || isPlacingOrder}
+          >
+            {isPlacingOrder ? (
+              <ActivityIndicator size="small" color={Colors.WHITE} />
+            ) : (
+              <Text style={styles.continueButtonText}>Continue</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
 
       {/* Modern Alert Modal */}
       <ModernAlert
@@ -1166,6 +1176,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.BACKGROUND,
   },
+  keyboardFlex: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

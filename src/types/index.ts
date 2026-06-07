@@ -1,4 +1,5 @@
 // User Types
+import type { NavigatorScreenParams } from '@react-navigation/native';
 export interface User {
   id: string;
   email: string;
@@ -214,12 +215,46 @@ export interface Category {
   subcategories?: Category[];
 }
 
+
+export type SupplierStackParamList = {
+  SupplierTabs: undefined;
+  SupplierOrdersInvoices: undefined;
+  SupplierSalesInvoiceDetail: { name: string };
+  SupplierPaymentEntryDetail: { name: string };
+  SupplierQuotationList: { initialTab?: 'list' | 'new' } | undefined;
+  SupplierQuotationDetail: { name: string };
+};
+
+export type SupplierTabParamList = {
+  SupplierHome: undefined;
+  SupplierMessages: undefined;
+  SupplierProfile: undefined;
+};
+
 // Navigation Types
+
+export type MainTabParamList = {
+  Home: undefined;
+  Categories: undefined;
+  Sourcing: undefined;
+  /** Native Raven chat (Suppliers tab); optional params when opening a DM from supplier profile. */
+  Suppliers:
+    | {
+        openRavenWorkspaceId?: string;
+        openRavenChannelId?: string;
+        /** Frappe user id — used to build a DM row if the channel is not in the list yet (same as in-drawer “new DM”). */
+        openRavenPeerUserId?: string;
+      }
+    | undefined;
+  Profile: undefined;
+};
+
 export type RootStackParamList = {
   Splash: undefined;
+  LanguageSelect: undefined;
   Onboarding: undefined;
   Auth: undefined;
-  Main: undefined;
+  Main: NavigatorScreenParams<MainTabParamList> | undefined;
   SourcingRequest: {
     parentCategory?: string;
     parentCategoryId?: string;
@@ -237,12 +272,34 @@ export type RootStackParamList = {
   Checkout: undefined;
   OrderSuccess: { orderId?: string };
   OrderHistory: undefined;
+  /** Buyer: sales invoices & payment entries for the logged-in customer. */
+  InvoicesPayments: undefined;
   OrderDetails: { orderId: string };
   InvoiceDetails: { invoiceId: string };
+  PaymentEntryDetail: { name: string };
   EditProfile: undefined;
   Settings: undefined;
   CreateBundle: undefined;
   ViewBundle: { bundle: any };
+  AddressBook: undefined;
+  EditAddress: { address?: UserAddress; returnTo?: string } | undefined;
+  Suppliers: undefined;
+  SupplierDetail: { supplierId: string };
+  AgentSupplierChat: { supplierId: string };
+  SupplierChatList: undefined;
+  /** Draft SQ + Raven doc link. Omit `ravenChannelId` to pick any chat/channel on the compose screen. */
+  SupplierQuotationCompose: { ravenChannelId?: string } | undefined;
+  /** Native Raven-style chat (light UI); not a WebView. */
+  RavenUIMessages: undefined;
+  /** Header chat icon: your channels & people you message (not the Suppliers tab). */
+  RavenChatInbox: { openWorkspaceId?: string; openChannelId?: string } | undefined;
+  RavenWorkspaceSupplierProfile: {
+    supplierDocName: string;
+    workspaceAdminUser?: string;
+    /** Raven workspace `name` — required to return to in-app chat after opening a DM. */
+    ravenWorkspaceId?: string;
+  };
+  Subscription: undefined;
 };
 
 export type AuthStackParamList = {
@@ -250,15 +307,6 @@ export type AuthStackParamList = {
   Register: undefined;
   ForgotPassword: undefined;
 };
-
-export type MainTabParamList = {
-  Home: undefined;
-  Categories: undefined;
-  Sourcing: undefined;
-  Profile: undefined;
-};
-
-
 
 // API Response Types
 export interface ApiResponse<T> {

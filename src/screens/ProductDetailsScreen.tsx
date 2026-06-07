@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   Dimensions,
   FlatList,
-  Image,
   Alert,
   ActivityIndicator,
   TextInput,
@@ -22,6 +21,7 @@ import { Button } from '../components/Button';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
 import { Spacing } from '../constants/spacing';
+import { GRAY_PIXEL_DATA_URI } from '../constants/inlinePlaceholder';
 import { Product, ProductColor, ProductSize } from '../types';
 import { useProduct, usePricingRules, useProductReviews, useCartActions } from '../hooks/erpnext';
 import { getERPNextClient } from '../services/erpnext';
@@ -30,6 +30,7 @@ import { useUserSession } from '../context/UserContext';
 import { Toast } from '../components/Toast';
 import { CartAnimation } from '../components/CartAnimation';
 import { LoadingScreen } from '../components/LoadingScreen';
+import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 
 const { width, height } = Dimensions.get('window');
 
@@ -457,7 +458,7 @@ export const ProductDetailsScreen: React.FC = () => {
       ? product.slideshowImages
       : (product.images && product.images.length > 0 
         ? product.images
-        : ['https://via.placeholder.com/400x600/F2F2F7/8E8E93?text=No+Image']);
+        : [GRAY_PIXEL_DATA_URI]);
     
     return (
       <View style={styles.imageContainer} ref={productImageRef}>
@@ -495,12 +496,7 @@ export const ProductDetailsScreen: React.FC = () => {
             index,
           })}
           renderItem={({ item }) => (
-            <Image 
-              source={{ uri: item }} 
-              style={styles.productImage} 
-              resizeMode="cover"
-              defaultSource={require('../assets/images/download.jpg')}
-            />
+            <ErpAuthenticatedImage uri={item} style={styles.productImage} resizeMode="cover" />
           )}
           keyExtractor={(_, index) => index.toString()}
         />
@@ -1624,8 +1620,8 @@ export const ProductDetailsScreen: React.FC = () => {
               }}
             >
               {item.images && item.images.length > 0 && (
-                <Image
-                  source={{ uri: item.images[0] }}
+                <ErpAuthenticatedImage
+                  uri={item.images[0]}
                   style={styles.recommendedProductImage}
                   resizeMode="cover"
                 />

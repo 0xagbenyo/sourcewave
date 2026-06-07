@@ -11,10 +11,14 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, CommonActions } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { getERPNextClient } from '../services/erpnext';
+import { joinAllPublicRavenWorkspacesAsSessionUser } from '../services/ravenNativeApi';
 import { useUserSession } from '../context/UserContext';
+import { saveFrappeWebCredentials } from '../services/sessionCredentials';
+import { detectSupplierPortalSession } from '../services/supplierPortal';
 
 export const LoginScreen: React.FC = () => {
   const [emailOrPhone, setEmailOrPhone] = useState('');
@@ -23,6 +27,7 @@ export const LoginScreen: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [emailOrPhoneValid, setEmailOrPhoneValid] = useState<boolean | null>(null); // null = not validated yet, true/false = validation result
   const navigation = useNavigation();
+  const { t } = useTranslation();
   const { setUser } = useUserSession();
 
   const validateEmail = (email: string) => {
@@ -59,12 +64,12 @@ export const LoginScreen: React.FC = () => {
     const trimmedEmailOrPhone = emailOrPhone.trim();
     
     if (!trimmedEmailOrPhone) {
-      alert('Please enter your email or mobile number');
+      alert(t('login.errors.noEmail'));
       return;
     }
 
     if (!password) {
-      alert('Please enter your password');
+      alert(t('login.errors.noPassword'));
       return;
     }
 
@@ -72,12 +77,12 @@ export const LoginScreen: React.FC = () => {
     const isEmail = trimmedEmailOrPhone.includes('@');
     
     if (isEmail && !validateEmail(trimmedEmailOrPhone)) {
-      alert('Please enter a valid email address');
+      alert(t('login.invalidEmail'));
       return;
     }
 
     if (!isEmail && !validatePhone(trimmedEmailOrPhone)) {
-      alert('Please enter a valid Ghana phone number (e.g., 0201234567 or +233201234567)');
+      alert(t('login.invalidPhoneDetail'));
       return;
     }
 
@@ -96,7 +101,7 @@ export const LoginScreen: React.FC = () => {
           console.log('Found user email for phone:', loginIdentifier);
         } else {
           setIsLoading(false);
-          alert('No account found with this phone number. Please check and try again.');
+          alert(t('login.errors.noAccountPhone'));
           return;
         }
       }
@@ -105,6 +110,12 @@ export const LoginScreen: React.FC = () => {
       console.log('Attempting login with:', { loginIdentifier, passwordLength: password.length });
       const loginResult = await client.login(loginIdentifier, password);
       console.log('Login successful:', loginResult);
+
+      try {
+        await joinAllPublicRavenWorkspacesAsSessionUser();
+      } catch (joinWsErr) {
+        console.warn('Could not join all public Raven workspaces:', joinWsErr);
+      }
       
       // Store user session
       // Use loginIdentifier as fallback if user field is not available
@@ -131,15 +142,46 @@ export const LoginScreen: React.FC = () => {
         console.warn('Could not fetch customer by email:', error);
         // Continue with email as fallback
       }
-      
-      setUser({
-        email: userEmail,
-        fullName: customerDisplayName, // Store customer display name for profile
-        user: customerId, // Store customer ID (name field) for API calls like Sales Order
-      });
-      
+
+      const frappeUserName = String(loginResult.user || loginIdentifier).trim();
+      let portal: Awaited<ReturnType<typeof detectSupplierPortalSession>> | null = null;
+      try {
+        portal = await detectSupplierPortalSession(userEmail, frappeUserName);
+      } catch (e) {
+        console.warn('Supplier portal detection failed:', e);
+      }
+
+      // Supplier UI when ERPNext reports Supplier role and/or a linked Supplier doc.
+      // supplierId may be missing if the site links the portal user differently; lists stay empty until fixed in ERPNext.
+      if (portal?.isSupplier) {
+        const supplierDoc = portal.supplierId?.trim() || '';
+        setUser({
+          email: userEmail,
+          fullName: portal.supplierName || customerDisplayName || loginResult.full_name,
+          /** Frappe `User.name` (for Raven / roles). ERPNext Supplier doc id is always `supplierId`. */
+          user: frappeUserName || userEmail,
+          appMode: 'supplier',
+          supplierId: supplierDoc || undefined,
+          supplierName: portal.supplierName,
+        });
+      } else {
+        setUser({
+          email: userEmail,
+          fullName: customerDisplayName,
+          user: customerId,
+          appMode: 'buyer',
+        });
+      }
+
+      try {
+        await saveFrappeWebCredentials(userEmail, password);
+      } catch (credErr) {
+        console.warn('Could not save credentials for Raven auto-login:', credErr);
+      }
+
       console.log('User session stored:', { email: userEmail, customerId: customerId, customerDisplayName: customerDisplayName });
-      
+
+      setIsLoading(false);
       // Reset navigation stack to prevent going back to login
       navigation.dispatch(
         CommonActions.reset({
@@ -150,7 +192,7 @@ export const LoginScreen: React.FC = () => {
     } catch (error: any) {
       setIsLoading(false);
       // Extract error message - the error should already have a meaningful message from extractLoginErrorMessage
-      const errorMessage = error?.message || 'Login failed. Please check your credentials and try again.';
+      const errorMessage = error?.message || t('login.errors.loginFailed');
       alert(errorMessage);
       console.error('Login error:', error);
       // Log original error details for debugging
@@ -183,20 +225,20 @@ export const LoginScreen: React.FC = () => {
             </View>
             <View style={styles.securityInfo}>
               <Ionicons name="shield-checkmark" size={14} color={Colors.SUCCESS} />
-              <Text style={styles.securityText}>Your data is protected.</Text>
+              <Text style={styles.securityText}>{t('login.securityLine')}</Text>
             </View>
           </View>
 
           {/* Form */}
           <View style={styles.formContainer}>
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Mobile number or email address</Text>
+              <Text style={styles.label}>{t('login.emailOrPhoneLabel')}</Text>
               <TextInput
                 style={[
                   styles.input,
                   emailOrPhoneValid === false && styles.inputError
                 ]}
-                placeholder="Enter email or phone number"
+                placeholder={t('login.emailOrPhonePlaceholder')}
                 value={emailOrPhone}
                 onChangeText={handleEmailOrPhoneChange}
                 keyboardType="email-address"
@@ -205,17 +247,17 @@ export const LoginScreen: React.FC = () => {
               />
               {emailOrPhoneValid === false && (
                 <Text style={styles.errorText}>
-                  {emailOrPhone.includes('@') ? 'Please enter a valid email address' : 'Please enter a valid Ghana phone number'}
+                  {emailOrPhone.includes('@') ? t('login.invalidEmail') : t('login.invalidPhone')}
                 </Text>
               )}
             </View>
 
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Password</Text>
+              <Text style={styles.label}>{t('login.passwordLabel')}</Text>
               <View style={styles.passwordInputWrapper}>
                 <TextInput
                   style={styles.passwordInput}
-                  placeholder="Enter your password"
+                  placeholder={t('login.passwordPlaceholder')}
                   value={password}
                   onChangeText={handlePasswordChange}
                   secureTextEntry={!showPassword}
@@ -246,7 +288,7 @@ export const LoginScreen: React.FC = () => {
               disabled={isLoading || !isFormValid}
             >
               <Text style={styles.continueButtonText}>
-                {isLoading ? 'SIGNING IN...' : 'SIGN IN'}
+                {isLoading ? t('login.signingIn') : t('login.signIn')}
               </Text>
             </TouchableOpacity>
 
@@ -260,23 +302,25 @@ export const LoginScreen: React.FC = () => {
                 navigation.navigate('ForgotPassword' as never, { email: emailToPass } as never);
               }}
             >
-              <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+              <Text style={styles.forgotPasswordText}>{t('login.forgotPassword')}</Text>
             </TouchableOpacity>
 
             <View style={styles.signupSection}>
-              <Text style={styles.signupText}>Don't have an account? </Text>
+              <Text style={styles.signupText}>{t('login.noAccount')}</Text>
               <TouchableOpacity onPress={() => navigation.navigate('Register' as never)}>
-                <Text style={styles.signupLink}>Sign up</Text>
+                <Text style={styles.signupLink}>{t('login.signUp')}</Text>
               </TouchableOpacity>
             </View>
           </View>
 
           {/* Legal Text */}
           <Text style={styles.legalText}>
-            By continuing, you agree to our{' '}
-            <Text style={styles.linkText}>Privacy & Cookie Policy</Text>
-            {' '}and{' '}
-            <Text style={styles.linkText}>Terms & Conditions</Text>.
+            {t('login.legalPrefix')}{' '}
+            <Text style={styles.linkText}>{t('login.privacy')}</Text>
+            {' '}
+            {t('login.and')}{' '}
+            <Text style={styles.linkText}>{t('login.terms')}</Text>
+            {t('login.legalSuffix')}
           </Text>
         </ScrollView>
       </KeyboardAvoidingView>

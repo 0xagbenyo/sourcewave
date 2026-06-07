@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
-import { Animated, Image, StyleSheet, Dimensions, View, Text, Easing } from 'react-native';
+import { Animated, StyleSheet, Dimensions, View, Text, Easing } from 'react-native';
+import { ErpAuthenticatedImage } from './ErpAuthenticatedImage';
 import { Colors } from '../constants/colors';
 
 const { width, height } = Dimensions.get('window');
@@ -131,11 +132,7 @@ export const CartAnimation: React.FC<CartAnimationProps> = ({
       pointerEvents="none"
     >
       {productImage ? (
-        <Image
-          source={{ uri: productImage }}
-          style={styles.productImage}
-          resizeMode="cover"
-        />
+        <ErpAuthenticatedImage uri={productImage} style={styles.productImage} resizeMode="cover" />
       ) : (
         <View style={styles.fallbackIcon}>
           <Text style={styles.iconText} allowFontScaling={false}>

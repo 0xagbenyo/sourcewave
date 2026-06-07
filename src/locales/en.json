@@ -1,0 +1,123 @@
+{
+  "languageSelect": {
+    "title": "Choose your language",
+    "subtitle": "You can change this later in settings when available.",
+    "english": "English",
+    "chinese": "简体中文",
+    "continue": "Continue",
+    "preparingZh": "Preparing Chinese…",
+    "preparingZhHint": "First time only. Uses automatic translation."
+  },
+  "onboarding": {
+    "slide1Title": "Source smarter",
+    "slide1Desc": "Browse curated fashion and connect with suppliers in one place.",
+    "slide2Title": "Request sourcing",
+    "slide2Desc": "Tell us what you need — quantities, references, and timelines in a few taps.",
+    "slide3Title": "Track everything",
+    "slide3Desc": "Orders, messages, and updates stay organized so you never lose momentum.",
+    "skip": "Skip",
+    "next": "Next",
+    "start": "Get started"
+  },
+  "login": {
+    "securityLine": "Your data is protected.",
+    "emailOrPhoneLabel": "Mobile number or email address",
+    "emailOrPhonePlaceholder": "Enter email or phone number",
+    "passwordLabel": "Password",
+    "passwordPlaceholder": "Enter your password",
+    "invalidEmail": "Please enter a valid email address",
+    "invalidPhone": "Please enter a valid Ghana phone number",
+    "invalidPhoneDetail": "Please enter a valid Ghana phone number (e.g., 0201234567 or +233201234567)",
+    "signingIn": "SIGNING IN...",
+    "signIn": "SIGN IN",
+    "forgotPassword": "Forgot Password?",
+    "noAccount": "Don't have an account? ",
+    "signUp": "Sign up",
+    "legalPrefix": "By continuing, you agree to our",
+    "privacy": "Privacy & Cookie Policy",
+    "and": "and",
+    "terms": "Terms & Conditions",
+    "legalSuffix": ".",
+    "errors": {
+      "noEmail": "Please enter your email or mobile number",
+      "noPassword": "Please enter your password",
+      "noAccountPhone": "No account found with this phone number. Please check and try again.",
+      "loginFailed": "Login failed. Please check your credentials and try again."
+    }
+  },
+  "register": {
+    "title": "Create your SOURCEWAVE account",
+    "subtitle": "It's quick and easy.",
+    "email": "Email",
+    "emailPlaceholder": "Enter your email",
+    "firstName": "First Name",
+    "firstNamePlaceholder": "Enter your first name",
+    "middleName": "Middle Name (Optional)",
+    "middleNamePlaceholder": "Enter your middle name",
+    "lastName": "Last Name",
+    "lastNamePlaceholder": "Enter your last name",
+    "phone": "Phone Number",
+    "phonePlaceholder": "Enter your phone number",
+    "sending": "SENDING...",
+    "sendLink": "SEND VERIFICATION LINK",
+    "haveAccount": "Already have an account? ",
+    "signIn": "Sign in",
+    "infoBanner": "We'll send you a verification link. Click it to set your password and complete registration.",
+    "legalPrefix": "By registering, you agree to our",
+    "privacy": "Privacy & Cookie Policy",
+    "and": "and",
+    "terms": "Terms & Conditions",
+    "legalSuffix": ".",
+    "errors": {
+      "emailRequired": "Email is required",
+      "emailInvalid": "Please enter a valid email address",
+      "firstRequired": "First name is required",
+      "lastRequired": "Last name is required",
+      "phoneRequired": "Phone number is required",
+      "phoneInvalid": "Please enter a valid phone number"
+    },
+    "alerts": {
+      "registrationError": "Registration Error",
+      "sendFailed": "Failed to send verification link. Please try again."
+    }
+  },
+  "forgot": {
+    "title": "Forgot Password?",
+    "subtitle": "Enter your email address and we'll send you a password reset link.",
+    "emailLabel": "Email Address",
+    "emailPlaceholder": "Enter your email address",
+    "sending": "SENDING...",
+    "sendReset": "SEND RESET LINK",
+    "remember": "Remember your password? ",
+    "signIn": "Sign In",
+    "helpTitle": "Need help?",
+    "helpBody": "Contact our support team at support@glamora.com",
+    "successTitle": "Check Your Email",
+    "successSubtitle": "We've sent a password reset link to:",
+    "successInstructions": "Click the link in the email to reset your password. The link will expire in 15 minutes.",
+    "backLogin": "Back to Login",
+    "resend": "Resend Email",
+    "noEmailTitle": "Didn't receive the email?",
+    "noEmailBody": "Check your spam folder or try a different email address",
+    "alerts": {
+      "emailRequiredTitle": "Email Required",
+      "emailRequiredBody": "Please enter your email address",
+      "invalidTitle": "Invalid Email",
+      "invalidBody": "Please enter a valid email address",
+      "errorTitle": "Error",
+      "sendFailed": "Failed to send password reset link. Please try again."
+    }
+  },
+  "tabs": {
+    "activity": "Activity",
+    "sourcing": "Sourcing",
+    "category": "Category",
+    "suppliers": "Suppliers",
+    "account": "Account"
+  },
+  "profile": {
+    "customerService": "Customer Service",
+    "suppliers": "Suppliers",
+    "subscription": "SourceWave subscription"
+  }
+}

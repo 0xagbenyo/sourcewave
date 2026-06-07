@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -10,8 +10,11 @@ import {
   Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, CommonActions } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { Colors } from '../constants/colors';
+import { appStorage } from '../services/appStorage';
+import { STORAGE_ONBOARDING_COMPLETE } from '../constants/appPreferencesKeys';
 
 const { width, height } = Dimensions.get('window');
 
@@ -22,32 +25,45 @@ interface OnboardingSlide {
   illustration: any;
 }
 
-const onboardingSlides: OnboardingSlide[] = [
-  {
-    id: '1',
-    title: 'Source from China 🇨🇳',
-    description: 'Find the best suppliers and products directly from China at competitive prices',
-    illustration: require('../assets/images/source1.jpg'),
-  },
-  {
-    id: '2',
-    title: 'Bulk Orders Made Easy',
-    description: 'Request quotes from multiple suppliers, compare prices, and negotiate the best deals',
-    illustration: require('../assets/images/source2.png'),
-  },
-  {
-    id: '3',
-    title: 'Direct Supplier Connection',
-    description: 'Connect with verified suppliers and manage your sourcing requests effortlessly',
-    illustration: require('../assets/images/source3.jpeg'),
-  },
-];
-
 export const OnboardingScreen: React.FC = () => {
+  const { t } = useTranslation();
+  const onboardingSlides: OnboardingSlide[] = useMemo(
+    () => [
+      {
+        id: '1',
+        title: t('onboarding.slide1Title'),
+        description: t('onboarding.slide1Desc'),
+        illustration: require('../assets/images/source1.jpg'),
+      },
+      {
+        id: '2',
+        title: t('onboarding.slide2Title'),
+        description: t('onboarding.slide2Desc'),
+        illustration: require('../assets/images/source2.png'),
+      },
+      {
+        id: '3',
+        title: t('onboarding.slide3Title'),
+        description: t('onboarding.slide3Desc'),
+        illustration: require('../assets/images/source3.jpeg'),
+      },
+    ],
+    [t]
+  );
   const [currentIndex, setCurrentIndex] = useState(0);
   const flatListRef = useRef<FlatList>(null);
   const scrollX = useRef(new Animated.Value(0)).current;
   const navigation = useNavigation();
+
+  const finishOnboarding = async () => {
+    await appStorage.setItem(STORAGE_ONBOARDING_COMPLETE, 'true');
+    navigation.dispatch(
+      CommonActions.reset({
+        index: 0,
+        routes: [{ name: 'Auth' as never }],
+      })
+    );
+  };
 
   const handleNext = () => {
     if (currentIndex < onboardingSlides.length - 1) {
@@ -56,14 +72,12 @@ export const OnboardingScreen: React.FC = () => {
         animated: true,
       });
     } else {
-      // Complete onboarding and navigate to auth
-      navigation.navigate('Auth' as never);
+      void finishOnboarding();
     }
   };
 
   const handleSkip = () => {
-    // Skip onboarding and navigate to auth
-    navigation.navigate('Auth' as never);
+    void finishOnboarding();
   };
 
   const renderSlide = ({ item, index }: { item: OnboardingSlide; index: number }) => {
@@ -184,16 +198,16 @@ export const OnboardingScreen: React.FC = () => {
           {currentIndex < onboardingSlides.length - 1 ? (
             <>
               <TouchableOpacity onPress={handleSkip} style={styles.skipButton}>
-                <Text style={styles.skipText}>Skip</Text>
+                <Text style={styles.skipText}>{t('onboarding.skip')}</Text>
               </TouchableOpacity>
               
               <TouchableOpacity onPress={handleNext} style={styles.nextButton}>
-                <Text style={styles.nextButtonText}>Next</Text>
+                <Text style={styles.nextButtonText}>{t('onboarding.next')}</Text>
               </TouchableOpacity>
             </>
           ) : (
             <TouchableOpacity onPress={handleNext} style={styles.startButton}>
-              <Text style={styles.startButtonText}>Start Sourcing!</Text>
+              <Text style={styles.startButtonText}>{t('onboarding.start')}</Text>
             </TouchableOpacity>
           )}
         </View>

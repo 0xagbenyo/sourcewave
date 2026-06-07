@@ -3,7 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  Image,
   TouchableOpacity,
   Dimensions,
   ScrollView,
@@ -17,6 +16,8 @@ import { Spacing } from '../constants/spacing';
 import { Typography } from '../constants/typography';
 import { getERPNextClient } from '../services/erpnext';
 import { mapERPItemToProduct } from '../services/mappers';
+import { encodeErpFileUrl } from '../utils/erpImageUrl';
+import { ErpAuthenticatedImage } from './ErpAuthenticatedImage';
 
 const { width } = Dimensions.get('window');
 const CARD_WIDTH = width * 0.95; // 95% of screen width (wider)
@@ -84,20 +85,10 @@ export const ProductBundleCard: React.FC<ProductBundleCardProps> = ({
     }
   }, [items]);
 
-  // Helper function to convert relative image path to full URL
   const getImageUrl = (imagePath: string | null | undefined): string | null => {
     if (!imagePath) return null;
-    
-    if (imagePath.startsWith('http')) {
-      return imagePath;
-    }
-    
-    const pathParts = imagePath.split('/');
-    const encodedParts = pathParts.map((part, idx) => {
-      return idx === 0 && part === '' ? '' : encodeURIComponent(part);
-    });
-    const encodedPath = encodedParts.join('/');
-    return `https://glamora.rxcue.net${encodedPath.startsWith('/') ? encodedPath : '/' + encodedPath}`;
+    const u = encodeErpFileUrl(imagePath);
+    return u || null;
   };
 
   const handleItemPress = async (item: BundleItem) => {
@@ -197,11 +188,7 @@ export const ProductBundleCard: React.FC<ProductBundleCardProps> = ({
                 >
                   <View style={styles.itemImageContainer}>
                     {imageUrl ? (
-                      <Image
-                        source={{ uri: imageUrl }}
-                        style={styles.itemImage}
-                        resizeMode="contain"
-                      />
+                      <ErpAuthenticatedImage uri={imageUrl} style={styles.itemImage} resizeMode="contain" />
                     ) : (
                       <View style={styles.placeholderImage}>
                         <Ionicons name="image-outline" size={22} color={Colors.LIGHT_GRAY} />

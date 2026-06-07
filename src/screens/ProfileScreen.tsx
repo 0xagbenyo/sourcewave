@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,55 +9,80 @@ import {
   ActivityIndicator,
   RefreshControl,
   Alert,
-  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { ProductCard } from '../components/ProductCard';
+import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 import { useUserSession } from '../context/UserContext';
+import { useSubscription } from '../context/SubscriptionContext';
 import { useWishlist } from '../hooks/erpnext';
 import { useShoppingCart } from '../hooks/erpnext';
 import { useOrders } from '../hooks/erpnext';
 import { getERPNextClient } from '../services/erpnext';
 import { mapERPItemToProduct } from '../services/mappers';
-
-const services = [
-  { id: '1', label: 'Customer Service', icon: 'headset-outline' },
-];
+import { encodeErpFileUrl } from '../utils/erpImageUrl';
+import { Product } from '../types';
 
 export const ProfileScreen: React.FC = () => {
+  const { t } = useTranslation();
+  const services = useMemo(
+    () =>
+      [
+        { id: '1', label: t('profile.customerService'), icon: 'headset-outline' as const },
+        { id: '2', label: t('profile.suppliers'), icon: 'people-outline' as const, route: 'Suppliers' as const },
+        {
+          id: '3',
+          label: t('profile.subscription'),
+          icon: 'diamond-outline' as const,
+          route: 'Subscription' as const,
+        },
+      ] as {
+        id: string;
+        label: string;
+        icon: keyof typeof Ionicons.glyphMap;
+        route?: 'Suppliers' | 'Subscription';
+      }[],
+    [t]
+  );
   const [userDetails, setUserDetails] = useState<any>(null);
   const [loadingUser, setLoadingUser] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const navigation = useNavigation();
   const { user, clearUser } = useUserSession();
-  
-  // Fetch user details
-  useEffect(() => {
-    const fetchUserDetails = async () => {
-      if (!user?.email) {
-        setLoadingUser(false);
-        return;
-      }
-      
-      try {
-        setLoadingUser(true);
-        const client = getERPNextClient();
-        const userData = await client.getUserByEmail(user.email);
-        setUserDetails(userData);
-      } catch (error) {
-        console.error('Error fetching user details:', error);
-      } finally {
-        setLoadingUser(false);
-      }
-    };
-    
-    fetchUserDetails();
-  }, [user?.email]);
-  
+  const { isActive, refresh: refreshSubscription } = useSubscription();
+
+  useFocusEffect(
+    React.useCallback(() => {
+      refreshSubscription();
+      let cancelled = false;
+      (async () => {
+        if (!user?.email) {
+          setLoadingUser(false);
+          return;
+        }
+        try {
+          setLoadingUser(true);
+          const client = getERPNextClient();
+          const userData = await client.getUserByEmail(user.email);
+          if (!cancelled) setUserDetails(userData);
+        } catch (error) {
+          console.error('Error fetching user details:', error);
+        } finally {
+          if (!cancelled) setLoadingUser(false);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [refreshSubscription, user?.email])
+  );
+
+  // (user details loaded in useFocusEffect above so avatar updates after Edit Profile)
   // Fetch wishlist count
   const { wishlistItems, refresh: refreshWishlist } = useWishlist(user?.email || null);
   const wishlistCount = wishlistItems?.length || 0;
@@ -250,6 +275,12 @@ export const ProfileScreen: React.FC = () => {
     return user?.email?.split('@')[0] || user?.fullName || 'User';
   };
   
+  const getProfileImageUri = (): string | undefined => {
+    const raw = userDetails?.user_image || userDetails?.image;
+    if (!raw || String(raw).trim() === '') return undefined;
+    return encodeErpFileUrl(String(raw).trim()) || undefined;
+  };
+
   // Get user initials for avatar
   const getUserInitials = () => {
     const name = getUserDisplayName();
@@ -289,13 +320,17 @@ export const ProfileScreen: React.FC = () => {
     <View style={styles.header}>
       <View style={styles.profileInfo}>
         <View style={styles.avatar}>
+          {getProfileImageUri() ? (
+            <ErpAuthenticatedImage uri={getProfileImageUri()!} style={styles.avatarImage} resizeMode="cover" />
+          ) : (
             <Text style={styles.avatarText}>{getUserInitials()}</Text>
+          )}
         </View>
         <View style={styles.userInfo}>
           <View style={styles.usernameRow}>
               <Text style={styles.username}>{getUserDisplayName()}</Text>
             <View style={styles.membershipBadge}>
-              <Text style={styles.membershipText}>S0</Text>
+              <Text style={styles.membershipText}>{isActive ? 'PRO' : 'S0'}</Text>
             </View>
           </View>
             <TouchableOpacity 
@@ -330,6 +365,15 @@ export const ProfileScreen: React.FC = () => {
           <Text style={styles.viewAllText}>View all {'>'}</Text>
         </TouchableOpacity>
       </View>
+      <TouchableOpacity
+        style={styles.invoicesLink}
+        onPress={() => (navigation as any).navigate('InvoicesPayments')}
+        activeOpacity={0.85}
+      >
+        <Ionicons name="wallet-outline" size={20} color={Colors.BLACK} style={{ marginRight: 10 }} />
+        <Text style={styles.invoicesLinkText}>Invoices & payments</Text>
+        <Ionicons name="chevron-forward" size={18} color={Colors.TEXT_SECONDARY} />
+      </TouchableOpacity>
       <View style={styles.orderStatuses}>
         <View style={styles.orderStatus}>
           <Ionicons name="document-outline" size={18} color={Colors.BLACK} />
@@ -361,8 +405,16 @@ export const ProfileScreen: React.FC = () => {
     <View style={styles.section}>
       <View style={styles.servicesContainer}>
         {services.map((service) => (
-          <TouchableOpacity key={service.id} style={styles.serviceItem}>
-            <Ionicons name={service.icon as any} size={18} color={Colors.BLACK} />
+          <TouchableOpacity
+            key={service.id}
+            style={styles.serviceItem}
+            onPress={() => {
+              if (service.route) {
+                (navigation as any).navigate(service.route);
+              }
+            }}
+          >
+            <Ionicons name={service.icon} size={18} color={Colors.BLACK} />
             <Text style={styles.serviceLabel}>{service.label}</Text>
           </TouchableOpacity>
         ))}
@@ -556,6 +608,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 10,
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
   },
   avatarText: {
     fontSize: 18,
@@ -664,6 +722,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.ROYAL_BLUE,
     fontWeight: '500',
+  },
+  invoicesLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    backgroundColor: Colors.WHITE,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.BORDER,
+  },
+  invoicesLinkText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.BLACK,
   },
   orderStatuses: {
     flexDirection: 'row',
