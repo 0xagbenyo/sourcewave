@@ -4,7 +4,7 @@
     "slug": "SourcewaveApp",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./src/assets/images/Amoura_20260203_115921_0000.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "scheme": "sourcewave",
@@ -19,7 +19,7 @@
     "android": {
       "package": "com.agbenyo.sourcewaveapp",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./src/assets/images/Amoura_20260203_115921_0000.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
