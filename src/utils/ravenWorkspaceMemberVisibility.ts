@@ -4,12 +4,8 @@ function normalizeId(s: string | null | undefined): string {
   return (s || '').trim().toLowerCase();
 }
 
-/**
- * Raven `fetch_workspace_members` marks workspace admins with `is_admin` (Check field).
- * The API may serialize that as number, boolean, or string depending on client / version.
- */
-export function ravenWorkspaceMemberIsAdmin(m: RavenWorkspaceMemberRow): boolean {
-  const v = m.is_admin as unknown;
+/** Frappe/Raven Check fields: may arrive as 0/1, boolean, or string from the API. */
+export function ravenFrappeCheckTruthy(v: unknown): boolean {
   if (v === true || v === 1) return true;
   if (typeof v === 'number' && Number.isFinite(v) && v !== 0) return true;
   if (typeof v === 'string') {
@@ -17,6 +13,19 @@ export function ravenWorkspaceMemberIsAdmin(m: RavenWorkspaceMemberRow): boolean
     return s === '1' || s === 'true' || s === 'yes';
   }
   return false;
+}
+
+/** `is_admin` on Raven Workspace Member (workspace administrator, not supplier roster). */
+export function ravenWorkspaceMemberIsAdmin(m: RavenWorkspaceMemberRow): boolean {
+  return ravenFrappeCheckTruthy(m.is_admin as unknown);
+}
+
+/**
+ * Custom Check on **Raven Workspace Member** — supplier representatives in this workspace.
+ * @see `custom_is_supplier` in Frappe (your site adds this field).
+ */
+export function ravenWorkspaceMemberIsSupplier(m: RavenWorkspaceMemberRow): boolean {
+  return ravenFrappeCheckTruthy(m.custom_is_supplier as unknown);
 }
 
 /** True if `candidateUserId` matches a `Raven Workspace Member.user` (normalized). */
@@ -52,11 +61,11 @@ export function viewerIsRavenWorkspaceAdmin(
   );
 }
 
-/** Admins first, then stable alphabetical by `user` (Raven User id / email). */
+/** Supplier-tagged members first (`custom_is_supplier`), then stable alphabetical by `user`. */
 export function sortRavenMembersForDirectory(members: RavenWorkspaceMemberRow[]): RavenWorkspaceMemberRow[] {
   return [...members].sort((a, b) => {
-    const da = ravenWorkspaceMemberIsAdmin(a) ? 0 : 1;
-    const db = ravenWorkspaceMemberIsAdmin(b) ? 0 : 1;
+    const da = ravenWorkspaceMemberIsSupplier(a) ? 0 : 1;
+    const db = ravenWorkspaceMemberIsSupplier(b) ? 0 : 1;
     if (da !== db) return da - db;
     return String(a.user).localeCompare(String(b.user), undefined, { sensitivity: 'base' });
   });
@@ -64,8 +73,7 @@ export function sortRavenMembersForDirectory(members: RavenWorkspaceMemberRow[])
 
 /**
  * Returns the full workspace member list from the API (everyone in the workspace can DM anyone).
- * Previously non-admins only saw rows with `is_admin`, which dropped admins when `is_admin` was
- * serialized as a string or the viewer was not matched as admin.
+ * Sort order: **`custom_is_supplier`** members first, then alphabetical by `user`.
  */
 export function filterRavenMembersVisibleToViewer(
   members: RavenWorkspaceMemberRow[],
@@ -82,7 +90,14 @@ export function ravenWorkspaceAdminsSorted(members: RavenWorkspaceMemberRow[]): 
     .sort((a, b) => String(a.user).localeCompare(String(b.user), undefined, { sensitivity: 'base' }));
 }
 
-/** Single pass for drawer UI: admin flag + member list (full directory, admins first). */
+/** Members with **`custom_is_supplier`** set, sorted by `user` (supplier roster for a workspace). */
+export function ravenWorkspaceSuppliersSorted(members: RavenWorkspaceMemberRow[]): RavenWorkspaceMemberRow[] {
+  return members
+    .filter((m) => ravenWorkspaceMemberIsSupplier(m))
+    .sort((a, b) => String(a.user).localeCompare(String(b.user), undefined, { sensitivity: 'base' }));
+}
+
+/** Single pass for drawer UI: admin flag + member list (full directory, suppliers first). */
 export function getRavenMemberDirectoryView(
   members: RavenWorkspaceMemberRow[],
   viewerEmail: string | null | undefined,

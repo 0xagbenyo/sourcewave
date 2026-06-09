@@ -695,7 +695,8 @@ export const useSalesInvoice = (invoiceName: string) => {
 };
 
 /**
- * Hook for fetching a single order
+ * Hook for fetching a single order. Pass **`orderId`** (Sales Order name).  
+ * **`refetch`** is for pull-to-refresh (keeps existing data on failure).
  */
 export const useOrder = (orderId: string) => {
   const [state, setState] = useState<UseAsyncState<Order>>({
@@ -703,30 +704,45 @@ export const useOrder = (orderId: string) => {
     loading: true,
     error: null,
   });
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    const fetchOrder = async () => {
-      try {
-        setState((prev) => ({ ...prev, loading: true, error: null }));
-        const client = getERPNextClient();
-        const erpOrder = await client.getSalesOrder(orderId);
-        const order = mapERPSalesOrderToOrder(erpOrder);
-        setState({ data: order, loading: false, error: null });
-      } catch (error) {
-        setState({
-          data: null,
-          loading: false,
-          error: error instanceof Error ? error : new Error('Unknown error'),
-        });
+  const load = useCallback(async (mode: 'initial' | 'refresh') => {
+    if (!orderId) {
+      setState({ data: null, loading: false, error: null });
+      return;
+    }
+    const isInitial = mode === 'initial';
+    try {
+      if (isInitial) {
+        setState({ data: null, loading: true, error: null });
+      } else {
+        setRefreshing(true);
       }
-    };
-
-    if (orderId) {
-      fetchOrder();
+      const client = getERPNextClient();
+      const erpOrder = await client.getSalesOrder(orderId);
+      const order = mapERPSalesOrderToOrder(erpOrder);
+      setState({ data: order, loading: false, error: null });
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error('Unknown error');
+      setState((prev) => ({
+        data: isInitial ? null : prev.data,
+        loading: false,
+        error: err,
+      }));
+    } finally {
+      if (!isInitial) {
+        setRefreshing(false);
+      }
     }
   }, [orderId]);
 
-  return state;
+  useEffect(() => {
+    void load('initial');
+  }, [orderId, load]);
+
+  const refetch = useCallback(() => load('refresh'), [load]);
+
+  return { ...state, refreshing, refetch };
 };
 
 /**

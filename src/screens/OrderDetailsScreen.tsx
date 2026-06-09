@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -6,99 +6,213 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
+  RefreshControl,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { Colors } from '../constants/colors';
+import { Spacing } from '../constants/spacing';
 import { useOrder } from '../hooks/erpnext';
-import { OrderItem } from '../types';
+import { OrderItem, OrderStatus, UserAddress } from '../types';
+import { formatGhanaCedis } from '../utils/currency';
 
-const statusConfig: Record<string, { color: string; icon: string; label: string }> = {
-  'pending': { color: Colors.WARNING, icon: 'time-outline', label: 'Pending' },
-  'confirmed': { color: Colors.INFO, icon: 'checkmark-circle-outline', label: 'Confirmed' },
-  'processing': { color: Colors.ELECTRIC_BLUE, icon: 'cube-outline', label: 'Processing' },
-  'to_deliver': { color: Colors.INFO, icon: 'car-outline', label: 'To Deliver' },
-  'completed': { color: Colors.SUCCESS, icon: 'checkmark-circle', label: 'Completed' },
-  'shipped': { color: Colors.INFO, icon: 'car-outline', label: 'Shipped' },
-  'delivered': { color: Colors.SUCCESS, icon: 'checkmark-circle', label: 'Delivered' },
-  'cancelled': { color: Colors.ERROR, icon: 'close-circle', label: 'Canceled' },
-  'returned': { color: Colors.ERROR, icon: 'arrow-undo-outline', label: 'Returned' },
-};
+const hairline = StyleSheet.hairlineWidth;
+
+/** Accent for status dot + label (no heavy pill). */
+function statusAccent(status: string): string {
+  const s = (status || 'pending') as OrderStatus;
+  if (s === 'cancelled' || s === 'returned') return Colors.ERROR;
+  if (s === 'completed' || s === 'delivered') return '#248A3D';
+  if (s === 'pending') return '#C93400';
+  return Colors.INFO;
+}
+
+function formatOrderDate(dateString: string): string {
+  if (!dateString) return '';
+  try {
+    const date = new Date(dateString);
+    return date.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  } catch {
+    return dateString;
+  }
+}
+
+function addressesLookSame(a: UserAddress, b: UserAddress): boolean {
+  const norm = (u: UserAddress) =>
+    [
+      u.firstName,
+      u.lastName,
+      u.addressLine1,
+      u.addressLine2 || '',
+      u.city,
+      u.state,
+      u.postalCode,
+      u.country,
+      u.phone || '',
+    ]
+      .join('|')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+  return norm(a) === norm(b);
+}
+
+function AddressBlock({ address }: { address: UserAddress }) {
+  const line1 = [address.firstName, address.lastName].filter(Boolean).join(' ').trim();
+  const hasBody =
+    address.addressLine1 ||
+    address.city ||
+    address.state ||
+    address.postalCode ||
+    address.country;
+
+  if (!line1 && !hasBody) {
+    return <Text style={styles.bodyMuted}>—</Text>;
+  }
+
+  return (
+    <View>
+      {line1 ? <Text style={styles.body}>{line1}</Text> : null}
+      {address.addressLine1 ? <Text style={styles.body}>{address.addressLine1}</Text> : null}
+      {address.addressLine2 ? <Text style={styles.body}>{address.addressLine2}</Text> : null}
+      {(address.city || address.state || address.postalCode) && (
+        <Text style={styles.body}>
+          {[address.city, address.state, address.postalCode].filter(Boolean).join(', ')}
+        </Text>
+      )}
+      {address.country ? <Text style={styles.body}>{address.country}</Text> : null}
+      {address.phone ? <Text style={[styles.body, styles.bodyStrong]}>{address.phone}</Text> : null}
+    </View>
+  );
+}
+
+function ItemReceiptRow({ item, t }: { item: OrderItem; t: (k: string, o?: object) => string }) {
+  const title = item.product?.name || item.productId;
+  const variant =
+    item.color && item.size
+      ? `${item.color.name} · ${item.size.name}`
+      : item.color
+        ? item.color.name
+        : item.size
+          ? item.size.name
+          : null;
+  const sku =
+    item.product?.name && item.productId !== item.product?.name ? String(item.productId) : null;
+  const metaExtra = [sku, variant].filter(Boolean).join(' · ');
+  const lineTotal = item.price * item.quantity;
+  const qtyPrice = t('orderDetails.lineQtyPrice', {
+    qty: item.quantity,
+    price: formatGhanaCedis(item.price),
+  });
+
+  return (
+    <View style={styles.itemRow}>
+      <View style={styles.itemRowLeft}>
+        <Text style={styles.itemName} numberOfLines={3}>
+          {title}
+        </Text>
+        <Text style={styles.itemSub} numberOfLines={2}>
+          {qtyPrice}
+          {metaExtra ? ` · ${metaExtra}` : ''}
+        </Text>
+      </View>
+      <Text style={styles.itemAmount}>{formatGhanaCedis(lineTotal)}</Text>
+    </View>
+  );
+}
 
 export const OrderDetailsScreen: React.FC = () => {
   const navigation = useNavigation();
   const route = useRoute();
-  const { orderId, orderNumber } = (route.params as any) || {};
-  const resolvedOrderId = orderId || orderNumber || '';
-  
-  const { data: order, loading, error } = useOrder(resolvedOrderId);
+  const { t } = useTranslation();
+  const { orderId, orderNumber } = (route.params as { orderId?: string; orderNumber?: string }) || {};
+  const resolvedOrderId = String(orderId || orderNumber || '').trim();
 
-  const formatDate = (dateString: string) => {
-    if (!dateString) return '';
-    try {
-      const date = new Date(dateString);
-      return date.toLocaleDateString('en-US', { 
-        year: 'numeric', 
-        month: 'long', 
-        day: 'numeric' 
-      });
-    } catch {
-      return dateString;
-    }
-  };
+  const { data: order, loading, error, refreshing, refetch } = useOrder(resolvedOrderId);
 
-  const formatCurrency = (amount: number) => {
-    return `GH₵${amount.toFixed(2)}`;
-  };
+  const statusKey = (order?.status || 'pending') as OrderStatus;
+  const statusLabel = t(`orderDetails.status.${statusKey}`, {
+    defaultValue: t('orderDetails.status.pending'),
+  });
+  const accent = useMemo(() => statusAccent(statusKey), [statusKey]);
+
+  const showBilling = useMemo(() => {
+    if (!order?.shippingAddress || !order?.billingAddress) return false;
+    return !addressesLookSame(order.shippingAddress, order.billingAddress);
+  }, [order]);
+
+  const copyTracking = useCallback(
+    async (value: string) => {
+      try {
+        await Clipboard.setStringAsync(value);
+        Alert.alert(t('orderDetails.copied'));
+      } catch {
+        Alert.alert(t('orderDetails.errorTitle'), t('orderDetails.errorHint'));
+      }
+    },
+    [t]
+  );
 
   const renderHeader = () => (
-    <View style={styles.header}>
-      <TouchableOpacity 
-        style={styles.backButton}
-        onPress={() => (navigation as any).goBack()}
+    <View style={styles.topBar}>
+      <TouchableOpacity
+        style={styles.backHit}
+        onPress={() => (navigation as { goBack: () => void }).goBack()}
+        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
       >
-        <Ionicons name="arrow-back" size={24} color={Colors.BLACK} />
+        <Ionicons name="chevron-back" size={26} color={Colors.BLACK} />
       </TouchableOpacity>
-      <Text style={styles.headerTitle}>Order Details</Text>
-      <View style={styles.placeholder} />
     </View>
   );
 
-  const renderOrderItem = (item: OrderItem, index: number) => (
-    <View key={index} style={styles.orderItemRow}>
-      <View style={styles.tableCellItem}>
-        <Text style={styles.itemCode}>{item.productId}</Text>
-        {item.product?.name && (
-          <Text style={styles.itemName}>{item.product.name}</Text>
-        )}
-        {item.color && item.size && (
-          <Text style={styles.itemVariant}>
-            {item.color.name} / {item.size.name}
-          </Text>
-        )}
-      </View>
-      <View style={styles.tableCell}>
-        <Text style={styles.tableCellText}>{item.quantity}</Text>
-      </View>
-      <View style={styles.tableCell}>
-        <Text style={styles.tableCellText}>{formatCurrency(item.price)}</Text>
-      </View>
-      <View style={styles.tableCell}>
-        <Text style={[styles.tableCellText, styles.amountValue]}>
-          {formatCurrency(item.price * item.quantity)}
-        </Text>
-      </View>
-    </View>
-  );
-
-  if (loading) {
+  const renderItems = () => {
+    const items = order?.items;
+    if (!items?.length) {
+      return (
+        <View style={styles.emptyWrap}>
+          <Text style={styles.bodyMuted}>{t('orderDetails.emptyItems')}</Text>
+        </View>
+      );
+    }
     return (
-      <SafeAreaView style={styles.container}>
+      <View>
+        <Text style={styles.groupHeading}>
+          {t('orderDetails.itemsCount', { count: items.length })}
+        </Text>
+        {items.map((item) => (
+          <ItemReceiptRow key={item.id || `${item.productId}-${item.quantity}`} item={item} t={t} />
+        ))}
+      </View>
+    );
+  };
+
+  if (!resolvedOrderId) {
+    return (
+      <SafeAreaView style={styles.screen} edges={['top']}>
         {renderHeader()}
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.ROYAL_BLUE} />
-          <Text style={styles.loadingText}>Loading order...</Text>
+        <View style={styles.centerBlock}>
+          <Text style={styles.centerTitle}>{t('orderDetails.errorTitle')}</Text>
+          <Text style={styles.centerSub}>{t('orderDetails.errorHint')}</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (loading && !order) {
+    return (
+      <SafeAreaView style={styles.screen} edges={['top']}>
+        {renderHeader()}
+        <View style={styles.centerBlock}>
+          <ActivityIndicator size="large" color={Colors.TEXT_SECONDARY} />
+          <Text style={styles.centerSub}>{t('orderDetails.loading')}</Text>
         </View>
       </SafeAreaView>
     );
@@ -106,406 +220,323 @@ export const OrderDetailsScreen: React.FC = () => {
 
   if (error || !order) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.screen} edges={['top']}>
         {renderHeader()}
-        <View style={styles.errorContainer}>
-          <Ionicons name="alert-circle" size={48} color={Colors.ERROR} />
-          <Text style={styles.errorText}>Error loading order</Text>
-          {error && <Text style={styles.errorSubtext}>{error.message}</Text>}
+        <View style={styles.centerBlock}>
+          <Text style={styles.centerTitle}>{t('orderDetails.errorTitle')}</Text>
+          {error ? <Text style={styles.centerSub}>{error.message}</Text> : null}
+          <TouchableOpacity style={styles.textButton} onPress={() => void refetch()} activeOpacity={0.7}>
+            <Text style={styles.textButtonLabel}>{t('orderDetails.retry')}</Text>
+          </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
   }
 
-  const status = statusConfig[order.status] || statusConfig['pending'];
-
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.screen} edges={['top']}>
       {renderHeader()}
-      <ScrollView 
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollInner}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={() => void refetch()} tintColor={Colors.TEXT_SECONDARY} />
+        }
       >
-        <View style={styles.orderCard}>
-          <View style={styles.orderHeader}>
-            <View>
-              <Text style={styles.orderNumber}>{order.orderNumber}</Text>
-              <Text style={styles.orderDate}>
-                {formatDate(order.createdAt)}
-              </Text>
-            </View>
-            <View style={[styles.statusBadge, { backgroundColor: status.color }]}>
-              <Ionicons name={status.icon as any} size={16} color={Colors.WHITE} />
-              <Text style={styles.statusText}>{status.label}</Text>
-            </View>
+        <View style={styles.sheet}>
+          <Text style={styles.orderId}>{order.orderNumber}</Text>
+          <View style={styles.statusLine}>
+            <View style={[styles.statusDot, { backgroundColor: accent }]} />
+            <Text style={[styles.statusLabel, { color: accent }]}>{statusLabel}</Text>
           </View>
+          <Text style={styles.orderMeta}>
+            {t('orderDetails.orderPlaced')} {formatOrderDate(order.createdAt)}
+          </Text>
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Items</Text>
-            <View style={styles.itemsTable}>
-              <View style={styles.tableHeader}>
-                <Text style={styles.tableHeaderText}>Item</Text>
-                <Text style={styles.tableHeaderText}>Qty</Text>
-                <Text style={styles.tableHeaderText}>Price</Text>
-                <Text style={styles.tableHeaderText}>Total</Text>
-              </View>
-              {order.items && order.items.length > 0 ? (
-                order.items.map((item, index) => renderOrderItem(item, index))
-              ) : (
-                <View style={styles.emptyItems}>
-                  <Text style={styles.emptyItemsText}>No items found</Text>
-                </View>
-              )}
-            </View>
+          <View style={styles.rule} />
+          {renderItems()}
+
+          <View style={styles.rule} />
+
+          <Text style={styles.groupHeading}>{t('orderDetails.summary')}</Text>
+          <View style={styles.kv}>
+            <Text style={styles.kvKey}>{t('orderDetails.subtotal')}</Text>
+            <Text style={styles.kvVal}>{formatGhanaCedis(order.subtotal)}</Text>
           </View>
-
-          <View style={styles.summarySection}>
-            <View style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>Subtotal:</Text>
-              <Text style={styles.summaryValue}>{formatCurrency(order.subtotal)}</Text>
+          {order.tax > 0 ? (
+            <View style={styles.kv}>
+              <Text style={styles.kvKey}>{t('orderDetails.tax')}</Text>
+              <Text style={styles.kvVal}>{formatGhanaCedis(order.tax)}</Text>
             </View>
-            {order.tax > 0 && (
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Tax:</Text>
-                <Text style={styles.summaryValue}>{formatCurrency(order.tax)}</Text>
-              </View>
-            )}
-            {order.shipping > 0 && (
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Shipping:</Text>
-                <Text style={styles.summaryValue}>{formatCurrency(order.shipping)}</Text>
-              </View>
-            )}
-            {order.discount > 0 && (
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Discount:</Text>
-                <Text style={[styles.summaryValue, styles.discountValue]}>
-                  -{formatCurrency(order.discount)}
-                </Text>
-              </View>
-            )}
+          ) : null}
+          {order.shipping > 0 ? (
+            <View style={styles.kv}>
+              <Text style={styles.kvKey}>{t('orderDetails.shipping')}</Text>
+              <Text style={styles.kvVal}>{formatGhanaCedis(order.shipping)}</Text>
+            </View>
+          ) : null}
+          {order.discount > 0 ? (
+            <View style={styles.kv}>
+              <Text style={styles.kvKey}>{t('orderDetails.discount')}</Text>
+              <Text style={[styles.kvVal, styles.kvDiscount]}>-{formatGhanaCedis(order.discount)}</Text>
+            </View>
+          ) : null}
+          <View style={[styles.kv, styles.kvTotal]}>
+            <Text style={styles.totalKey}>{t('orderDetails.total')}</Text>
+            <Text style={styles.totalVal}>{formatGhanaCedis(order.total)}</Text>
           </View>
-
-          <View style={styles.totalSection}>
-            <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Total:</Text>
-              <Text style={styles.totalAmount}>{formatCurrency(order.total)}</Text>
-            </View>
-          </View>
-
-          {order.shippingAddress && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Shipping Address</Text>
-              <View style={styles.addressCard}>
-                <Text style={styles.addressText}>
-                  {order.shippingAddress.firstName} {order.shippingAddress.lastName}
-                </Text>
-                <Text style={styles.addressText}>
-                  {order.shippingAddress.addressLine1}
-                </Text>
-                {order.shippingAddress.addressLine2 && (
-                  <Text style={styles.addressText}>
-                    {order.shippingAddress.addressLine2}
-                  </Text>
-                )}
-                <Text style={styles.addressText}>
-                  {order.shippingAddress.city}, {order.shippingAddress.state} {order.shippingAddress.postalCode}
-                </Text>
-                <Text style={styles.addressText}>
-                  {order.shippingAddress.country}
-                </Text>
-                {order.shippingAddress.phone && (
-                  <Text style={[styles.addressText, styles.addressPhone]}>
-                    {order.shippingAddress.phone}
-                  </Text>
-                )}
-              </View>
-            </View>
-          )}
-
-          {order.trackingNumber && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Tracking</Text>
-              <View style={styles.trackingCard}>
-                <Ionicons name="car-outline" size={20} color={Colors.ELECTRIC_BLUE} />
-                <Text style={styles.trackingNumber}>{order.trackingNumber}</Text>
-              </View>
-            </View>
-          )}
-
-          {order.estimatedDelivery && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Estimated Delivery</Text>
-              <Text style={styles.deliveryDate}>
-                {formatDate(order.estimatedDelivery)}
-              </Text>
-            </View>
-          )}
         </View>
+
+        <View style={styles.below}>
+          <Text style={styles.sectionCaption}>{t('orderDetails.payment')}</Text>
+          <Text style={styles.bodyMuted}>{t('orderDetails.paymentCard')}</Text>
+
+          {order.shippingAddress ? (
+            <>
+              <Text style={[styles.sectionCaption, styles.sectionSpacer]}>{t('orderDetails.shippingAddress')}</Text>
+              <AddressBlock address={order.shippingAddress} />
+            </>
+          ) : null}
+
+          {showBilling && order.billingAddress ? (
+            <>
+              <Text style={[styles.sectionCaption, styles.sectionSpacer]}>{t('orderDetails.billingAddress')}</Text>
+              <AddressBlock address={order.billingAddress} />
+            </>
+          ) : null}
+
+          {order.trackingNumber ? (
+            <>
+              <Text style={[styles.sectionCaption, styles.sectionSpacer]}>{t('orderDetails.tracking')}</Text>
+              <Text style={styles.trackingMono} selectable>
+                {order.trackingNumber}
+              </Text>
+              <TouchableOpacity onPress={() => void copyTracking(order.trackingNumber!)} style={styles.linkRow}>
+                <Text style={styles.linkText}>{t('orderDetails.copyTracking')}</Text>
+              </TouchableOpacity>
+            </>
+          ) : null}
+
+          {order.estimatedDelivery ? (
+            <>
+              <Text style={[styles.sectionCaption, styles.sectionSpacer]}>{t('orderDetails.estimatedDelivery')}</Text>
+              <Text style={styles.body}>{formatOrderDate(order.estimatedDelivery)}</Text>
+            </>
+          ) : null}
+        </View>
+
+        <View style={{ height: Spacing.XXL }} />
       </ScrollView>
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
+  screen: {
     flex: 1,
-    backgroundColor: Colors.BACKGROUND,
+    backgroundColor: Colors.LIGHT_GRAY,
   },
-  header: {
+  topBar: {
+    paddingHorizontal: Spacing.SM,
+    paddingVertical: Spacing.SM,
+    backgroundColor: Colors.LIGHT_GRAY,
+  },
+  backHit: {
+    alignSelf: 'flex-start',
+    paddingVertical: 4,
+    paddingRight: 12,
+  },
+  scroll: {
+    flex: 1,
+  },
+  scrollInner: {
+    paddingHorizontal: Spacing.MD,
+    paddingBottom: Spacing.XL,
+  },
+  sheet: {
+    backgroundColor: Colors.WHITE,
+    borderRadius: 14,
+    padding: Spacing.LG,
+  },
+  orderId: {
+    fontSize: 22,
+    fontWeight: '600',
+    color: Colors.BLACK,
+    letterSpacing: -0.4,
+  },
+  statusLine: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.BORDER,
+    gap: 8,
+    marginTop: 10,
   },
-  backButton: {
-    padding: 4,
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: Colors.BLACK,
+  statusLabel: {
+    fontSize: 15,
+    fontWeight: '600',
   },
-  placeholder: {
-    width: 32,
+  orderMeta: {
+    marginTop: 6,
+    fontSize: 14,
+    color: Colors.TEXT_SECONDARY,
   },
-  scrollView: {
-    flex: 1,
+  rule: {
+    height: hairline,
+    backgroundColor: Colors.MEDIUM_GRAY,
+    marginVertical: Spacing.MD,
+    opacity: 0.6,
   },
-  scrollContent: {
-    padding: 12,
+  groupHeading: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.TEXT_SECONDARY,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: Spacing.SM,
   },
-  orderCard: {
-    backgroundColor: Colors.WHITE,
-    borderRadius: 12,
-    padding: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  orderHeader: {
+  itemRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.BORDER,
+    paddingVertical: Spacing.SM,
+    gap: Spacing.MD,
   },
-  orderNumber: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: Colors.BLACK,
-    marginBottom: 4,
-  },
-  orderDate: {
-    fontSize: 14,
-    color: Colors.TEXT_SECONDARY,
-  },
-  statusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    gap: 6,
-  },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.WHITE,
-  },
-  section: {
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: Colors.BLACK,
-    marginBottom: 12,
-  },
-  itemsTable: {
-    borderWidth: 1,
-    borderColor: Colors.BORDER,
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  tableHeader: {
-    flexDirection: 'row',
-    backgroundColor: Colors.LIGHT_GRAY,
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.BORDER,
-  },
-  tableHeaderText: {
+  itemRowLeft: {
     flex: 1,
-    fontSize: 11,
-    fontWeight: '600',
-    color: Colors.BLACK,
-    textTransform: 'uppercase',
-    textAlign: 'center',
-  },
-  orderItemRow: {
-    flexDirection: 'row',
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.BORDER,
-    alignItems: 'center',
-  },
-  tableCellItem: {
-    flex: 1,
-    paddingRight: 8,
-  },
-  tableCell: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tableCellText: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: Colors.BLACK,
-    textAlign: 'center',
-  },
-  itemCode: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: Colors.BLACK,
-    marginBottom: 2,
+    minWidth: 0,
   },
   itemName: {
-    fontSize: 11,
-    color: Colors.TEXT_SECONDARY,
-    marginBottom: 2,
-  },
-  itemVariant: {
-    fontSize: 10,
-    color: Colors.TEXT_SECONDARY,
-    fontStyle: 'italic',
-  },
-  amountValue: {
-    fontWeight: 'bold',
-    color: Colors.ROYAL_BLUE,
-  },
-  emptyItems: {
-    padding: 24,
-    alignItems: 'center',
-  },
-  emptyItemsText: {
-    fontSize: 14,
-    color: Colors.TEXT_SECONDARY,
-  },
-  summarySection: {
-    paddingTop: 12,
-    paddingBottom: 12,
-    borderTopWidth: 1,
-    borderTopColor: Colors.BORDER,
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  summaryLabel: {
-    fontSize: 13,
-    color: Colors.TEXT_SECONDARY,
-  },
-  summaryValue: {
-    fontSize: 13,
+    fontSize: 16,
     fontWeight: '500',
     color: Colors.BLACK,
+    lineHeight: 22,
   },
-  discountValue: {
-    color: Colors.SUCCESS,
+  itemSub: {
+    marginTop: 4,
+    fontSize: 13,
+    color: Colors.TEXT_SECONDARY,
+    lineHeight: 18,
   },
-  totalSection: {
-    paddingTop: 12,
-    borderTopWidth: 2,
-    borderTopColor: Colors.BORDER,
-  },
-  totalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  totalLabel: {
+  itemAmount: {
     fontSize: 16,
     fontWeight: '600',
     color: Colors.BLACK,
+    fontVariant: ['tabular-nums'],
   },
-  totalAmount: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: Colors.ROYAL_BLUE,
+  emptyWrap: {
+    paddingVertical: Spacing.MD,
   },
-  addressCard: {
-    backgroundColor: Colors.LIGHT_GRAY,
-    padding: 12,
-    borderRadius: 8,
-  },
-  addressText: {
-    fontSize: 13,
-    color: Colors.BLACK,
-    marginBottom: 3,
-  },
-  addressPhone: {
-    marginTop: 8,
-    fontWeight: '500',
-  },
-  trackingCard: {
+  kv: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: Colors.LIGHT_GRAY,
-    padding: 12,
-    borderRadius: 8,
-    gap: 10,
+    paddingVertical: 8,
   },
-  trackingNumber: {
-    fontSize: 14,
+  kvKey: {
+    fontSize: 15,
+    color: Colors.TEXT_SECONDARY,
+  },
+  kvVal: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: Colors.BLACK,
+    fontVariant: ['tabular-nums'],
+  },
+  kvDiscount: {
+    color: '#248A3D',
+  },
+  kvTotal: {
+    marginTop: 4,
+    paddingTop: 12,
+    borderTopWidth: hairline,
+    borderTopColor: Colors.MEDIUM_GRAY,
+  },
+  totalKey: {
+    fontSize: 17,
     fontWeight: '600',
     color: Colors.BLACK,
   },
-  deliveryDate: {
-    fontSize: 14,
+  totalVal: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: Colors.BLACK,
+    fontVariant: ['tabular-nums'],
+  },
+  below: {
+    marginTop: Spacing.LG,
+    paddingHorizontal: 4,
+  },
+  sectionCaption: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.TEXT_SECONDARY,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  sectionSpacer: {
+    marginTop: Spacing.LG,
+  },
+  body: {
+    fontSize: 15,
+    color: Colors.BLACK,
+    lineHeight: 22,
+  },
+  bodyStrong: {
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  bodyMuted: {
+    fontSize: 15,
+    color: Colors.TEXT_SECONDARY,
+    lineHeight: 22,
+  },
+  trackingMono: {
+    marginTop: 6,
+    fontSize: 15,
     fontWeight: '500',
     color: Colors.BLACK,
   },
-  loadingContainer: {
+  linkRow: {
+    marginTop: Spacing.SM,
+    alignSelf: 'flex-start',
+  },
+  linkText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.ELECTRIC_BLUE,
+  },
+  centerBlock: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: Spacing.XL,
   },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: Colors.TEXT_SECONDARY,
-  },
-  errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 32,
-  },
-  errorText: {
-    marginTop: 16,
+  centerTitle: {
     fontSize: 18,
-    fontWeight: 'bold',
+    fontWeight: '600',
     color: Colors.BLACK,
-  },
-  errorSubtext: {
-    marginTop: 8,
-    fontSize: 14,
-    color: Colors.TEXT_SECONDARY,
     textAlign: 'center',
   },
+  centerSub: {
+    marginTop: Spacing.SM,
+    fontSize: 15,
+    color: Colors.TEXT_SECONDARY,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  textButton: {
+    marginTop: Spacing.LG,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+  },
+  textButtonLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: Colors.ELECTRIC_BLUE,
+  },
 });
-
