@@ -6,9 +6,11 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Platform,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { CommonActions, useNavigation } from '@react-navigation/native';
+import { CommonActions, useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { RootStackParamList } from '../types';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { appStorage } from '../services/appStorage';
@@ -17,6 +19,8 @@ import { ensureChineseMachineLocale, applyEnglishLocale } from '../i18n/machineC
 
 export const LanguageSelectScreen: React.FC = () => {
   const navigation = useNavigation();
+  const route = useRoute<RouteProp<RootStackParamList, 'LanguageSelect'>>();
+  const fromSettings = Boolean(route.params?.fromSettings);
   const [busy, setBusy] = useState(false);
   const [busyHint, setBusyHint] = useState<string | null>(null);
 
@@ -29,13 +33,21 @@ export const LanguageSelectScreen: React.FC = () => {
     );
   };
 
+  const afterLanguageChosen = () => {
+    if (fromSettings) {
+      (navigation as { goBack: () => void }).goBack();
+    } else {
+      goOnboarding();
+    }
+  };
+
   const pickEnglish = async () => {
     setBusy(true);
     setBusyHint(null);
     try {
       await appStorage.setItem(STORAGE_APP_LANGUAGE, 'en');
       await applyEnglishLocale();
-      goOnboarding();
+      afterLanguageChosen();
     } finally {
       setBusy(false);
       setBusyHint(null);
@@ -47,8 +59,14 @@ export const LanguageSelectScreen: React.FC = () => {
     setBusyHint('zh');
     try {
       await appStorage.setItem(STORAGE_APP_LANGUAGE, 'zh');
-      await ensureChineseMachineLocale();
-      goOnboarding();
+      const ok = await ensureChineseMachineLocale();
+      if (!ok) {
+        Alert.alert(
+          'Chinese unavailable',
+          'Online translation for Chinese could not be reached. The app will use English. You can add a Google Cloud Translation API key (EXPO_PUBLIC_GOOGLE_TRANSLATE_API_KEY) for offline-free Chinese UI later.'
+        );
+      }
+      afterLanguageChosen();
     } finally {
       setBusy(false);
       setBusyHint(null);
@@ -57,6 +75,16 @@ export const LanguageSelectScreen: React.FC = () => {
 
   return (
     <SafeAreaView style={styles.container}>
+      {fromSettings ? (
+        <TouchableOpacity
+          style={styles.backBar}
+          onPress={() => (navigation as { goBack: () => void }).goBack()}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
+          <Ionicons name="arrow-back" size={24} color={Colors.BLACK} />
+        </TouchableOpacity>
+      ) : null}
       <View style={styles.inner}>
         <Text style={styles.title}>Choose your language</Text>
         <Text style={styles.subtitle}>
@@ -105,6 +133,11 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.BACKGROUND,
+  },
+  backBar: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    alignSelf: 'flex-start',
   },
   inner: {
     flex: 1,

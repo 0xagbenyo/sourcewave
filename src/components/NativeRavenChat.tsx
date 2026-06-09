@@ -7,7 +7,6 @@ import {
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
-  KeyboardAvoidingView,
   Platform,
   Modal,
   Pressable,
@@ -20,12 +19,12 @@ import {
   ScrollView,
   type NativeSyntheticEvent,
   type NativeScrollEvent,
-  StatusBar,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { useOptionalBottomTabBarHeight } from '../hooks/useOptionalBottomTabBarHeight';
+import { useKeyboardInsets } from '../hooks/useKeyboardOpen';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
@@ -123,7 +122,8 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   const { user } = useUserSession();
   const { setActiveChannelId, refreshUnreadCounts } = useRavenUnread();
   const insets = useSafeAreaInsets();
-  const tabBarHeight = useBottomTabBarHeight();
+  const tabBarHeight = useOptionalBottomTabBarHeight();
+  const { open: keyboardOpen, height: keyboardHeight } = useKeyboardInsets();
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [channels, setChannels] = useState<RavenChannelRow[]>([]);
   const [channel, setChannel] = useState<RavenChannelRow | null>(null);
@@ -615,7 +615,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       const showPlainTextBubble = !!item.text?.trim() && !qDraft && !sqLink && !genericDocLink;
       /**
        * Frappe User for SI **customer** resolution (Raven User.custom_customer, portal, etc.).
-       * Use signed-in user for **both** buyer chat and supplier Pay — supplier Pay used to pass `null`, which
+       * Use signed-in user for **both** buyer chat and supplier approve-payment — supplier flow used to pass `null`, which
        * skipped all bill-to resolution and always failed when SQ had no `customer` / `custom_bill_to_customer`.
        */
       const customerPartyFrappeUserForSq = String(user?.user || user?.email || '').trim() || null;
@@ -729,13 +729,16 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
     );
   }
 
+  const composerBottomPad = keyboardOpen
+    ? 0
+    : Spacing.SM + Math.max(insets.bottom, 6) + tabBarHeight;
+
   return (
-    <KeyboardAvoidingView
-      style={styles.root}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={
-        Platform.OS === 'ios' ? insets.top + 4 : (StatusBar.currentHeight ?? 0)
-      }
+    <View
+      style={[
+        styles.root,
+        keyboardHeight > 0 ? { paddingBottom: keyboardHeight } : null,
+      ]}
     >
       <View style={styles.topBar}>
         <View style={styles.topBarLeft}>
@@ -807,7 +810,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
         </View>
       )}
 
-      <View style={[styles.composerWrap, { paddingBottom: Spacing.SM + Math.max(insets.bottom, 6) + tabBarHeight }]}>
+      <View style={[styles.composerWrap, { paddingBottom: composerBottomPad }]}>
         {replyTo ? (
           <View style={styles.replyStrip}>
             <Pressable
@@ -949,7 +952,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
           </Pressable>
         </Pressable>
       </Modal>
-    </KeyboardAvoidingView>
+    </View>
   );
 };
 

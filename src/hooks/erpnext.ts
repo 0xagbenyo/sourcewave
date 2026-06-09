@@ -413,10 +413,13 @@ export const useCategories = () => {
           });
         });
         
-        // Filter out "All Items Group"
-        const filteredGroups = erpGroups.filter((group: any) => 
-          group.name !== 'All Items Group' && group.item_group_name !== 'All Items Group'
-        );
+        // Filter out ERPNext root / pseudo item groups (never show as browse categories)
+        const filteredGroups = erpGroups.filter((group: any) => {
+          const n = String(group?.name ?? '').trim().toLowerCase();
+          const lab = String(group?.item_group_name ?? '').trim().toLowerCase();
+          const reserved = new Set(['all item groups', 'all items group', 'all item group']);
+          return !reserved.has(n) && !reserved.has(lab);
+        });
         
         const categories = filteredGroups.map((group) =>
           mapERPItemGroupToCategory(group)
@@ -524,6 +527,7 @@ export const useOrders = (customerId: string, company?: string, pageSize: number
   const [hasMore, setHasMore] = useState(true);
   const [offset, setOffset] = useState(0);
   const [initialLoad, setInitialLoad] = useState(true);
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   useEffect(() => {
     const fetchInitialOrders = async () => {
@@ -555,7 +559,7 @@ export const useOrders = (customerId: string, company?: string, pageSize: number
     };
 
     fetchInitialOrders();
-  }, [customerId, company, pageSize]);
+  }, [customerId, company, pageSize, refreshNonce]);
 
   const loadMore = useCallback(async () => {
     if (loadingMore || !hasMore || initialLoad || !customerId || customerId.trim() === '') {
@@ -586,6 +590,7 @@ export const useOrders = (customerId: string, company?: string, pageSize: number
     setHasMore(true);
     setInitialLoad(true);
     setError(null);
+    setRefreshNonce((n) => n + 1);
   }, []);
 
   return {
@@ -1647,26 +1652,26 @@ export const useFlyers = () => {
     error: null,
   });
 
-  useEffect(() => {
-    const fetchFlyers = async () => {
-      try {
-        setState((prev) => ({ ...prev, loading: true, error: null }));
-        const client = getERPNextClient();
-        const flyers = await client.getFlyers();
-        setState({ data: flyers, loading: false, error: null });
-      } catch (error) {
-        setState({
-          data: null,
-          loading: false,
-          error: error instanceof Error ? error : new Error('Failed to fetch flyers'),
-        });
-      }
-    };
-
-    fetchFlyers();
+  const refetch = useCallback(async () => {
+    try {
+      setState((prev) => ({ ...prev, loading: true, error: null }));
+      const client = getERPNextClient();
+      const flyers = await client.getFlyers();
+      setState({ data: flyers, loading: false, error: null });
+    } catch (error) {
+      setState({
+        data: null,
+        loading: false,
+        error: error instanceof Error ? error : new Error('Failed to fetch flyers'),
+      });
+    }
   }, []);
 
-  return state;
+  useEffect(() => {
+    void refetch();
+  }, [refetch]);
+
+  return { ...state, refetch };
 };
 
 /**

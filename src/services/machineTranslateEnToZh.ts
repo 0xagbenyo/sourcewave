@@ -65,7 +65,7 @@ async function lingvaTranslateBatch(texts: string[]): Promise<string[]> {
       }
     }
     if (lastErr) {
-      console.warn('[machineTranslate] Lingva failed for segment, using English:', lastErr);
+      // Keep original English for this key; avoid logging once per string (can be hundreds).
       results.push(texts[i]);
     }
     if (i < texts.length - 1) {
@@ -75,10 +75,31 @@ async function lingvaTranslateBatch(texts: string[]): Promise<string[]> {
   return results;
 }
 
+/**
+ * Public Lingva instances often return 403 from mobile apps. Fail fast so we do not
+ * hammer them once per UI string.
+ */
+async function assertLingvaReachable(): Promise<void> {
+  let lastErr: unknown;
+  for (const host of LINGVA_HOSTS) {
+    try {
+      await lingvaTranslateOne('Hi', host);
+      return;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw new Error(
+    `Lingva machine translation is not available (${String(lastErr)}). ` +
+      'Add EXPO_PUBLIC_GOOGLE_TRANSLATE_API_KEY for Chinese UI, or use English in language settings.'
+  );
+}
+
 export async function translateEnglishStringsToZhCN(texts: string[]): Promise<string[]> {
   const key = process.env.EXPO_PUBLIC_GOOGLE_TRANSLATE_API_KEY?.trim();
   if (key) {
     return googleTranslateBatch(texts, key);
   }
+  await assertLingvaReachable();
   return lingvaTranslateBatch(texts);
 }

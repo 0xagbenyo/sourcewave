@@ -7,16 +7,21 @@ import { RavenUIMessagesScreen } from '../screens/RavenUIMessagesScreen';
 import { SupplierProfileScreen } from '../screens/supplier/SupplierProfileScreen';
 import { Colors } from '../constants/colors';
 import { getMainTabBarStyle } from './mainTabBarStyle';
+import { useRavenUnread } from '../context/RavenUnreadContext';
 import type { SupplierTabParamList } from '../types';
 
 const Tab = createBottomTabNavigator<SupplierTabParamList>();
 
 export const SupplierTabNavigator: React.FC = () => {
   const insets = useSafeAreaInsets();
+  const { unreadTotal } = useRavenUnread();
+  const chatBadge =
+    unreadTotal > 0 ? (unreadTotal > 99 ? '99+' : unreadTotal) : undefined;
 
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
+        tabBarHideOnKeyboard: true,
         tabBarIcon: ({ focused }) => {
           let iconName: keyof typeof Ionicons.glyphMap = 'ellipse-outline';
           if (route.name === 'SupplierHome') {
@@ -37,7 +42,15 @@ export const SupplierTabNavigator: React.FC = () => {
       })}
     >
       <Tab.Screen name="SupplierHome" component={SupplierHomeScreen} options={{ tabBarLabel: 'Home' }} />
-      <Tab.Screen name="SupplierMessages" component={RavenUIMessagesScreen} options={{ tabBarLabel: 'Chat' }} />
+      <Tab.Screen
+        name="SupplierMessages"
+        component={RavenUIMessagesScreen}
+        options={{
+          tabBarLabel: 'Chat',
+          tabBarBadge: chatBadge,
+          tabBarBadgeStyle: { backgroundColor: Colors.WINE, color: '#fff', fontSize: 10 },
+        }}
+      />
       <Tab.Screen name="SupplierProfile" component={SupplierProfileScreen} options={{ tabBarLabel: 'Profile' }} />
     </Tab.Navigator>
   );

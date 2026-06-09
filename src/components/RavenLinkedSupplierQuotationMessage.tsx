@@ -29,7 +29,7 @@ type Props = {
    */
   billToFrappeUserId?: string | null;
   /**
-   * Supplier-only: payment row + long-press Reply/Pay when the linked quotation belongs to the signed-in supplier.
+   * Supplier-only: payment row + long-press Reply / Approve payment when the linked quotation belongs to the signed-in supplier.
    */
   supplierSelfServeUx?: boolean;
   showBuyerActions: boolean;
@@ -64,7 +64,7 @@ function formatSalesInvoiceStatusLabel(full: Record<string, unknown>): string {
 /**
  * Raven “Share to channel” uses `link_doctype` / `link_document` on the message (native ERPNext card in Raven web).
  * This row loads the Supplier Quotation for totals and reuses {@link RavenQuotationDraftCard} for in-chat accept/reject.
- * Sales Invoices are linked with **`custom_quotation`** → Supplier Quotation. When the supplier starts **Pay**, we
+ * Sales Invoices are linked with **`custom_quotation`** → Supplier Quotation. When the supplier starts **Approve payment**, we
  * ensure an invoice exists (create + submit if missing), then show a compact strip with invoice name + status.
  */
 export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
@@ -335,7 +335,7 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
 
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
-        { options: ['Cancel', 'Reply', 'Pay'], cancelButtonIndex: 0 },
+        { options: ['Cancel', 'Reply', 'Confirm payment'], cancelButtonIndex: 0 },
         (idx) => {
           if (idx === 1) reply();
           if (idx === 2) pay();
@@ -345,7 +345,7 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
       Alert.alert('Quotation', 'What would you like to do?', [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Reply', onPress: reply },
-        { text: 'Pay', onPress: pay },
+        { text: 'Confirm payment', onPress: pay },
       ]);
     }
   };
@@ -412,7 +412,7 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
         ))}
       {showSupplierLongPressMenu ? (
         <Pressable onLongPress={openSupplierActionsMenu} delayLongPress={380}>
-          <Text style={styles.longPressHint}>Long press quotation to reply or pay</Text>
+          <Text style={styles.longPressHint}>Long press quotation to reply or Confirm payment</Text>
         </Pressable>
       ) : null}
     </>

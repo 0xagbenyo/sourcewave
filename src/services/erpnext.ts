@@ -8,18 +8,35 @@
  * Use getWebsiteItemAllFields() to fetch all fields from a Website Item for reference.
  */
 
-import axios, { AxiosInstance, AxiosError, AxiosResponse } from 'axios';
+import axios, { AxiosHeaders, AxiosInstance, AxiosError, AxiosResponse } from 'axios';
+import { Platform } from 'react-native';
 
 // Configuration
 const ERPNEXT_BASE_URL = process.env.EXPO_PUBLIC_ERPNEXT_URL || 'http://localhost:8000';
 const API_VERSION = '/api/resource';
 
-// Fixed timeout for all API calls
-// Recommended: 15000ms (15s) for cloud/remote ERPNext
-// Override via EXPO_PUBLIC_ERPNEXT_TIMEOUT environment variable if needed
-const FIXED_TIMEOUT = process.env.EXPO_PUBLIC_ERPNEXT_TIMEOUT 
-  ? parseInt(process.env.EXPO_PUBLIC_ERPNEXT_TIMEOUT, 10) 
-  : 15000; // 15 seconds - same for all API calls
+// Default API timeout (JSON / resource calls). Override via EXPO_PUBLIC_ERPNEXT_TIMEOUT.
+const FIXED_TIMEOUT = process.env.EXPO_PUBLIC_ERPNEXT_TIMEOUT
+  ? parseInt(process.env.EXPO_PUBLIC_ERPNEXT_TIMEOUT, 10)
+  : 45000;
+
+/** Fallback ceiling when sliding idle upload is unavailable (no AbortController). */
+const MULTIPART_UPLOAD_TIMEOUT = process.env.EXPO_PUBLIC_ERPNEXT_UPLOAD_TIMEOUT
+  ? parseInt(process.env.EXPO_PUBLIC_ERPNEXT_UPLOAD_TIMEOUT, 10)
+  : 600000;
+
+/** No upload progress for this long → abort (bytes reset this clock). Polled every ~4s. */
+const MULTIPART_STALL_MS = process.env.EXPO_PUBLIC_ERPNEXT_UPLOAD_STALL_MS
+  ? parseInt(process.env.EXPO_PUBLIC_ERPNEXT_UPLOAD_STALL_MS, 10)
+  : 180000;
+
+/** Hard cap from request start (even if upload keeps trickling). */
+const MULTIPART_MAX_MS = process.env.EXPO_PUBLIC_ERPNEXT_UPLOAD_MAX_MS
+  ? parseInt(process.env.EXPO_PUBLIC_ERPNEXT_UPLOAD_MAX_MS, 10)
+  : 1200000;
+
+/** How often to re-fetch NetInfo so retry logic sees fresh connectivity. */
+const NETINFO_REFRESH_MS = 5000;
 
 // Network state management for retry logic
 let networkState: {
@@ -31,6 +48,7 @@ let networkState: {
 };
 
 let networkListener: (() => void) | null = null;
+let netInfoPollTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
  * Check if network is stable (connected and not slow)
@@ -47,9 +65,9 @@ const isNetworkStable = (): boolean => {
 };
 
 /**
- * Initialize network monitoring for retry logic
- * This monitors network state to determine if retries should be attempted
- * 
+ * Initialize network monitoring for retry logic: live listener plus a periodic NetInfo fetch
+ * every few seconds so `networkState` stays fresh on devices where events are sparse.
+ *
  * Note: Requires @react-native-community/netinfo package
  * Install with: npm install @react-native-community/netinfo
  * If not installed, will assume network is always stable for retries
@@ -98,6 +116,20 @@ export const initializeNetworkAwareTimeout = async () => {
         console.log(`Network changed: ${networkType}, Connected: ${isConnected}`);
       }
     });
+
+    // Periodically refresh reachability (listener alone can miss transient drops on some devices).
+    if (netInfoPollTimer) clearInterval(netInfoPollTimer);
+    netInfoPollTimer = setInterval(async () => {
+      try {
+        const s = await NetInfo.default.fetch();
+        networkState = {
+          networkType: s?.type || null,
+          isConnected: s?.isConnected ?? null,
+        };
+      } catch {
+        /* ignore */
+      }
+    }, NETINFO_REFRESH_MS);
   } catch (error) {
     console.warn('Failed to initialize network monitoring:', error);
     // Assume network is stable for retries
@@ -113,6 +145,10 @@ export const cleanupNetworkAwareTimeout = () => {
     networkListener();
     networkListener = null;
   }
+  if (netInfoPollTimer) {
+    clearInterval(netInfoPollTimer);
+    netInfoPollTimer = null;
+  }
 };
 
 /**
@@ -121,6 +157,172 @@ export const cleanupNetworkAwareTimeout = () => {
 export const getCurrentTimeout = (): number => {
   return FIXED_TIMEOUT;
 };
+
+export const getMultipartUploadTimeout = (): number => {
+  return MULTIPART_UPLOAD_TIMEOUT;
+};
+
+const LOG_MULTIPART = '[ERPNextMultipart]';
+
+function logMultipartFailure(
+  phase: string,
+  error: unknown,
+  extra?: Record<string, unknown>
+): void {
+  const e = error as AxiosError & { cause?: unknown };
+  let responsePreview: string | undefined;
+  try {
+    const d = e?.response?.data as unknown;
+    if (typeof d === 'string') responsePreview = d.slice(0, 600);
+    else if (d != null && typeof d === 'object') responsePreview = JSON.stringify(d).slice(0, 800);
+  } catch {
+    responsePreview = '[unserializable]';
+  }
+  const h = e?.config?.headers;
+  let ctSent: unknown;
+  if (h && typeof (h as any).get === 'function') {
+    ctSent = (h as AxiosHeaders).get('Content-Type');
+  } else if (h && typeof h === 'object') {
+    ctSent = (h as Record<string, unknown>)['Content-Type'] ?? (h as Record<string, unknown>)['content-type'];
+  }
+  const payload = {
+    phase,
+    platform: Platform.OS,
+    message: e?.message,
+    code: e?.code,
+    name: (e as { name?: string })?.name,
+    status: e?.response?.status,
+    statusText: e?.response?.statusText,
+    responsePreview,
+    requestUrl: e?.config?.url,
+    requestBaseURL: e?.config?.baseURL,
+    requestMethod: e?.config?.method,
+    requestTimeout: e?.config?.timeout,
+    contentTypeHeader: ctSent,
+    cause: e?.cause != null ? String(e.cause) : undefined,
+    stack: typeof e?.stack === 'string' ? e.stack.slice(0, 1200) : undefined,
+    ...extra,
+  };
+  try {
+    console.warn(`${LOG_MULTIPART} FAIL`, JSON.stringify(payload));
+  } catch {
+    console.warn(LOG_MULTIPART, 'FAIL', payload);
+  }
+}
+
+/**
+ * Hermes / RN FormData often does not pass axios's strict `utils.isFormData` (instanceof),
+ * so the default transformRequest treats it as a plain object → wrong Content-Type
+ * (`application/x-www-form-urlencoded`) and immediate ERR_NETWORK on Android.
+ */
+function isLikelyNativeFormData(data: unknown): boolean {
+  if (data == null || typeof data !== 'object') return false;
+  if (typeof FormData !== 'undefined' && data instanceof FormData) return true;
+  const d = data as { append?: unknown };
+  return typeof d.append === 'function';
+}
+
+/**
+ * Multipart POST with a sliding idle deadline on iOS (and other platforms with reliable AbortController).
+ * Android: axios + XMLHttpRequest + `signal` often fails immediately with "Network Error"; use a plain
+ * long timeout only (see postFormDataMultipartWithSlidingIdle).
+ */
+export async function postFormDataMultipartWithSlidingIdle(
+  client: AxiosInstance,
+  url: string,
+  formData: FormData
+): Promise<AxiosResponse> {
+  const fullUrl = `${(client.defaults.baseURL || '').replace(/\/+$/, '')}${url}`;
+  const useSlidingAbort =
+    typeof AbortController !== 'undefined' && Platform.OS !== 'android';
+  const controller = useSlidingAbort ? new AbortController() : null;
+  let lastActivity = Date.now();
+  const startedAt = Date.now();
+  let watchdog: ReturnType<typeof setInterval> | null = null;
+  let lastProgressLog = 0;
+  let maxLoaded = 0;
+
+  console.log(LOG_MULTIPART, 'START', {
+    platform: Platform.OS,
+    url,
+    fullUrl,
+    slidingIdle: !!controller,
+    axiosTimeout: controller ? 0 : MULTIPART_UPLOAD_TIMEOUT,
+    stallMs: MULTIPART_STALL_MS,
+    maxMs: MULTIPART_MAX_MS,
+  });
+
+  if (controller) {
+    watchdog = setInterval(() => {
+      const now = Date.now();
+      if (now - startedAt > MULTIPART_MAX_MS) {
+        try {
+          controller.abort();
+        } catch {
+          /* noop */
+        }
+        return;
+      }
+      // Allow time for TLS / first byte before stall-only abort (some RN stacks delay progress events).
+      const connectGraceMs = 60000;
+      if (now - startedAt < connectGraceMs) return;
+      if (now - lastActivity > MULTIPART_STALL_MS) {
+        try {
+          controller.abort();
+        } catch {
+          /* noop */
+        }
+      }
+    }, 4000);
+  }
+
+  try {
+    const response = await client.post(url, formData, {
+      ...(controller ? { signal: controller.signal as any } : {}),
+      timeout: controller ? (0 as any) : MULTIPART_UPLOAD_TIMEOUT,
+      /** `false` = omit header; also blocks axios post-transform urlencoded default (dispatchRequest.js). */
+      headers: new AxiosHeaders({ 'Content-Type': false }),
+      /**
+       * Per-request transform replaces axios defaults. RN/Hermes FormData often fails
+       * `data instanceof FormData`, so the default serializer sets urlencoded and breaks uploads.
+       */
+      transformRequest: [
+        (data, headers) => {
+          if (isLikelyNativeFormData(data) && headers) {
+            const h = headers as AxiosHeaders;
+            // Deleting Content-Type lets axios inject application/x-www-form-urlencoded on POST
+            // after transforms (Android XHR rejects that + FormData). `false` = omit + skip injection.
+            h.setContentType(false);
+            return data;
+          }
+          return data;
+        },
+      ],
+      onUploadProgress: (ev: { loaded?: number; total?: number }) => {
+        lastActivity = Date.now();
+        const loaded = ev?.loaded ?? 0;
+        const total = ev?.total;
+        if (loaded > maxLoaded) maxLoaded = loaded;
+        const now = Date.now();
+        if (now - lastProgressLog > 3000) {
+          lastProgressLog = now;
+          console.log(LOG_MULTIPART, 'progress', { loaded, total, maxLoaded, elapsedMs: now - startedAt });
+        }
+      },
+    });
+    console.log(LOG_MULTIPART, 'OK', {
+      status: response.status,
+      elapsedMs: Date.now() - startedAt,
+      maxLoaded,
+    });
+    return response;
+  } catch (err) {
+    logMultipartFailure('post', err, { fullUrl, maxLoaded, elapsedMs: Date.now() - startedAt });
+    throw err;
+  } finally {
+    if (watchdog) clearInterval(watchdog);
+  }
+}
 
 // Base64 encoding utility for React Native
 // Note: React Native doesn't have btoa by default
@@ -298,10 +500,34 @@ class ERPNextClient {
       withCredentials: false,
     });
 
-    // Set fixed timeout for all requests (same for every API call)
+    // Set default timeout per request (multipart uploads use a longer limit — see below).
+    // React Native has navigator.product === 'ReactNative', so axios does not treat it as a
+    // "standard browser" and never clears Content-Type for FormData (see resolveConfig.js).
+    // The instance default `application/json` plus axios dispatchRequest's POST default of
+    // application/x-www-form-urlencoded when Content-Type is missing breaks RN FormData;
+    // we set Content-Type to `false` (omit + block injection) for native FormData payloads.
     this.client.interceptors.request.use((config) => {
-      // Use fixed timeout - same for all API calls regardless of network
-      config.timeout = getCurrentTimeout();
+      const data = config.data as unknown;
+      if (isLikelyNativeFormData(data)) {
+        const headers = AxiosHeaders.from(config.headers);
+        headers.setContentType(false);
+        if (typeof __DEV__ !== 'undefined' && __DEV__ && Platform.OS === 'android') {
+          console.log(LOG_MULTIPART, 'interceptor', {
+            url: config.url,
+            timeoutWillBe: !(typeof config.timeout === 'number' && config.timeout === 0)
+              ? MULTIPART_UPLOAD_TIMEOUT
+              : 0,
+            contentTypeAfterStrip: headers.get('Content-Type'),
+          });
+        }
+        config.headers = headers;
+        // Allow `timeout: 0` (sliding idle multipart helper); otherwise use long ceiling.
+        if (!(typeof config.timeout === 'number' && config.timeout === 0)) {
+          config.timeout = MULTIPART_UPLOAD_TIMEOUT;
+        }
+      } else {
+        config.timeout = getCurrentTimeout();
+      }
       return config;
     });
 
@@ -635,10 +861,13 @@ class ERPNextClient {
    * Do not set Content-Type manually — axios sets the multipart boundary.
    */
   async callMultipartFrappeMethod(method: string, formData: FormData): Promise<any> {
+    console.log(LOG_MULTIPART, 'callMultipartFrappeMethod (API key client)', { method });
     try {
-      const response = await this.client.post(`/api/method/${method}`, formData, {
-        headers: { 'Content-Type': undefined } as any,
-      });
+      const response = await postFormDataMultipartWithSlidingIdle(
+        this.client,
+        `/api/method/${method}`,
+        formData
+      );
       const h = response.headers;
       const ct = (h['content-type'] || h['Content-Type']) as string | undefined;
       if (responseBodyLooksLikeHtml(response.data, ct)) {
@@ -4208,7 +4437,9 @@ class ERPNextClient {
       return new Error('Network error. Please check your internet connection and try again.');
     }
     if (error.code === 'ERR_CANCELED') {
-      return new Error('Request was cancelled.');
+      return new Error(
+        'Upload stopped: connection may have stalled with no progress for several minutes, or the transfer exceeded the maximum time. Try again on a stable network.'
+      );
     }
     
     // Handle API response errors
@@ -6013,6 +6244,49 @@ class ERPNextClient {
       throw this.handleError(e);
     }
   }
+
+  /**
+   * Create an ERPNext **Issue** (Support module) from the in-app contact form.
+   * Uses `/api/resource/Issue` with the API key client or the logged-in Frappe session when present.
+   */
+  async createSupportIssue(input: {
+    subject: string;
+    message: string;
+    raisedByEmail: string;
+    customer?: string | null;
+  }): Promise<{ name: string }> {
+    const subject = String(input.subject || '').trim();
+    const message = String(input.message || '').trim();
+    const raisedByEmail = String(input.raisedByEmail || '').trim();
+    if (!subject) throw new Error('Subject is required');
+    if (!message) throw new Error('Message is required');
+    if (!raisedByEmail) throw new Error('Email is required');
+
+    const escapeHtml = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const descriptionHtml = `<p>${escapeHtml(message).replace(/\r\n/g, '\n').replace(/\n/g, '<br>')}</p>`;
+
+    const doc: Record<string, unknown> = {
+      naming_series: 'ISS-.YYYY.-',
+      subject,
+      description: descriptionHtml,
+      raised_by: raisedByEmail,
+      via_customer_portal: 1,
+    };
+    const cust = String(input.customer || '').trim();
+    if (cust) doc.customer = cust;
+
+    const { hasFrappeRavenSession, ravenCreateResourceDoc } = await import('./frappeRavenSession');
+    let created: any;
+    if (hasFrappeRavenSession()) {
+      created = await ravenCreateResourceDoc('Issue', doc);
+    } else {
+      created = await this.createResourceDoc('Issue', doc);
+    }
+    const name = created?.name != null ? String(created.name).trim() : '';
+    if (!name) throw new Error('ERPNext did not return an Issue id.');
+    return { name };
+  }
 }
 
 let erpNextClient: ERPNextClient | null = null;
@@ -6036,6 +6310,59 @@ export const getERPNextClient = (): ERPNextClient => {
   }
   return erpNextClient;
 };
+
+/** Site origin used for universal links (no trailing slash). Safe before login. */
+export function getErpNextPublicSiteUrl(): string {
+  const raw = (erpNextBaseUrl || ERPNEXT_BASE_URL || '').trim();
+  if (!raw) return '';
+  return normalizeFrappeApiBaseUrl(raw).replace(/\/+$/, '');
+}
+
+/**
+ * Guest Frappe API: set a new password using the `key` query param from the reset email.
+ * @see https://github.com/frappe/frappe/blob/develop/frappe/core/doctype/user/user.py — `update_password`
+ */
+export async function frappeGuestUpdatePasswordWithKey(input: {
+  key: string;
+  newPassword: string;
+  logoutAllSessions?: number;
+}): Promise<unknown> {
+  const base = getErpNextPublicSiteUrl();
+  if (!base) {
+    throw new Error('ERPNext site URL is not configured (EXPO_PUBLIC_ERPNEXT_URL).');
+  }
+  const key = String(input.key || '').trim();
+  if (!key) {
+    throw new Error('Password reset key is missing.');
+  }
+  const newPassword = String(input.newPassword || '');
+  const client = axios.create({
+    baseURL: base,
+    timeout: FIXED_TIMEOUT,
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    withCredentials: true,
+  });
+  try {
+    const { data } = await client.post('/api/method/frappe.core.doctype.user.user.update_password', {
+      key,
+      new_password: newPassword,
+      logout_all_sessions: input.logoutAllSessions ?? 0,
+    });
+    return data;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const d = error.response?.data as Record<string, unknown> | undefined;
+      const exc = d && typeof d.exception === 'string' ? d.exception : '';
+      const msg = d && typeof d.message === 'string' ? d.message : '';
+      const combined = [msg, exc].filter(Boolean).join(' — ') || error.message;
+      throw new Error(combined || 'Password update failed.');
+    }
+    throw error;
+  }
+}
 
 /** `Authorization` header for Basic auth (private file images, etc.). */
 export function getERPNextAuthorizationHeader(): string | undefined {

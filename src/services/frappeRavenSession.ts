@@ -8,14 +8,14 @@
  * Resource helpers (`ravenCreateResourceDoc`, `ravenGetResourceDoc`, `ravenCallFrappeMethod`)
  * use the same session so Supplier Quotation create/submit/reject (`set_value`) run as the session user when available.
  */
-import axios, { AxiosInstance } from 'axios';
-import { getERPNextClient } from './erpnext';
+import axios, { AxiosHeaders, AxiosInstance } from 'axios';
+import { getERPNextClient, postFormDataMultipartWithSlidingIdle } from './erpnext';
 
 const API_RESOURCE = '/api/resource';
 
 const RAVEN_SESSION_TIMEOUT = process.env.EXPO_PUBLIC_ERPNEXT_TIMEOUT
   ? parseInt(process.env.EXPO_PUBLIC_ERPNEXT_TIMEOUT, 10)
-  : 15000;
+  : 45000;
 
 let sessionAxios: AxiosInstance | null = null;
 
@@ -65,6 +65,17 @@ export function establishFrappeRavenSessionFromLoginResponses(
     baseURL: baseUrl.replace(/\/+$/, ''),
     timeout: RAVEN_SESSION_TIMEOUT,
     headers,
+  });
+  // Same as ERPNextClient: RN is not "standard browser" for axios, so FormData posts keep
+  // default Content-Type: application/json unless we strip it (multipart breaks → Network Error).
+  sessionAxios.interceptors.request.use((config) => {
+    const data = config.data as unknown;
+    if (typeof FormData !== 'undefined' && data instanceof FormData) {
+      const h = AxiosHeaders.from(config.headers);
+      h.delete('Content-Type');
+      config.headers = h;
+    }
+    return config;
   });
 }
 
@@ -164,9 +175,12 @@ export async function ravenGetResourceDoc(doctype: string, name: string): Promis
 
 export async function ravenCallMultipartFrappeMethod(method: string, formData: FormData): Promise<any> {
   if (sessionAxios) {
-    const response = await sessionAxios.post(`/api/method/${method}`, formData, {
-      headers: { 'Content-Type': undefined } as any,
-    });
+    console.log('[RavenSessionMultipart]', 'START', { method, hasSession: true });
+    const response = await postFormDataMultipartWithSlidingIdle(
+      sessionAxios,
+      `/api/method/${method}`,
+      formData
+    );
     const h = response.headers;
     const ct = (h['content-type'] || h['Content-Type']) as string | undefined;
     if (responseBodyLooksLikeHtml(response.data, ct)) {
@@ -174,6 +188,7 @@ export async function ravenCallMultipartFrappeMethod(method: string, formData: F
     }
     return response.data;
   }
+  console.log('[RavenSessionMultipart]', 'START', { method, hasSession: false, fallback: 'API key client' });
   return getERPNextClient().callMultipartFrappeMethod(method, formData);
 }
 

@@ -14,7 +14,7 @@ import {
   useWindowDimensions,
   Platform,
 } from 'react-native';
-import { useRoute, useNavigation, type RouteProp } from '@react-navigation/native';
+import { useRoute, useNavigation, useFocusEffect, type RouteProp } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -28,12 +28,15 @@ import {
   type ErpSupplierFileAttachment,
 } from '../services/ravenNativeApi';
 import { useUserSession } from '../context/UserContext';
+import { useSubscription } from '../context/SubscriptionContext';
 import type { RootStackParamList } from '../types';
 import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 import { ErpAuthenticatedPdfWebView } from '../components/ErpAuthenticatedPdfWebView';
 import { buildAuthenticatedErpImageSource, encodeErpFileUrl } from '../utils/erpImageUrl';
 import { initialsFromUserId } from '../utils/ravenChatUi';
 import { emitRavenOpenChatFromProfile } from '../utils/ravenOpenChatFromProfileBridge';
+import { SuppliersPremiumGateContent } from '../components/SuppliersPremiumGateContent';
+import { useTranslation } from 'react-i18next';
 
 type IoniconsName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -101,9 +104,12 @@ function fileKindLabel(fileName: string): { icon: IoniconsName; color: string } 
  * ERPNext **Supplier** profile: clean catalog layout, photo grid, in-app file preview (WebView + ERP auth).
  */
 export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
+  const { t } = useTranslation();
   const navigation = useNavigation();
   const route = useRoute<RouteProps>();
   const { user } = useUserSession();
+  const { isActive: subscriptionActive, isLoading: subscriptionLoading, refresh: refreshSubscription } =
+    useSubscription();
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   const { supplierDocName, workspaceAdminUser, ravenWorkspaceId } = route.params;
@@ -151,9 +157,28 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
   }, [supplierDocName]);
 
   useEffect(() => {
+    if (!user?.email) {
+      setLoading(false);
+      setProfile(null);
+      return;
+    }
+    if (subscriptionLoading) {
+      return;
+    }
+    if (!subscriptionActive) {
+      setLoading(false);
+      setProfile(null);
+      return;
+    }
     setLoading(true);
     void load();
-  }, [load]);
+  }, [load, user?.email, subscriptionLoading, subscriptionActive]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshSubscription();
+    }, [refreshSubscription])
+  );
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -253,6 +278,83 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
     if (!profile) return '';
     return initialsFromUserId(profile.supplier_name || profile.name);
   }, [profile]);
+
+  const gateHeader = (
+    <>
+      <StatusBar style="dark" backgroundColor={RavenLight.panel} translucent />
+      <View style={[styles.statusBarFill, { height: insets.top }]} />
+      <View style={styles.safeTop}>
+        <View style={styles.navRow}>
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            style={styles.navBack}
+            hitSlop={14}
+            accessibilityLabel="Go back"
+          >
+            <Ionicons name="chevron-back" size={24} color={RavenLight.text} />
+          </TouchableOpacity>
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', minWidth: 0, paddingHorizontal: 8 }}>
+            <Text style={styles.navKicker}>Supplier</Text>
+            <Text style={styles.navTitle} numberOfLines={1}>
+              Profile
+            </Text>
+          </View>
+          <View style={styles.navSpacer} />
+        </View>
+      </View>
+    </>
+  );
+
+  if (!user?.email) {
+    return (
+      <View style={styles.root}>
+        {gateHeader}
+        <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: Spacing.LG }}>
+          <Text style={styles.navTitle}>{t('suppliersPremium.signInTitle')}</Text>
+          <Text style={[styles.loadingText, { marginTop: 10, textAlign: 'center' }]}>
+            {t('suppliersPremium.signInBody')}
+          </Text>
+          <TouchableOpacity
+            style={{
+              marginTop: Spacing.LG,
+              backgroundColor: RavenLight.accent,
+              paddingVertical: 14,
+              borderRadius: 12,
+              alignItems: 'center',
+              width: '100%',
+            }}
+            onPress={() => (navigation as { navigate: (n: string) => void }).navigate('Auth')}
+            activeOpacity={0.85}
+          >
+            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>{t('suppliersPremium.signInCta')}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  if (subscriptionLoading) {
+    return (
+      <View style={styles.root}>
+        {gateHeader}
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator color={RavenLight.accent} size="large" />
+          <Text style={[styles.loadingText, { marginTop: 12 }]}>{t('subscriptionPage.loading')}</Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (!subscriptionActive) {
+    return (
+      <View style={styles.root}>
+        {gateHeader}
+        <SuppliersPremiumGateContent
+          onSubscribe={() => (navigation as { navigate: (n: string) => void }).navigate('Subscription')}
+        />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.root}>

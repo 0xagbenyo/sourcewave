@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -6,261 +6,178 @@ import {
   ScrollView,
   TouchableOpacity,
   Switch,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
+import { Header } from '../components/Header';
+import { useUserSession } from '../context/UserContext';
+
+const hairline = StyleSheet.hairlineWidth;
+
+type RowNavProps = {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  subtitle?: string;
+  onPress: () => void;
+};
+
+const RowNav: React.FC<RowNavProps> = ({ icon, title, subtitle, onPress }) => (
+  <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.75}>
+    <Ionicons name={icon} size={22} color={Colors.WINE} style={styles.rowIcon} />
+    <View style={styles.rowMain}>
+      <Text style={styles.rowTitle}>{title}</Text>
+      {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
+    </View>
+    <Ionicons name="chevron-forward" size={18} color={Colors.TEXT_SECONDARY} />
+  </TouchableOpacity>
+);
+
+type RowSwitchProps = {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  subtitle?: string;
+  value: boolean;
+  onValueChange: (v: boolean) => void;
+};
+
+const RowSwitch: React.FC<RowSwitchProps> = ({ icon, title, subtitle, value, onValueChange }) => (
+  <View style={styles.row}>
+    <Ionicons name={icon} size={22} color={Colors.WINE} style={styles.rowIcon} />
+    <View style={styles.rowMain}>
+      <Text style={styles.rowTitle}>{title}</Text>
+      {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
+    </View>
+    <Switch
+      value={value}
+      onValueChange={onValueChange}
+      trackColor={{ false: Colors.LIGHT_GRAY, true: Colors.WINE_LIGHT }}
+      thumbColor={Colors.WHITE}
+    />
+  </View>
+);
+
+type RowStaticProps = {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  subtitle?: string;
+};
+
+const RowStatic: React.FC<RowStaticProps> = ({ icon, title, subtitle }) => (
+  <View style={styles.row}>
+    <Ionicons name={icon} size={22} color={Colors.WINE} style={styles.rowIcon} />
+    <View style={styles.rowMain}>
+      <Text style={styles.rowTitle}>{title}</Text>
+      {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
+    </View>
+  </View>
+);
 
 export const SettingsScreen: React.FC = () => {
   const navigation = useNavigation();
+  const { t, i18n } = useTranslation();
+  const { user, clearUser } = useUserSession();
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [emailNotifications, setEmailNotifications] = useState(true);
-  const [darkMode, setDarkMode] = useState(false);
 
-  const renderHeader = () => (
-    <View style={styles.header}>
-      <TouchableOpacity 
-        style={styles.backButton}
-        onPress={() => (navigation as any).goBack()}
-      >
-        <Ionicons name="arrow-back" size={24} color={Colors.BLACK} />
-      </TouchableOpacity>
-      <Text style={styles.headerTitle}>Settings</Text>
-      <View style={styles.headerSpacer} />
-    </View>
-  );
+  const languageSubtitle = useMemo(() => {
+    const code = (i18n.resolvedLanguage || i18n.language || 'en').toLowerCase();
+    if (code.startsWith('zh')) return t('languageSelect.chinese');
+    return t('languageSelect.english');
+  }, [i18n.language, i18n.resolvedLanguage, t]);
 
-  const renderSection = (title: string, children: React.ReactNode) => (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {children}
-    </View>
-  );
+  const handleLogout = () => {
+    Alert.alert(t('settings.logoutConfirmTitle'), t('settings.logoutConfirmBody'), [
+      { text: t('settings.cancel'), style: 'cancel' },
+      {
+        text: t('settings.logout'),
+        style: 'destructive',
+        onPress: () => {
+          clearUser();
+          (navigation as any).reset({
+            index: 0,
+            routes: [{ name: 'Auth' }],
+          });
+        },
+      },
+    ]);
+  };
 
-  const renderSettingItem = (
-    icon: string,
-    title: string,
-    subtitle?: string,
-    onPress?: () => void,
-    showArrow = true,
-    rightComponent?: React.ReactNode,
-    iconColor: string = Colors.ROYAL_BLUE
-  ) => (
-    <TouchableOpacity 
-      style={styles.settingItem} 
-      onPress={onPress}
-      activeOpacity={onPress ? 0.7 : 1}
-    >
-      <View style={styles.settingLeft}>
-        <View style={styles.settingIcon}>
-          <Ionicons name={icon as any} size={20} color={iconColor} />
-        </View>
-        <View style={styles.settingContent}>
-          <Text style={styles.settingTitle}>{title}</Text>
-          {subtitle && <Text style={styles.settingSubtitle}>{subtitle}</Text>}
-        </View>
-      </View>
-      <View style={styles.settingRight}>
-        {rightComponent}
-        {showArrow && onPress && (
-          <Ionicons name="chevron-forward" size={16} color={Colors.TEXT_SECONDARY} />
-        )}
-      </View>
-    </TouchableOpacity>
-  );
+  const nav = navigation as { navigate: (name: string) => void };
 
   return (
-    <SafeAreaView style={styles.container}>
-      {renderHeader()}
-      <ScrollView showsVerticalScrollIndicator={false}>
-        {renderSection('Account', (
-          <>
-            {renderSettingItem(
-              'person-outline',
-              'Profile Information',
-              'Edit your personal details',
-              () => (navigation as any).navigate('EditProfile'),
-              true,
-              undefined,
-              Colors.ROYAL_BLUE
-            )}
-            {renderSettingItem(
-              'location-outline',
-              'Shipping Addresses',
-              'Manage your delivery addresses',
-              () => (navigation as any).navigate('AddressBook'),
-              true,
-              undefined,
-              Colors.ROYAL_BLUE
-            )}
-            {renderSettingItem(
-              'card-outline',
-              'Payment Methods',
-              'Manage your payment options',
-              () => {},
-              true,
-              undefined,
-              Colors.ROYAL_BLUE
-            )}
-            {renderSettingItem(
-              'shield-checkmark-outline',
-              'Security',
-              'Password and account security',
-              () => {},
-              true,
-              undefined,
-              Colors.ROYAL_BLUE
-            )}
-          </>
-        ))}
-
-        {renderSection('Preferences', (
-          <>
-            {renderSettingItem(
-              'notifications-outline',
-              'Push Notifications',
-              'Get updates about orders and deals',
-              undefined,
-              false,
-              <Switch
-                value={notificationsEnabled}
-                onValueChange={setNotificationsEnabled}
-                trackColor={{ false: Colors.LIGHT_GRAY, true: Colors.ROYAL_BLUE }}
-                thumbColor={Colors.WHITE}
-              />,
-              Colors.ROYAL_BLUE
-            )}
-            {renderSettingItem(
-              'mail-outline',
-              'Email Notifications',
-              'Receive updates via email',
-              undefined,
-              false,
-              <Switch
-                value={emailNotifications}
-                onValueChange={setEmailNotifications}
-                trackColor={{ false: Colors.LIGHT_GRAY, true: Colors.ROYAL_BLUE }}
-                thumbColor={Colors.WHITE}
-              />,
-              Colors.ROYAL_BLUE
-            )}
-            {renderSettingItem(
-              'moon-outline',
-              'Dark Mode',
-              'Switch to dark theme',
-              undefined,
-              false,
-              <Switch
-                value={darkMode}
-                onValueChange={setDarkMode}
-                trackColor={{ false: Colors.LIGHT_GRAY, true: Colors.ROYAL_BLUE }}
-                thumbColor={Colors.WHITE}
-              />,
-              Colors.ROYAL_BLUE
-            )}
-            {renderSettingItem(
-              'language-outline',
-              'Language',
-              'English (US)',
-              () => {},
-              true,
-              undefined,
-              Colors.ROYAL_BLUE
-            )}
-            {renderSettingItem(
-              'cash-outline',
-              'Currency',
-              'Ghanaian Cedi (GH₵)',
-              () => {},
-              true,
-              undefined,
-              Colors.ROYAL_BLUE
-            )}
-          </>
-        ))}
-
-        {renderSection('Support', (
-          <>
-            {renderSettingItem(
-              'help-circle-outline',
-              'Help Center',
-              'Get help and find answers',
-              () => {},
-              true,
-              undefined,
-              Colors.ROYAL_BLUE
-            )}
-            {renderSettingItem(
-              'chatbubble-outline',
-              'Contact Us',
-              'Reach out to our support team',
-              () => {},
-              true,
-              undefined,
-              Colors.ROYAL_BLUE
-            )}
-            {renderSettingItem(
-              'document-text-outline',
-              'Terms of Service',
-              'Read our terms and conditions',
-              () => {},
-              true,
-              undefined,
-              Colors.ROYAL_BLUE
-            )}
-            {renderSettingItem(
-              'shield-outline',
-              'Privacy Policy',
-              'Learn about data protection',
-              () => {},
-              true,
-              undefined,
-              Colors.ROYAL_BLUE
-            )}
-          </>
-        ))}
-
-        {renderSection('About', (
-          <>
-            {renderSettingItem(
-              'information-circle-outline',
-              'App Version',
-              'SOURCEWAVE v1.0.0',
-              undefined,
-              false,
-              undefined,
-              Colors.ROYAL_BLUE
-            )}
-            {renderSettingItem(
-              'star-outline',
-              'Rate App',
-              'Share your feedback',
-              () => {},
-              true,
-              undefined,
-              Colors.ROYAL_BLUE
-            )}
-            {renderSettingItem(
-              'share-outline',
-              'Share App',
-              'Tell friends about SOURCEWAVE',
-              () => {},
-              true,
-              undefined,
-              Colors.ROYAL_BLUE
-            )}
-          </>
-        ))}
-
-        <View style={styles.logoutSection}>
-          <TouchableOpacity style={styles.logoutButton}>
-            <Ionicons name="log-out-outline" size={20} color={Colors.ERROR} />
-            <Text style={styles.logoutText}>Log Out</Text>
-          </TouchableOpacity>
-          <View style={styles.footerAccent} />
+    <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
+      <Header showBackButton title={t('settings.title')} />
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <Text style={styles.sectionLabel}>{t('settings.sectionAccount')}</Text>
+        <View style={styles.group}>
+          <RowNav
+            icon="person-outline"
+            title={t('settings.profile')}
+            subtitle={t('settings.profileSub')}
+            onPress={() => nav.navigate('EditProfile')}
+          />
+          <RowNav
+            icon="location-outline"
+            title={t('settings.addresses')}
+            subtitle={t('settings.addressesSub')}
+            onPress={() => nav.navigate('AddressBook')}
+          />
         </View>
+
+        <Text style={styles.sectionLabel}>{t('settings.sectionPreferences')}</Text>
+        <View style={styles.group}>
+          <RowSwitch
+            icon="notifications-outline"
+            title={t('settings.push')}
+            subtitle={t('settings.pushSub')}
+            value={notificationsEnabled}
+            onValueChange={setNotificationsEnabled}
+          />
+          <RowSwitch
+            icon="mail-outline"
+            title={t('settings.email')}
+            subtitle={t('settings.emailSub')}
+            value={emailNotifications}
+            onValueChange={setEmailNotifications}
+          />
+          <RowNav
+            icon="language-outline"
+            title={t('settings.language')}
+            subtitle={languageSubtitle}
+            onPress={() => nav.navigate('LanguageSelect', { fromSettings: true })}
+          />
+        </View>
+
+        <Text style={styles.sectionLabel}>{t('settings.sectionAbout')}</Text>
+        <View style={styles.group}>
+          <RowNav
+            icon="help-circle-outline"
+            title={t('settings.faq')}
+            subtitle={t('settings.faqSub')}
+            onPress={() => nav.navigate('Faq', { scope: 'buyer' })}
+          />
+          <RowStatic
+            icon="information-circle-outline"
+            title={t('settings.version')}
+            subtitle={t('settings.versionSub')}
+          />
+        </View>
+
+        {user?.email ? (
+          <TouchableOpacity style={styles.logoutRow} onPress={handleLogout} activeOpacity={0.75}>
+            <Ionicons name="log-out-outline" size={22} color={Colors.ERROR} />
+            <Text style={styles.logoutText}>{t('settings.logout')}</Text>
+          </TouchableOpacity>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
@@ -269,109 +186,71 @@ export const SettingsScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.BACKGROUND,
+    backgroundColor: Colors.OFF_WHITE,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.BORDER,
+  scroll: { flex: 1 },
+  scrollContent: {
+    paddingBottom: 32,
   },
-  backButton: {
-    padding: 4,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: Colors.BLACK,
-  },
-  headerSpacer: {
-    width: 32,
-  },
-  section: {
-    marginBottom: 24,
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '600',
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
     color: Colors.TEXT_SECONDARY,
-    marginBottom: 8,
-    marginLeft: 16,
-    marginTop: 8,
+    letterSpacing: 0.8,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    marginTop: 22,
+    marginBottom: 8,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
   },
-  settingItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+  group: {
     backgroundColor: Colors.WHITE,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.BORDER,
+    borderTopWidth: hairline,
+    borderBottomWidth: hairline,
+    borderColor: Colors.BORDER,
   },
-  settingLeft: {
+  row: {
     flexDirection: 'row',
     alignItems: 'center',
-    flex: 1,
+    paddingVertical: 14,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    borderBottomWidth: hairline,
+    borderBottomColor: Colors.BORDER,
+    backgroundColor: Colors.WHITE,
   },
-  settingIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#F5F8FF',
-    justifyContent: 'center',
-    alignItems: 'center',
+  rowIcon: {
     marginRight: 12,
-    borderWidth: 1.5,
-    borderColor: Colors.ROYAL_BLUE,
   },
-  settingContent: {
+  rowMain: {
     flex: 1,
+    minWidth: 0,
   },
-  settingTitle: {
+  rowTitle: {
     fontSize: 16,
+    fontWeight: '600',
     color: Colors.BLACK,
+    letterSpacing: -0.2,
+  },
+  rowSubtitle: {
+    fontSize: 13,
+    color: Colors.TEXT_SECONDARY,
+    marginTop: 3,
     fontWeight: '500',
   },
-  settingSubtitle: {
-    fontSize: 14,
-    color: Colors.TEXT_SECONDARY,
-    marginTop: 2,
-  },
-  settingRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  logoutSection: {
-    paddingHorizontal: 16,
-    paddingVertical: 24,
-  },
-  logoutButton: {
+  logoutRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: Colors.ERROR,
-    gap: 8,
+    marginTop: 28,
+    marginHorizontal: Spacing.SCREEN_PADDING,
+    paddingVertical: 14,
+    backgroundColor: Colors.WHITE,
+    borderWidth: hairline,
+    borderColor: Colors.BORDER,
   },
   logoutText: {
     fontSize: 16,
-    fontWeight: '500',
+    fontWeight: '600',
     color: Colors.ERROR,
-  },
-  footerAccent: {
-    height: 2,
-    backgroundColor: Colors.ROYAL_BLUE,
-    marginTop: 12,
-    borderRadius: 1,
-    opacity: 0.3,
+    marginLeft: 10,
   },
 });

@@ -1,0 +1,170 @@
+{
+  "buyerPages": [
+    {
+      "title": "Splash",
+      "body": "Shown briefly while the app starts. Wait for it to finish—no buttons here."
+    },
+    {
+      "title": "Language selection",
+      "body": "First-time choice of app language. Tap a language to continue. If you opened this from Settings, use the back arrow to leave without changing language."
+    },
+    {
+      "title": "Onboarding",
+      "body": "Intro slides about the app. Use Next to move forward, Skip to jump ahead, or Start on the last slide to continue to sign-in."
+    },
+    {
+      "title": "Sign in",
+      "body": "Enter your email or phone and password, then tap Sign in. Use Forgot password if you need a reset link. Legal links at the bottom open in your browser when tapped."
+    },
+    {
+      "title": "Create account (Register)",
+      "body": "Fill in the registration fields and submit to create an account. Follow any on-screen validation messages, then continue as prompted."
+    },
+    {
+      "title": "Forgot password",
+      "body": "Enter your email to request a reset link. Confirm in alerts if asked, then check your email (and spam) for the next step."
+    },
+    {
+      "title": "Home (tab)",
+      "body": "Pull down to refresh flyers and your order summary. Open the menu (top left) for shortcuts like order history or app info. The messages icon opens your inbox. Swipe the promo carousel. Recent orders can open a specific order when you tap them."
+    },
+    {
+      "title": "Sourcing (tab)",
+      "body": "Build one or more request lines: category, item, description, reference photo, quantity, and rate. Tap Add another line for more rows. Expand or collapse each line with the header. Submit sends the whole request at once. Fields use pickers and underlined inputs—tap to choose or type."
+    },
+    {
+      "title": "Category (tab)",
+      "body": "Pick a parent category in the left column. The right side shows Picks for You (subcategories). Tap a row to open the sourcing request flow with that context. Pull down to refresh the list."
+    },
+    {
+      "title": "Sourcing request (from category)",
+      "body": "Stack screen with the same multi-line sourcing idea as the tab: fill each line, add lines if needed, attach images, then submit. Use the header back control to return."
+    },
+    {
+      "title": "Suppliers / Messages (tab)",
+      "body": "Your conversations and channels. Pick a thread to read and send messages. Use the header menu or icons for settings, new chats, or attachments as shown on screen."
+    },
+    {
+      "title": "Account / Profile (tab)",
+      "body": "See your avatar, name, and membership badge. Tap My profile to edit profile. The grid icon is decorative unless wired elsewhere; the gear opens Settings. Sections include orders, invoices link, services (e.g. suppliers, subscription when tappable), and log out when signed in."
+    },
+    {
+      "title": "Search",
+      "body": "Type a query to search the catalog. Results appear as a grid of cards. Use the sort control at the top when available. Clear or edit the query to try again."
+    },
+    {
+      "title": "Order history",
+      "body": "List of your orders. Tap an order to open its detail. Pull to refresh if supported. Use filters or segments if the screen provides them."
+    },
+    {
+      "title": "Order details",
+      "body": "Line items, status, and actions for one order. Scroll for full information. Use visible buttons for reorder, contact, or tracking when offered."
+    },
+    {
+      "title": "Invoices & payments",
+      "body": "Lists invoices and payment entries for your account. Tap a row to open invoice or payment detail depending on the row type."
+    },
+    {
+      "title": "Invoice details",
+      "body": "Read-only style breakdown of one invoice. Use back to return to the list. Download or share only if buttons are shown."
+    },
+    {
+      "title": "Payment entry detail",
+      "body": "Details of a single payment record. Review amounts and references on screen, then go back."
+    },
+    {
+      "title": "Edit profile",
+      "body": "Update your personal fields and save. Profile photo changes use the picker shown. Navigate to linked areas (e.g. addresses) via any secondary links on this screen."
+    },
+    {
+      "title": "Settings",
+      "body": "Account shortcuts: Profile and Shipping addresses open their screens. Toggles control local notification preferences. Language opens the language picker. App version is informational. Log out signs you out after confirmation."
+    },
+    {
+      "title": "Address book",
+      "body": "List of saved addresses. Add a new address or tap an existing one to edit. Select a default address if the UI offers it."
+    },
+    {
+      "title": "Edit address",
+      "body": "Form for one address. Fill fields, validate postal or phone formats as prompted, then save. Cancel or back discards depending on the header."
+    },
+    {
+      "title": "Suppliers directory",
+      "body": "Browse supplier cards or rows. Tap a supplier to open the supplier detail screen. Search or filter if controls are visible."
+    },
+    {
+      "title": "Supplier detail",
+      "body": "Information about one supplier and actions such as message or call when buttons are shown. Back returns to the directory."
+    },
+    {
+      "title": "Agent supplier chat",
+      "body": "Chat-style conversation with a supplier context. Type at the bottom, send, and scroll history. Use attachment or menu icons if present."
+    },
+    {
+      "title": "Supplier chat list",
+      "body": "Alternative list of supplier-related chats. Tap a row to open the conversation screen."
+    },
+    {
+      "title": "Compose supplier quotation",
+      "body": "Fill the quotation form: items, prices, notes as shown. Attach files if the screen allows. Send or save draft using the toolbar or bottom actions."
+    },
+    {
+      "title": "Messages (full screen)",
+      "body": "Same messaging experience as the tab but opened as a stacked screen from elsewhere. Use back to dismiss when you are done."
+    },
+    {
+      "title": "Chat inbox",
+      "body": "Overview of channels and direct messages from the header shortcut. Tap an entry to open a thread. Unread badges reflect counts shown in the UI."
+    },
+    {
+      "title": "Workspace supplier profile",
+      "body": "Supplier profile opened from chat context. Review details and use any message or back actions provided."
+    },
+    {
+      "title": "Subscription",
+      "body": "View your subscription tier, benefits, and renewal actions. Purchase or restore according to the buttons on screen."
+    }
+  ],
+  "supplierPages": [
+    {
+      "title": "Supplier home",
+      "body": "Shortcuts to invoices & payments, quotations, new quotation, messages, and profile. Tap a row to open that area; unread hints may appear on chat-related rows."
+    },
+    {
+      "title": "Supplier chat (tab)",
+      "body": "Buyer conversations in one inbox. Select a thread to read and reply. Use the composer, attachments, and header icons as labeled. Settings in the drawer affect this screen when opened from there."
+    },
+    {
+      "title": "Supplier profile",
+      "body": "Shows your supplier display name, resolved supplier id text, and email. Open Help & FAQ for screen guides. Sign out returns you to the login flow after confirmation."
+    },
+    {
+      "title": "Invoices & payments (supplier)",
+      "body": "Combined list of sales invoices and payment entries. Tap a row to open the matching detail screen (invoice vs payment is indicated by the row)."
+    },
+    {
+      "title": "Supplier sales invoice detail",
+      "body": "Read totals, lines, and status for one invoice. Scroll the full page. Back returns to the list."
+    },
+    {
+      "title": "Supplier payment entry detail",
+      "body": "View one payment record: references and amounts as displayed. Use back to return."
+    },
+    {
+      "title": "Supplier quotation list",
+      "body": "Tabs or segments for submitted vs draft quotations when shown. Tap a quotation to open its detail. Use New quotation entry points to start a draft."
+    },
+    {
+      "title": "Supplier quotation detail",
+      "body": "Inspect items, prices, and status for one quotation. Edit, submit, or share only through visible buttons on this screen."
+    },
+    {
+      "title": "Compose supplier quotation (stack)",
+      "body": "Opened from supplier flows to build a quotation for a buyer. Complete fields, add lines, and send or save using primary actions at the top or bottom."
+    },
+    {
+      "title": "Sign-in & first screens (shared)",
+      "body": "Suppliers use the same Language, Onboarding, Login, Register, and Forgot password screens as buyers before the app switches to supplier tabs."
+    }
+  ]
+}

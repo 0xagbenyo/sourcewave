@@ -60,9 +60,9 @@ export const CategoryTabs: React.FC<CategoryTabsProps> = ({
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
       >
-        {categories.map((category) => (
+        {categories.map((category, index) => (
           <TouchableOpacity
-            key={category}
+            key={`${index}-${category}`}
             style={[
               styles.tab,
               isRedVariant && styles.tabRed,

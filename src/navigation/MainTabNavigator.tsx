@@ -1,14 +1,17 @@
-import React from 'react';
+import React, { useCallback, useMemo } from 'react';
+import { Alert } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
+import { useUserSession } from '../context/UserContext';
+import { useSubscription } from '../context/SubscriptionContext';
 import { HomeScreen } from '../screens/HomeScreen';
 import { CategoriesScreen } from '../screens/CategoriesScreen';
 import { SourcingRequestScreen } from '../screens/SourcingRequestScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 import { RavenUIMessagesScreen } from '../screens/RavenUIMessagesScreen';
-import { Colors } from '../constants/colors';
 import { getMainTabBarStyle } from './mainTabBarStyle';
 import type { MainTabParamList } from '../types';
 
@@ -17,46 +20,66 @@ const MainTab = createBottomTabNavigator<MainTabParamList>();
 export const MainTabNavigator: React.FC = () => {
   const insets = useSafeAreaInsets();
   const { t } = useTranslation();
+  const navigation = useNavigation();
+  const { user } = useUserSession();
+  const { isActive: subscriptionActive, isLoading: subscriptionLoading } = useSubscription();
+
+  const suppliersTabListeners = useMemo(
+    () => ({
+      tabPress: (e: { preventDefault?: () => void }) => {
+        if (!user?.email) return;
+        if (!subscriptionLoading && !subscriptionActive) {
+          e.preventDefault?.();
+          Alert.alert(t('suppliersPremium.menuBlockedTitle'), t('suppliersPremium.menuBlockedBody'), [
+            { text: t('settings.cancel'), style: 'cancel' },
+            {
+              text: t('suppliersPremium.subscribeCta'),
+              onPress: () => (navigation as { navigate: (name: string) => void }).navigate('Subscription'),
+            },
+          ]);
+        }
+      },
+    }),
+    [user?.email, subscriptionLoading, subscriptionActive, t, navigation]
+  );
+
+  const screenOptions = useCallback(
+    ({ route }: { route: { name: string } }) => ({
+      tabBarHideOnKeyboard: true,
+      tabBarIcon: ({ focused, color, size }: { focused: boolean; color: string; size: number }) => {
+        let iconName: keyof typeof Ionicons.glyphMap;
+
+        if (route.name === 'Home') {
+          iconName = focused ? 'home' : 'home-outline';
+        } else if (route.name === 'Categories') {
+          iconName = focused ? 'grid' : 'grid-outline';
+        } else if (route.name === 'Sourcing') {
+          iconName = focused ? 'briefcase' : 'briefcase-outline';
+        } else if (route.name === 'Suppliers') {
+          iconName = focused ? 'people' : 'people-outline';
+        } else if (route.name === 'Profile') {
+          iconName = focused ? 'person' : 'person-outline';
+        } else {
+          iconName = 'home-outline';
+        }
+
+        return <Ionicons name={iconName} size={22} color={color} />;
+      },
+      tabBarActiveTintColor: '#B91C1C',
+      tabBarInactiveTintColor: '#9CA3AF',
+      tabBarLabelStyle: {
+        fontSize: 10,
+        marginTop: 2,
+        fontWeight: '600',
+      },
+      tabBarStyle: getMainTabBarStyle(insets),
+      headerShown: false,
+    }),
+    [insets]
+  );
 
   return (
-    <MainTab.Navigator
-      screenOptions={({ route }) => ({
-        tabBarIcon: ({ focused, color, size }) => {
-          let iconName: keyof typeof Ionicons.glyphMap;
-          let iconColor = color;
-
-          if (route.name === 'Home') {
-            iconName = focused ? 'home' : 'home-outline';
-            iconColor = focused ? Colors.WINE : '#FF6B9D';
-          } else if (route.name === 'Categories') {
-            iconName = focused ? 'search' : 'search-outline';
-            iconColor = focused ? Colors.WINE : '#00BCD4';
-          } else if (route.name === 'Sourcing') {
-            iconName = focused ? 'briefcase' : 'briefcase-outline';
-            iconColor = focused ? Colors.WINE : '#FF9800';
-          } else if (route.name === 'Suppliers') {
-            iconName = focused ? 'people' : 'people-outline';
-            iconColor = focused ? Colors.WINE : '#4CAF50';
-          } else if (route.name === 'Profile') {
-            iconName = focused ? 'person' : 'person-outline';
-            iconColor = focused ? Colors.WINE : '#9C27B0';
-          } else {
-            iconName = 'home-outline';
-          }
-
-          return <Ionicons name={iconName} size={20} color={iconColor} />;
-        },
-        tabBarActiveTintColor: Colors.BLACK,
-        tabBarInactiveTintColor: Colors.TEXT_SECONDARY,
-        tabBarLabelStyle: {
-          fontSize: 9,
-          marginTop: 2,
-          fontWeight: '700',
-        },
-        tabBarStyle: getMainTabBarStyle(insets),
-        headerShown: false,
-      })}
-    >
+    <MainTab.Navigator screenOptions={screenOptions}>
       <MainTab.Screen name="Home" component={HomeScreen} options={{ tabBarLabel: t('tabs.activity') }} />
       <MainTab.Screen
         name="Sourcing"
@@ -72,6 +95,7 @@ export const MainTabNavigator: React.FC = () => {
         name="Suppliers"
         component={RavenUIMessagesScreen}
         options={{ tabBarLabel: t('tabs.suppliers') }}
+        listeners={suppliersTabListeners}
       />
       <MainTab.Screen name="Profile" component={ProfileScreen} options={{ tabBarLabel: t('tabs.account') }} />
     </MainTab.Navigator>

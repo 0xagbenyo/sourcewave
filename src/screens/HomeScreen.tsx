@@ -1,2542 +1,574 @@
-import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
-	View,
-	Text,
-	StyleSheet,
-	TouchableOpacity,
-	FlatList,
-	Dimensions,
-	ScrollView,
-	ActivityIndicator,
-	RefreshControl,
-	Alert,
-	Animated,
-	Easing,
-	Linking,
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Dimensions,
+  ActivityIndicator,
+  RefreshControl,
+  Modal,
+  Pressable,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
+  Alert,
 } from 'react-native';
-import { Video } from 'expo-av';
-import Svg, { Path } from 'react-native-svg';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, CommonActions } from '@react-navigation/native';
-import { RootStackParamList } from '../types';
-import type { NavigationProp } from '@react-navigation/native';
-import * as Updates from 'expo-updates';
 import { Colors } from '../constants/colors';
-import { Spacing } from '../constants/spacing';
 import { Typography } from '../constants/typography';
-import { useNewArrivals, useProductsByCategory, useForYouProducts, usePricingRuleFields, usePricingRules, useWishlistActions, useWishlist, useCartActions, useDealProducts, useProductBundles, useFlyers, useCategories, useOrders } from '../hooks/erpnext';
-import { useUserSession } from '../context/UserContext';
-import { ProductCard } from '../components/ProductCard';
-import { LoadingScreen } from '../components/LoadingScreen';
-import { ProductCardSkeletonList } from '../components/ProductCardSkeletonList';
-import { ProductCardSkeletonHorizontal } from '../components/ProductCardSkeletonHorizontal';
-import { CategoryTabs } from '../components/CategoryTabs';
+import { Spacing } from '../constants/spacing';
 import { Header } from '../components/Header';
-import { Toast } from '../components/Toast';
-import { PriceFilter, SortOption } from '../components/PriceFilter';
-import { CartAnimation } from '../components/CartAnimation';
 import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
-import { getProductDiscount } from '../utils/pricingRules';
-import { Product, Order } from '../types';
-import { getERPNextClient } from '../services/erpnext';
-import { mapERPItemToProduct } from '../services/mappers';
-import { collectDescendantItemGroupIds } from '../utils/itemGroup';
-import { formatGhanaCedis } from '../utils/currency';
+import { useFlyers, useOrders } from '../hooks/erpnext';
+import { useUserSession } from '../context/UserContext';
+import { useSubscription } from '../context/SubscriptionContext';
 
-const { width } = Dimensions.get('window');
-
-// Mock data for products
-const superDeals = [
-	{ id: '1', name: 'Grey Long-Sleeve Shirt', price: 'GH₵7.00', discount: '-53%', image: '👔' },
-	{ id: '2', name: 'Portable Blender', price: 'GH₵1.70', image: '🥤' },
-	{ id: '3', name: 'Black Polo Shirt', price: 'GH₵15.00', image: '👕' },
-	{ id: '4', name: 'Sanitary Pad Organizers', price: 'GH₵0.75', image: '👜' },
-];
-
-const buy6Get60 = [
-	{ id: '1', name: 'Blue Floral Dress', price: 'GH₵23.00', image: '👗' },
-	{ id: '2', name: 'Gold Layered Necklace', price: 'GH₵2.00', image: '💍' },
-];
-
-const discount10to50 = [
-	{ id: '1', name: "Men's Light Blue Outfit", price: 'GH₵15.30', image: '👔' },
-	{ id: '2', name: 'Brown Brooklyn Sweatshirt', price: 'GH₵10.01', image: '🧥' },
-];
-
-const mainProducts = [
-	{ id: '1', name: 'Baseball Caps', price: 'GH₵12.00', image: '🧢', tag: 'Trends' },
-	{ id: '2', name: 'Brown Dress and Shirt', price: 'GH₵45.00', image: '👗' },
-];
-
-const categories = ['All', 'Women', 'Kids', 'Men', 'Curve', 'Shoes', 'Electronics', 'Jewelry and Accessories', 'Sports', 'Bags', 'Toys', 'Office'];
-
-// Map UI category names to ERPNext item_group names
-// You may need to adjust these based on your actual ERPNext item group names
-const mapCategoryToItemGroup = (category: string): string | null => {
-  const categoryMap: Record<string, string> = {
-    'Women': 'Women',
-    'Men': 'Men',
-    'Kids': 'Kids',
-    'Curve': 'Curve',
-    'Shoes': 'Shoes',
-    'Electronics': 'Electronics',
-    'Jewelry and Accessories': 'Jewelry and Accessories',
-    'Sports': 'Sports',
-    'Bags': 'Bags',
-    'Toys': 'Toys',
-    'Office': 'Office',
-  };
-  return category === 'All' ? null : (categoryMap[category] || null);
-};
-const filterTabs = [
-	{ id: '1', name: 'For You', icon: null, active: true },
-	{ id: '2', name: 'New In', icon: 'sparkles' },
-	{ id: '3', name: 'Deals', icon: 'pricetag' },
-	{ id: '4', name: 'Best Sellers', icon: 'trophy' },
-];
-
-/** Status labels for recent orders (aligned with OrderHistoryScreen) */
-const RECENT_ORDER_STATUS_CONFIG: Record<string, { color: string; label: string }> = {
-	pending: { color: Colors.WARNING, label: 'Pending' },
-	confirmed: { color: Colors.INFO, label: 'Confirmed' },
-	processing: { color: Colors.ELECTRIC_BLUE, label: 'Processing' },
-	to_deliver: { color: Colors.INFO, label: 'To deliver' },
-	completed: { color: Colors.SUCCESS, label: 'Completed' },
-	shipped: { color: Colors.INFO, label: 'Shipped' },
-	delivered: { color: Colors.SUCCESS, label: 'Delivered' },
-	cancelled: { color: Colors.ERROR, label: 'Canceled' },
-	returned: { color: Colors.ERROR, label: 'Returned' },
-};
-
-const formatRecentOrderDate = (dateString: string) => {
-	if (!dateString) return '';
-	try {
-		const date = new Date(dateString);
-		return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-	} catch {
-		return '';
-	}
-};
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const width = SCREEN_WIDTH;
+const FLYER_H = Math.min(Math.round(SCREEN_WIDTH * 0.52), 280);
+const HOME_FLYER_CAROUSEL_HEIGHT = FLYER_H;
+const FLYER_AUTO_ADVANCE_MS = 5500;
 
 export const HomeScreen: React.FC = () => {
-	const insets = useSafeAreaInsets();
-	const [resolvedCustomerId, setResolvedCustomerId] = useState('');
-	const [selectedCategory, setSelectedCategory] = useState('All');
-	const [selectedFilter, setSelectedFilter] = useState('For You');
-	const [shouldScrollToFilterTabs, setShouldScrollToFilterTabs] = useState(false);
-	const [isScrolledPastFilterTabs, setIsScrolledPastFilterTabs] = useState(false);
-	const forYouListRef = useRef<FlatList>(null);
-	const mainListRef = useRef<FlatList>(null);
-	const navigation = useNavigation<NavigationProp<RootStackParamList>>();
-	
-	// Handle category selection - switch active tab on homepage
-	const handleCategorySelect = useCallback((category: string) => {
-		setSelectedCategory(category);
-		// Only navigate to CategoryProductsScreen if user wants to see full category page
-		// For now, just switch the active tab indicator on homepage
-	}, []);
-	const { user } = useUserSession();
-	useEffect(() => {
-		let isMounted = true;
-		const resolveCustomer = async () => {
-			const sessionCustomerId = user?.user || '';
-			if (sessionCustomerId) {
-				if (isMounted) setResolvedCustomerId(sessionCustomerId);
-				return;
-			}
-			if (!user?.email) {
-				if (isMounted) setResolvedCustomerId('');
-				return;
-			}
-			try {
-				const client = getERPNextClient();
-				const customer = await client.getCustomerByEmail(user.email);
-				if (isMounted) setResolvedCustomerId(customer?.name || '');
-			} catch {
-				if (isMounted) setResolvedCustomerId('');
-			}
-		};
-		resolveCustomer();
-		return () => {
-			isMounted = false;
-		};
-	}, [user?.user, user?.email]);
-	const { data: recentOrders = [], loading: recentOrdersLoading } = useOrders(resolvedCustomerId, undefined);
-	const { wishlistItems, refresh: refreshWishlist } = useWishlist(user?.email || null);
-	const { toggleWishlist } = useWishlistActions(refreshWishlist);
-	const { addToCart: addItemToCart } = useCartActions();
-	
-	// Optimistic state for immediate UI updates
-	const [optimisticWishlist, setOptimisticWishlist] = useState<Set<string>>(new Set());
-	const [pendingOperations, setPendingOperations] = useState<Set<string>>(new Set());
-	
-	// Toast state
-	const [toastVisible, setToastVisible] = useState(false);
-	const [toastMessage, setToastMessage] = useState('');
-	const [sortOption, setSortOption] = useState<SortOption>('default');
-	
-	// Cart animation state
-	const [showCartAnimation, setShowCartAnimation] = useState(false);
-	const [animationStartPos, setAnimationStartPos] = useState({ x: 0, y: 0 });
-	const [animationEndPos, setAnimationEndPos] = useState({ x: 0, y: 0 });
-	const [animationProductImage, setAnimationProductImage] = useState<string | undefined>(undefined);
-	
-	// Debug: Log animation state changes
-	useEffect(() => {
-		console.log('HomeScreen: Animation state changed', {
-			showCartAnimation,
-			animationStartPos,
-			animationEndPos,
-			animationProductImage
-		});
-	}, [showCartAnimation, animationStartPos, animationEndPos, animationProductImage]);
-	
-	// Create a Set of wishlisted product IDs for quick lookup
-	const wishlistedProductIds = useMemo(() => {
-		const baseSet = new Set(wishlistItems.map(item => item.productId));
-		// Merge with optimistic updates
-		optimisticWishlist.forEach(id => baseSet.add(id));
-		return baseSet;
-	}, [wishlistItems, optimisticWishlist]);
-	
-	// Sync optimistic state with actual wishlist when it updates
-	// Only sync when not currently performing operations to avoid infinite loops
-	const wishlistIdsRef = useRef<string>('');
-	const pendingOpsSizeRef = useRef<number>(0);
-	
-	const currentWishlistIds = useMemo(() => {
-		const ids = [...new Set(wishlistItems.map(item => item.productId))].sort();
-		return JSON.stringify(ids);
-	}, [wishlistItems]);
-	
-	useEffect(() => {
-		// Update refs for comparison
-		const currentPendingSize = pendingOperations.size;
-		pendingOpsSizeRef.current = currentPendingSize;
-		
-		if (currentPendingSize > 0) {
-			return; // Don't sync while operations are pending
-		}
-		
-		// Only update if the wishlist IDs actually changed
-		if (currentWishlistIds === wishlistIdsRef.current) {
-			return;
-		}
-		
-		wishlistIdsRef.current = currentWishlistIds;
-		
-		// Parse IDs from the string to avoid depending on wishlistItems array
-		const actualIds = JSON.parse(currentWishlistIds) as string[];
-		const actualSet = new Set(actualIds);
-		
-		setOptimisticWishlist(prev => {
-			// Clear optimistic state and sync with actual wishlist
-			// This ensures we start fresh after operations complete
-			const newSet = new Set(actualSet);
-			
-			// Only update if there's a change to prevent unnecessary re-renders
-			if (newSet.size !== prev.size || Array.from(newSet).some(id => !prev.has(id)) || Array.from(prev).some(id => !newSet.has(id))) {
-				return newSet;
-			}
-			return prev; // Return same reference if no change
-		});
-	}, [currentWishlistIds, pendingOperations.size]);
-	
-	// Map category to item group name
-	const itemGroupName = mapCategoryToItemGroup(selectedCategory);
-	
-	// Fetch pricing rule fields (logs all available fields) - Commented out to reduce API calls
-	// const { data: pricingRuleFields } = usePricingRuleFields();
-	
-	// Fetch pricing rules for discounts
-	const { data: pricingRules = [], loading: pricingRulesLoading } = usePricingRules();
-	
-	// Fetch Product Bundles
-	const { data: productBundles, loading: bundlesLoading, error: bundlesError } = useProductBundles(10);
-	
-	// Fetch flyers for carousel
-	const { data: flyers, loading: flyersLoading } = useFlyers();
-	
-	// Fetch categories for category images section
-	const { data: allCategories, loading: categoriesLoading } = useCategories();
-	
-	// Get random 30 categories with images
-	const [randomCategories, setRandomCategories] = useState<any[]>([]);
-	const [categoryImages, setCategoryImages] = useState<Record<string, string>>({});
-	const [loadingCategoryImages, setLoadingCategoryImages] = useState(false);
-	
-	useEffect(() => {
-		const fetchCategoryTileImages = async () => {
-			if (!allCategories || allCategories.length === 0) return;
-
-			setLoadingCategoryImages(true);
-			try {
-				const client = getERPNextClient();
-
-				// Home should show only groups (is_group = 1) and exclude "All Items Group".
-				const groupedOnly = allCategories.filter((category: any) => {
-					const rawIsGroup = category?.isGroup ?? category?.is_group;
-					return Number(rawIsGroup) === 1 && category.id !== 'All Items Group' && category.name !== 'All Items Group';
-				});
-				const selected = groupedOnly.slice(0, 30);
-
-				const resolveItemGroupImage = (categoryRow: any): string | null => {
-					const raw = categoryRow?.image;
-					if (!raw || String(raw).trim() === '') return null;
-					const p = mapERPItemToProduct({
-						name: 'ig',
-						item_name: 'ig',
-						disabled: 0,
-						image: raw,
-					});
-					return p.images?.[0] || null;
-				};
-
-				// Thumbnails: random Item.image from Items in this group tree (Item doctype, not Website Item).
-				const results = await Promise.all(
-					selected.map(async (category: any) => {
-						try {
-							const groupIds = collectDescendantItemGroupIds(category.id, allCategories);
-							const items = await client.getRawItemsByGroups(groupIds, 200);
-							const withImages = items.filter(
-								(row: any) => row.image && String(row.image).trim() !== ''
-							);
-							if (withImages.length > 0) {
-								const pick = withImages[Math.floor(Math.random() * withImages.length)];
-								const product = mapERPItemToProduct(pick);
-								if (product.images?.[0]) {
-									return { id: category.id, uri: product.images[0] };
-								}
-							}
-							const fallback = resolveItemGroupImage(category);
-							return { id: category.id, uri: fallback };
-						} catch {
-							const fallback = resolveItemGroupImage(category);
-							return { id: category.id, uri: fallback };
-						}
-					})
-				);
-
-				const images: Record<string, string> = {};
-				for (const r of results) {
-					if (r.uri) images[r.id] = r.uri;
-				}
-
-				setRandomCategories(selected);
-				setCategoryImages(images);
-			} catch (error) {
-				console.error('Error fetching category images from Items:', error);
-			} finally {
-				setLoadingCategoryImages(false);
-			}
-		};
-
-		fetchCategoryTileImages();
-	}, [allCategories]);
-	
-	
-	// Log pricing rule fields when available - Commented out to reduce API calls
-	// useEffect(() => {
-	// 	if (pricingRuleFields) {
-	// 		console.log('💰 PRICING RULE FIELDS:', pricingRuleFields);
-	// 	}
-	// }, [pricingRuleFields]);
-	
-	// Log pricing rules when available
-	useEffect(() => {
-		if (pricingRules && pricingRules.length > 0) {
-			console.log('💰 PRICING RULES FETCHED:', pricingRules.length, 'rules');
-			pricingRules.slice(0, 3).forEach((rule: any) => {
-				console.log(`  - ${rule.name}: ${rule.discount_percentage}% (${rule.item_code || rule.item_group})`);
-				// Log all keys to see what fields are available
-				console.log(`  📋 Available fields in ${rule.name}:`, Object.keys(rule));
-				// Specifically check for custom_flyer
-				if (rule.custom_flyer !== undefined) {
-					console.log(`  🖼️ custom_flyer found in ${rule.name}:`, rule.custom_flyer);
-				} else {
-					console.log(`  ⚠️ custom_flyer NOT found in ${rule.name}`);
-				}
-			});
-		}
-	}, [pricingRules]);
-	
-	// Fetch new arrivals from API with infinite scroll
-	const { 
-		products: newArrivals, 
-		loading: newArrivalsLoading, 
-		loadingMore: newArrivalsLoadingMore,
-		error: newArrivalsError, 
-		hasMore: newArrivalsHasMore,
-		loadMore: newArrivalsLoadMore,
-		refresh: refreshNewArrivals
-	} = useNewArrivals(20);
-	
-	// Fetch products by category when a category is selected (not "All")
-	// Convert sortOption to server-side sorting parameter
-	const sortByPrice = sortOption === 'lowToHigh' ? 'asc' : sortOption === 'highToLow' ? 'desc' : undefined;
-	const { data: categoryProducts, loading: categoryLoading, error: categoryError, refresh: refreshCategoryProducts } = useProductsByCategory(
-		itemGroupName || '',
-		itemGroupName ? 50 : 0, // Only fetch if category is selected
-		sortByPrice
-	);
-	
-	// Fetch "For You" products with infinite scroll
-	const { 
-		products: forYouProducts, 
-		loading: forYouLoading, 
-		loadingMore: forYouLoadingMore,
-		error: forYouError, 
-		hasMore: forYouHasMore,
-		loadMore: forYouLoadMore,
-		refresh: refreshForYouProducts
-	} = useForYouProducts(20);
-	
-	// No client-side sorting needed for category products - server-side sorting is already applied
-	const sortedCategoryProducts = useMemo(() => {
-		return categoryProducts || [];
-	}, [categoryProducts]);
-	
-	// Sort "For You" products by price (client-side for now, can be updated later)
-	const sortedForYouProducts = useMemo(() => {
-		if (!forYouProducts || forYouProducts.length === 0) return [];
-		
-		const sorted = [...forYouProducts];
-		switch (sortOption) {
-			case 'lowToHigh':
-				return sorted.sort((a, b) => (a.price || 0) - (b.price || 0));
-			case 'highToLow':
-				return sorted.sort((a, b) => (b.price || 0) - (a.price || 0));
-			default:
-				return sorted;
-		}
-	}, [forYouProducts, sortOption]);
-	
-	// Pull-to-refresh state
-	const [refreshing, setRefreshing] = useState(false);
-	
-	// Handle pull-to-refresh - reload the entire page
-	const onRefresh = useCallback(async () => {
-		setRefreshing(true);
-		try {
-			// Just refresh the data without navigation
-			// The page will reload automatically via the hook
-			await new Promise(resolve => setTimeout(resolve, 500)); // Small delay for UX
-		} catch (error) {
-			console.error('Error refreshing data:', error);
-		} finally {
-			setRefreshing(false);
-		}
-	}, []);
-	
-	// Products to display - only show when a specific category is selected
-	const displayedProducts = selectedCategory === 'All' 
-		? [] 
-		: (categoryProducts || []);
-	
-	const isLoadingProducts = categoryLoading;
-	const productsError = categoryError;
-
-	// Fetch products grouped by pricing rules (for Super Deals section)
-	const [productsByRule, setProductsByRule] = useState<Record<string, any[]>>({});
-	const [allDealProducts, setAllDealProducts] = useState<any[]>([]);
-	const [loadingDeals, setLoadingDeals] = useState(false);
-	
-	// State for infinite scroll deals
-	const [dealProducts, setDealProducts] = useState<any[]>([]);
-	const [dealProductsOffset, setDealProductsOffset] = useState(0);
-	const [dealProductsLoadingMore, setDealProductsLoadingMore] = useState(false);
-	const dealPageSize = 20;
-	
-	// Check if page is initially loading (fresh load - no data loaded yet)
-	const isInitialLoading = (!newArrivals && newArrivalsLoading) && 
-		(!pricingRules || pricingRules.length === 0);
-
-	useEffect(() => {
-		let isMounted = true;
-		let abortController = new AbortController();
-		
-		const fetchDealProducts = async () => {
-			if (!pricingRules || pricingRules.length === 0) {
-				if (isMounted) {
-					setProductsByRule({});
-					setAllDealProducts([]);
-					setDealProducts([]);
-					setDealProductsOffset(0);
-				}
-				return;
-			}
-
-			if (isMounted) {
-				setLoadingDeals(true);
-			}
-			
-			try {
-				const client = getERPNextClient();
-				const productsByRuleMap: Record<string, any[]> = {};
-				const allProducts: any[] = [];
-
-				// Limit processing to prevent too many API calls and improve performance
-				const MAX_RULES = 5;
-				const MAX_ITEMS_PER_RULE = 10;
-				const MAX_GROUPS_PER_RULE = 2;
-				const MAX_ITEMS_PER_GROUP = 20;
-
-				// Extract item codes and item groups from pricing rules (limit rules)
-				for (const rule of pricingRules.slice(0, MAX_RULES)) {
-					const ruleAny = rule as any;
-					const ruleName = rule.name || ruleAny.name || 'Unknown';
-					const ruleProducts: any[] = [];
-					
-					// Fetch products by item codes - limit items and batch fetch
-					if (ruleAny.items && Array.isArray(ruleAny.items)) {
-						const limitedItems = ruleAny.items.slice(0, MAX_ITEMS_PER_RULE);
-						const itemCodes = limitedItems
-							.filter((item: any) => item && item.item_code)
-							.map((item: any) => item.item_code);
-						
-						// Fetch items in parallel (but limited)
-						const itemPromises = itemCodes.map(async (itemCode: string) => {
-							try {
-								const websiteItem = await client.getItem(itemCode);
-								if (websiteItem) {
-									const product = mapERPItemToProduct(websiteItem);
-									const calculatedDiscount = getProductDiscount(product, pricingRules);
-									const ruleDiscount = ruleAny.discount_percentage || 0;
-									const discount = calculatedDiscount > 0 ? calculatedDiscount : ruleDiscount;
-									
-									if (discount > 0 || ruleDiscount > 0) {
-										return {
-											...product,
-											discount: discount > 0 ? discount : ruleDiscount,
-											ruleName
-										};
-									}
-								}
-							} catch (error: any) {
-								if (error?.message && !error.message.includes('not found') && !error.message.includes('DoesNotExistError')) {
-									console.warn(`Failed to fetch product ${itemCode}:`, error.message);
-								}
-							}
-							return null;
-						});
-						
-						const fetchedProducts = await Promise.all(itemPromises);
-						const validProducts = fetchedProducts.filter((p): p is any => p !== null);
-						ruleProducts.push(...validProducts);
-						allProducts.push(...validProducts);
-					}
-
-					// Fetch products by item groups - limit groups and items
-					if (ruleAny.item_groups && Array.isArray(ruleAny.item_groups)) {
-						const limitedGroups = ruleAny.item_groups.slice(0, MAX_GROUPS_PER_RULE);
-						for (const itemGroup of limitedGroups) {
-							if (itemGroup && itemGroup.item_group) {
-								try {
-									const websiteItems = await client.getItemsByGroup(itemGroup.item_group, MAX_ITEMS_PER_GROUP);
-									const products = websiteItems.map((item: any) => {
-										const product = mapERPItemToProduct(item);
-										const discount = getProductDiscount(product, pricingRules);
-										return {
-											...product,
-											discount,
-											ruleName
-										};
-									}).filter((p: any) => p.discount > 0);
-									ruleProducts.push(...products);
-									allProducts.push(...products);
-								} catch (error) {
-									console.warn(`Failed to fetch products for group ${itemGroup.item_group}:`, error);
-								}
-							}
-						}
-					}
-
-					if (ruleProducts.length > 0) {
-						// Remove duplicates within this rule and sort by discount
-						const uniqueRuleProducts = Array.from(
-							new Map(ruleProducts.map((p: any) => [p.id, p])).values()
-						).sort((a: any, b: any) => b.discount - a.discount);
-						
-						productsByRuleMap[ruleName] = uniqueRuleProducts;
-					}
-				}
-
-				// Remove duplicates from all products
-				const uniqueAllProducts = Array.from(
-					new Map(allProducts.map((p: any) => [p.id, p])).values()
-				);
-				
-				// Shuffle to mix products from different pricing rules
-				const shuffledProducts = [...uniqueAllProducts];
-				for (let i = shuffledProducts.length - 1; i > 0; i--) {
-					const j = Math.floor(Math.random() * (i + 1));
-					[shuffledProducts[i], shuffledProducts[j]] = [shuffledProducts[j], shuffledProducts[i]];
-				}
-
-				if (isMounted) {
-					setProductsByRule(productsByRuleMap);
-					setAllDealProducts(shuffledProducts);
-					
-					// Initialize deal products for infinite scroll (first page)
-					setDealProducts(shuffledProducts.slice(0, dealPageSize));
-					setDealProductsOffset(dealPageSize);
-				}
-			} catch (error) {
-				if (isMounted && error instanceof Error && !error.message.includes('aborted')) {
-					console.error('Error fetching deal products:', error);
-				}
-				if (isMounted) {
-					setProductsByRule({});
-					setAllDealProducts([]);
-					setDealProducts([]);
-					setDealProductsOffset(0);
-				}
-			} finally {
-				if (isMounted) {
-					setLoadingDeals(false);
-				}
-			}
-		};
-
-		fetchDealProducts();
-	}, [pricingRules]);
-	
-	// Load more deal products for infinite scroll
-	const loadMoreDealProducts = useCallback(() => {
-		if (dealProductsLoadingMore || dealProductsOffset >= allDealProducts.length) {
-			return;
-		}
-		
-		setDealProductsLoadingMore(true);
-		
-		// Simulate async load (in case we need to fetch more later)
-		setTimeout(() => {
-			const nextProducts = allDealProducts.slice(dealProductsOffset, dealProductsOffset + dealPageSize);
-			setDealProducts((prev) => [...prev, ...nextProducts]);
-			setDealProductsOffset((prev) => prev + dealPageSize);
-			setDealProductsLoadingMore(false);
-		}, 100);
-	}, [dealProductsLoadingMore, dealProductsOffset, allDealProducts.length, dealPageSize]);
-	
-	const dealProductsHasMore = dealProductsOffset < allDealProducts.length;
-	const dealProductsError: Error | null = null; // No error state needed since we use cached data
-
-	// Track when user switches from "For You" to another filter
-	const prevFilterRef = useRef(selectedFilter);
-	const wasForYouRef = useRef(false);
-	
-	// Track if we're transitioning from "For You" to another filter
-	useEffect(() => {
-		if (selectedFilter === 'For You') {
-			wasForYouRef.current = true;
-		} else if (wasForYouRef.current && selectedFilter !== 'For You' && selectedCategory === 'All') {
-			// We just switched from "For You" to another filter
-			setShouldScrollToFilterTabs(true);
-			wasForYouRef.current = false;
-		}
-		prevFilterRef.current = selectedFilter;
-	}, [selectedFilter, selectedCategory]);
-	
-	// Use a stable key that doesn't change when filter changes (only when category changes)
-	// This prevents the list from remounting unnecessarily
-	const mainListKey = useMemo(() => `main-list-${selectedCategory}`, [selectedCategory]);
-
-	// Generate dynamic sections based on pricing rules
-	const pricingRuleSections = useMemo(() => {
-		if (!pricingRules || pricingRules.length === 0) {
-			return [];
-		}
-		return pricingRules.map((rule: any) => {
-			const discount = rule.discount_percentage || 0;
-			let title = rule.title || `${discount}% Off`;
-			
-			// Make title more descriptive based on what the rule applies to
-			// For item_groups: show percentage and group name
-			// For item_codes: show only percentage (no item names)
-			if (rule.item_groups && rule.item_groups.length > 0) {
-				const groupNames = rule.item_groups.map((ig: any) => ig.item_group).filter(Boolean).join(', ');
-				if (groupNames) {
-					title = `${discount}% Off - ${groupNames}`;
-				}
-			} else if (rule.items && rule.items.length > 0) {
-				// For item codes, just show the percentage
-				title = `${discount}% Off`;
-			}
-			
-			return {
-				type: 'pricingRule',
-				id: rule.name || rule.id || `rule-${Math.random()}`,
-				ruleName: rule.name,
-				ruleTitle: title,
-				discountPercent: discount
-			};
-		});
-	}, [pricingRules]);
-
-	// Show full homepage when "All" is selected, otherwise only header and tabs
-	// Filter sections based on selectedFilter
-	// IMPORTANT: Always include all sections to prevent remounting, but conditionally render content
-	const getSections = (): Array<{ type: string; id: string; ruleName?: string; ruleTitle?: string; discountPercent?: number }> => {
-		const baseSections: Array<{ type: string; id: string; ruleName?: string; ruleTitle?: string; discountPercent?: number }> = [
-			{ type: 'flyerCarousel', id: 'flyerCarousel' },
-			{ type: 'categoryImages', id: 'categoryImages' },
-			{ type: 'recentOrders', id: 'recentOrders' },
-		];
-		
-		return baseSections;
-	};
-	
-	const sections = getSections();
-
-	// Find the index of filterTabs section for sticky header
-	const filterTabsIndex = sections.findIndex(s => s.id === 'filterTabs');
-	const stickyHeaderIndices = filterTabsIndex >= 0 ? [filterTabsIndex] : [];
-
-	// Store section layout positions to scroll directly to them
-	const sectionLayouts = useRef<{ [key: string]: number }>({});
-	const filterTabsLayoutRef = useRef<View>(null);
-	const mainProductsLayoutRef = useRef<View>(null);
-
-	// Reset scroll flag when filter changes away from "For You"
-	useEffect(() => {
-		if (selectedFilter !== 'For You' && prevFilterRef.current === 'For You') {
-			// Flag is set in renderFilterTabs onPress, layout handler will scroll
-		}
-		prevFilterRef.current = selectedFilter;
-	}, [selectedFilter]);
-
-	const bannerScrollRef = useRef<ScrollView>(null);
-	const [currentBannerIndex, setCurrentBannerIndex] = useState(0);
-	const flyerCarouselRef = useRef<ScrollView>(null);
-	const [currentFlyerIndex, setCurrentFlyerIndex] = useState(0);
-	const [isScrolledPastCarousel, setIsScrolledPastCarousel] = useState(false);
-	
-	// Animated values for header transitions (all non-native to avoid conflicts)
-	const headerOpacity = useRef(new Animated.Value(0)).current;
-	const headerBorderRadius = useRef(new Animated.Value(0)).current;
-	const headerShadowOpacity = useRef(new Animated.Value(0)).current;
-	
-	// Initialize header animation state
-	useEffect(() => {
-		if (isScrolledPastCarousel) {
-			headerOpacity.setValue(1);
-			headerBorderRadius.setValue(20);
-			headerShadowOpacity.setValue(0.15);
-		}
-	}, []); // Only run on mount
-
-	// Extract custom_flyer images from pricing rules
-	const flyerMedia = useMemo(() => {
-		if (!flyers || flyers.length === 0) {
-			console.log('🖼️ No flyers available for carousel');
-			return [];
-		}
-		
-		const media: Array<{type: 'image' | 'video', uri: string}> = [];
-		
-	flyers.forEach((flyer: any) => {
-			if (flyer.image && flyer.image.trim()) {
-				let formattedUrl = flyer.image.trim();
-				
-				// Detect Frappe Cloud URL and make public
-				if (formattedUrl.includes('frappe.cloud/private/files/')) {
-					formattedUrl = formattedUrl.replace('frappe.cloud/private/files/', 'frappe.cloud/files/');
-				} else if (formattedUrl.includes('/private/files/')) {
-					formattedUrl = formattedUrl.replace('/private/files/', '/files/');
-				}
-				
-				// Remove %20 spaces for cleaner URL (Frappe handles it)
-				formattedUrl = formattedUrl.replace(/%20/g, ' ');
-				
-				// Detect video vs image
-				const lowerUrl = formattedUrl.toLowerCase();
-				const isVideo = /\.(mp4|webm|mov|avi|tmp)$/i.test(lowerUrl);
-				const type = isVideo ? 'video' : 'image';
-				
-				// Add full server URL
-				const fullUrl = formattedUrl.startsWith('http') ? formattedUrl : `https://sourcewave.frappe.cloud${formattedUrl.startsWith('/') ? formattedUrl : '/' + formattedUrl}`;
-				
-				media.push({ type, uri: fullUrl });
-				console.log(`✅ Added ${type} to carousel: "${flyer.flyer_name || 'N/A'}" → ${fullUrl}`);
-			}
-		});
-		
-		console.log(`🖼️ Extracted ${media.length} flyer media items from Flyer doctype`);
-		return media;
-	}, [flyers]);
-
-	// Auto-scroll flyer carousel
-	useEffect(() => {
-		if (flyerMedia.length <= 1) return;
-
-		let videoTimeouts: NodeJS.Timeout[] = [];
-		
-		const advanceCarousel = () => {
-			setCurrentFlyerIndex((prevIndex) => {
-				const nextIndex = (prevIndex + 1) % flyerMedia.length;
-				flyerCarouselRef.current?.scrollTo({
-					x: nextIndex * width,
-					animated: true,
-				});
-				return nextIndex;
-			});
-		};
-
-		const setupVideoListeners = () => {
-			videoTimeouts.forEach(clearTimeout);
-			videoTimeouts = [];
-			
-			flyerMedia.forEach((item, index) => {
-				if (item.type === 'video') {
-					// Advance after 15s max for videos
-					const timeoutId = setTimeout(advanceCarousel, 15000);
-					videoTimeouts.push(timeoutId);
-				}
-			});
-		};
-
-		setupVideoListeners();
-		
-		const interval = setInterval(() => {
-			advanceCarousel();
-			setupVideoListeners();
-		}, 8000); // Images advance every 8s
-
-		return () => {
-			clearInterval(interval);
-			videoTimeouts.forEach(clearTimeout);
-		};
-	}, [flyerMedia]);
-
-	const renderHeader = () => {
-		const backgroundColor = headerOpacity.interpolate({
-			inputRange: [0, 1],
-			outputRange: ['rgba(255, 255, 255, 0)', Colors.WINE],
-		});
-		
-		const shadowOpacity = headerShadowOpacity.interpolate({
-			inputRange: [0, 1],
-			outputRange: [0, 0.15],
-		});
-		
-		return (
-			<Animated.View 
-				style={[
-					styles.stickyHeaderWrapper, 
-					{ 
-						paddingTop: insets.top - Spacing.PADDING_MD,
-						backgroundColor,
-						shadowOpacity,
-					},
-					isScrolledPastCarousel && styles.stickyHeaderWrapperScrolled
-				]}
-			>
-				<View style={styles.headerContentWrapper}>
-					<Header 
-						onCalendarPress={() => {
-							if (productBundles && productBundles.length > 0) {
-								(navigation as any).navigate('ProductBundles');
-							}
-						}}
-						customPaddingTop={Spacing.PADDING_LG + 5}
-						isScrolled={isScrolledPastCarousel}
-					/>
-				</View>
-			</Animated.View>
-		);
-	};
-
-	const renderCategoryTabsOverlay = () => {
-		// Calculate header height when scrolled:
-		// stickyHeaderWrapper paddingTop: insets.top - 16
-		// Header customPaddingTop: 24 + 5 = 29
-		// Header content (search bar + icons): ~42px
-		// Header paddingBottom: 8
-		// Total: insets.top - 16 + 29 + 42 + 8 = insets.top + 63
-		const headerHeight = isScrolledPastCarousel 
-			? Math.max(insets.top - Spacing.PADDING_MD, 0) + (Spacing.PADDING_LG + 5) + 42 + Spacing.PADDING_SM
-			: 100;
-		
-		return (
-			<View style={[
-				styles.categoryTabsOverlay,
-				isScrolledPastCarousel && [
-					styles.categoryTabsOverlayScrolled,
-					{ 
-						top: headerHeight,
-						borderBottomLeftRadius: 20,
-						borderBottomRightRadius: 20,
-					}
-				]
-			]}>
-				<View style={styles.categoryTabsContentWrapper}>
-					<CategoryTabs 
-						selectedCategory={selectedCategory}
-						onSelectCategory={handleCategorySelect}
-						variant="red"
-						showMenuIcon={true}
-						isScrolled={isScrolledPastCarousel}
-					/>
-				</View>
-			</View>
-		);
-	};
-
-	const renderFlyerCarousel = () => {
-		if (flyerMedia.length === 0) {
-			// Show a placeholder or default image if no flyers
-			return (
-				<View style={styles.flyerCarouselContainer}>
-					<View style={styles.flyerImageContainer}>
-						<View style={styles.flyerPlaceholder}>
-							<Ionicons name="image-outline" size={48} color={Colors.TEXT_SECONDARY} />
-						</View>
-					</View>
-					<View style={styles.carouselOverlay} pointerEvents="none" />
-				</View>
-			);
-		}
-
-		const scrollToFlyer = (index: number) => {
-			setCurrentFlyerIndex(index);
-			flyerCarouselRef.current?.scrollTo({
-				x: index * width,
-				animated: true,
-			});
-		};
-
-		return (
-			<View style={styles.flyerCarouselContainer} pointerEvents="box-none">
-		<ScrollView
-			ref={flyerCarouselRef}
-			horizontal
-			pagingEnabled
-			showsHorizontalScrollIndicator={false}
-			scrollEventThrottle={16}
-			decelerationRate="fast"
-			nestedScrollEnabled
-			scrollEnabled
-			directionalLockEnabled
-			onMomentumScrollEnd={(event) => {
-				const newIndex = Math.round(event.nativeEvent.contentOffset.x / width);
-				setCurrentFlyerIndex(newIndex);
-			}}
-		>
-					{flyerMedia.map((item: any, index: number) => (
-						<View key={index} style={styles.flyerImageContainer}>
-							{item.type === 'video' ? (
-								<Video
-									source={{ uri: item.uri }}
-									style={styles.flyerImage}
-									pointerEvents="none"
-									shouldPlay
-									isLooping={false}
-									useNativeControls={false}
-									onError={(error: any) => {
-										console.error(`🎬 Error loading flyer video ${index}:`, item.uri, error);
-									}}
-									onLoad={() => {
-										console.log(`🎬 Successfully loaded flyer video ${index}:`, item.uri);
-									}}
-									onPlaybackStatusUpdate={(status: any) => {
-										if (status.didJustFinish) {
-											console.log(`🎬 Video ${index} finished, moving to next slide`);
-											// Move to next slide when video ends
-											const nextIndex = (index + 1) % flyerMedia.length;
-											scrollToFlyer(nextIndex);
-										}
-									}}
-								/>
-							) : (
-								<View style={styles.flyerImageWrapper}>
-									<ErpAuthenticatedImage
-										uri={item.uri}
-										style={styles.flyerImage}
-										resizeMode="cover"
-										onError={() => {
-											console.error(`🖼️ Error loading flyer image ${index}:`, item.uri);
-										}}
-										onLoad={() => {
-											console.log(`🖼️ Successfully loaded flyer image ${index}:`, item.uri);
-										}}
-									/>
-								</View>
-							)}
-						</View>
-					))}
-				</ScrollView>
-				{/* Visual overlay only — must not block swipe gestures */}
-				<View style={styles.carouselOverlay} pointerEvents="none" />
-				{flyerMedia.length > 1 && (
-					<View style={styles.flyerIndicators} pointerEvents="box-none">
-						{flyerMedia.map((_: any, index: number) => (
-							<TouchableOpacity
-								key={index}
-								activeOpacity={0.8}
-								onPress={() => scrollToFlyer(index)}
-								hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-							>
-								<View
-									style={[
-										styles.flyerIndicator,
-										index === currentFlyerIndex && styles.flyerIndicatorActive,
-									]}
-								/>
-							</TouchableOpacity>
-						))}
-					</View>
-				)}
-			</View>
-		);
-	};
-
-	// Calculate banner count for auto-scroll
-	const latestRule = pricingRules && pricingRules.length > 0 ? pricingRules[0] : null;
-	const discountPercent = latestRule?.discount_percentage || (latestRule as any)?.discount_percentage || 0;
-	const showDiscountBanner = discountPercent > 0 || allDealProducts.length > 0;
-	const bannerCount = showDiscountBanner ? 1 : 0;
-
-	// Auto-scroll effect
-	useEffect(() => {
-		if (bannerCount <= 1) return; // No need to scroll if only one banner
-
-		const interval = setInterval(() => {
-			setCurrentBannerIndex((prevIndex) => {
-				const nextIndex = (prevIndex + 1) % bannerCount;
-				bannerScrollRef.current?.scrollTo({
-					x: nextIndex * width,
-					animated: true,
-				});
-				return nextIndex;
-			});
-		}, 3000); // Change banner every 3 seconds
-
-		return () => clearInterval(interval);
-	}, [bannerCount]);
-
-	const renderShippingBanner = () => {
-		// Get month name
-		const getMonthName = (monthNum: string) => {
-			const months = ['January', 'February', 'March', 'April', 'May', 'June', 
-				'July', 'August', 'September', 'October', 'November', 'December'];
-			const monthIndex = parseInt(monthNum) - 1;
-			return months[monthIndex] || monthNum;
-		};
-		
-		return (
-			<View style={styles.shippingBannersContainer}>
-				{/* Free Shipping Banner */}
-				<View style={styles.shippingBannerContainer}>
-					<View style={styles.shippingBanner}>
-						<View style={styles.shippingBannerContent}>
-							<Text style={styles.shippingText}>Free Shipping</Text>
-							<Text style={styles.shippingSubtext}>On orders of $50.00+</Text>
-						</View>
-						<Ionicons name="car-outline" size={18} color={Colors.WHITE} />
-					</View>
-				</View>
-				
-			</View>
-		);
-	};
-	
-	const getCategoryBadgeColor = (id: string) => {
-		// China-themed color palette: Reds, Golds, and accents
-		const palette = ['#E60012', '#FF6B6B', '#FFD700', '#FFE082', '#FF8C00', '#DC143C', '#FF4500', '#F0E68C'];
-		let hash = 0;
-		for (let i = 0; i < id.length; i++) hash = id.charCodeAt(i) + ((hash << 5) - hash);
-		return palette[Math.abs(hash) % palette.length];
-	};
-
-	const getCategoryIcon = (categoryName: string): keyof typeof Ionicons.glyphMap => {
-		// Map category names to specific icons
-		const name = categoryName.toLowerCase();
-		
-		if (name.includes('fashion') || name.includes('clothing') || name.includes('apparel')) return 'shirt-outline';
-		if (name.includes('shoe') || name.includes('footwear')) return 'foot-outline';
-		if (name.includes('electronic') || name.includes('phone') || name.includes('gadget')) return 'phone-portrait-outline';
-		if (name.includes('beauty') || name.includes('cosmetic') || name.includes('makeup')) return 'sparkles-outline';
-		if (name.includes('home') || name.includes('furniture') || name.includes('decor')) return 'home-outline';
-		if (name.includes('sport') || name.includes('fitness') || name.includes('gym')) return 'fitness-outline';
-		if (name.includes('book') || name.includes('office') || name.includes('stationery')) return 'book-outline';
-		if (name.includes('toy') || name.includes('game') || name.includes('baby')) return 'game-controller-outline';
-		if (name.includes('car') || name.includes('auto') || name.includes('vehicle')) return 'car-outline';
-		if (name.includes('food') || name.includes('grocery') || name.includes('kitchen')) return 'fast-food-outline';
-		if (name.includes('health') || name.includes('medical') || name.includes('pharmacy')) return 'medkit-outline';
-		if (name.includes('pet') || name.includes('animal')) return 'paw-outline';
-		if (name.includes('jewelry') || name.includes('watch') || name.includes('accessories')) return 'diamond-outline';
-		if (name.includes('plant') || name.includes('garden') || name.includes('outdoor')) return 'leaf-outline';
-		if (name.includes('tool') || name.includes('hardware')) return 'hammer-outline';
-		
-		// Default icon
-		return 'layers-outline';
-	};
-
-	const renderCategoryImages = () => {
-		return (
-			<View style={styles.modernCategorySection}>
-				<View style={styles.modernCategoryHeader}>
-					<Text style={styles.modernCategoryTitle}>What is Sourcewave?</Text>
-				</View>
-
-				<View style={styles.sourcewaveExplainCard}>
-					<Text style={styles.sourcewaveExplainBody}>
-						Sourcewave connects you to global suppliers, submit custom requests, and manage
-						orders seamlessly in one unified workflow.
-					</Text>
-					<View style={styles.sourcewavePointRow}>
-						<View style={styles.sourcewaveDot} />
-						<Text style={styles.sourcewavePointText}>Request products from trusted suppliers</Text>
-					</View>
-					<View style={styles.sourcewavePointRow}>
-						<View style={styles.sourcewaveDot} />
-						<Text style={styles.sourcewavePointText}>Track quotations, orders, and delivery status</Text>
-					</View>
-					<View style={styles.sourcewavePointRow}>
-						<View style={styles.sourcewaveDot} />
-						<Text style={styles.sourcewavePointText}>Reorder quickly and scale your inventory flow</Text>
-					</View>
-				</View>
-			</View>
-		);
-	};
-
-	const renderSuperDeals = () => {
-		const firstTenDeals = allDealProducts.slice(0, 10);
-		
-		if (loadingDeals) {
-			return null; // Don't show anything while loading deals
-		}
-
-		if (firstTenDeals.length === 0) {
-			return null;
-		}
-
-		// Calculate average discount percentage for display
-		const discounts = firstTenDeals
-			.map(item => item.discount || 0)
-			.filter(d => d > 0);
-		const avgDiscount = discounts.length > 0
-			? Math.round(discounts.reduce((a, b) => a + b, 0) / discounts.length)
-			: 20; // Default to 20% if no discounts
-
-		return (
-		<View style={styles.section}>
-			<View style={styles.superDealsTitleContainer}>
-				<View style={styles.superDealsTitleLeft}>
-				<Ionicons name="flash" size={12} color={Colors.WHITE} />
-					<Text style={styles.superDealsTitle}>Super Deals</Text>
-				</View>
-				<TouchableOpacity 
-					onPress={() => {
-						navigation.navigate('PricingRules');
-					}}
-				>
-					<Text style={styles.superDealsSaveText}>Save big now! {'>'}</Text>
-				</TouchableOpacity>
-			</View>
-			{allDealProducts.length > 0 && (
-				<FlatList
-					data={firstTenDeals}
-					horizontal
-					showsHorizontalScrollIndicator={false}
-					contentContainerStyle={styles.productsList}
-					renderItem={({ item }: { item: any }) => (
-						<TouchableOpacity 
-							style={styles.productCard}
-							onPress={() => (navigation as any).navigate('ProductDetails', { productId: item.id })}
-						>
-							<View style={styles.productImage}>
-								{item.images && item.images.length > 0 && item.images[0] ? (
-									<ErpAuthenticatedImage
-										uri={item.images[0]}
-										style={styles.productImageContent}
-										resizeMode="cover"
-									/>
-								) : (
-									<View style={styles.productImagePlaceholder}>
-										<Ionicons name="image-outline" size={24} color={Colors.TEXT_SECONDARY} />
-									</View>
-								)}
-								{item.discount > 0 && (
-									<View style={styles.flashSaleTag}>
-										<Text style={styles.flashSaleText}>Flash Sale</Text>
-									</View>
-								)}
-							</View>
-							<Text style={styles.productName} numberOfLines={2}>{item.name}</Text>
-							<View style={styles.priceRow}>
-								<Text style={styles.productPrice} numberOfLines={1} ellipsizeMode="tail">GH₵{(item.price * (1 - (item.discount || 0) / 100)).toFixed(2)}</Text>
-								{(item.discount || 0) > 0 && (
-									<Text style={styles.originalPrice} numberOfLines={1} ellipsizeMode="tail">GH₵{item.price.toFixed(2)}</Text>
-								)}
-							</View>
-						</TouchableOpacity>
-					)}
-					keyExtractor={(item) => item.id}
-				/>
-			)}
-		</View>
-	);
-	};
-
-	// Render dynamic deal section for a pricing rule
-	const renderDealSection = (ruleName: string, ruleTitle: string, discountPercent: number) => {
-		const ruleProducts = productsByRule[ruleName] || [];
-		const firstFive = ruleProducts.slice(0, 5);
-
-		if (loadingDeals) {
-			return null; // Don't show anything while loading deals
-		}
-
-		if (firstFive.length === 0) {
-			return null;
-		}
-
-		return (
-		<View style={styles.section}>
-			<View style={styles.sectionHeader}>
-				<TouchableOpacity 
-					style={styles.sectionTitleContainer}
-					onPress={() => {
-						(navigation as any).navigate('PricingRules', { ruleName });
-					}}
-					activeOpacity={0.7}
-				>
-					<View>
-						<Text style={styles.sectionTitle}>{ruleTitle}</Text>
-						<Text style={styles.sectionSubtitle}>{discountPercent}% off</Text>
-					</View>
-				</TouchableOpacity>
-				{ruleProducts.length > 5 && (
-					<TouchableOpacity 
-						onPress={() => {
-							const dealsToNavigate = Array.isArray(ruleProducts) ? ruleProducts : [];
-							(navigation as any).navigate('AllDeals', { deals: dealsToNavigate });
-						}}
-						activeOpacity={0.7}
-					>
-						<Text style={styles.viewMoreText}>View more {'>'}</Text>
-					</TouchableOpacity>
-				)}
-			</View>
-			<FlatList
-					data={firstFive}
-				horizontal
-				showsHorizontalScrollIndicator={false}
-				contentContainerStyle={styles.productsList}
-					renderItem={({ item }: { item: any }) => (
-						<TouchableOpacity 
-							style={styles.productCard}
-							onPress={() => (navigation as any).navigate('ProductDetails', { productId: item.id })}
-						>
-						<View style={styles.productImage}>
-								{item.images && item.images.length > 0 && item.images[0] ? (
-									<ErpAuthenticatedImage
-										uri={item.images[0]}
-										style={styles.productImageContent}
-										resizeMode="cover"
-									/>
-								) : (
-									<View style={styles.productImagePlaceholder}>
-										<Ionicons name="image-outline" size={24} color={Colors.TEXT_SECONDARY} />
-						</View>
-								)}
-								{item.discount > 0 && (
-									<View style={styles.discountTag}>
-										<Text style={styles.discountText}>-{Math.round(item.discount)}%</Text>
-					</View>
-				)}
-		</View>
-							<Text style={styles.productName} numberOfLines={2}>{item.name}</Text>
-							<View style={styles.priceRow}>
-								<Text style={styles.productPrice} numberOfLines={1} ellipsizeMode="tail">GH₵{(item.price * (1 - item.discount / 100)).toFixed(2)}</Text>
-								{item.discount > 0 && (
-									<Text style={styles.originalPrice} numberOfLines={1} ellipsizeMode="tail">GH₵{item.price.toFixed(2)}</Text>
-								)}
-				</View>
-						</TouchableOpacity>
-				)}
-				keyExtractor={(item) => item.id}
-			/>
-		</View>
-	);
-	};
-
-	const renderFilterTabs = () => {
-		return (
-		<View 
-			ref={filterTabsLayoutRef}
-				style={[
-					styles.filterTabs,
-					styles.filterTabsNormal, // Apply margin only when not sticky
-					isScrolledPastFilterTabs && { opacity: 0 } // Hide when sticky overlay is shown
-				]}
-			onLayout={(e) => {
-				const { y } = e.nativeEvent.layout;
-				sectionLayouts.current['filterTabs'] = y;
-			}}
-		>
-				{filterTabs.map((tab) => {
-					if (!tab.name) return null;
-					return (
-				<TouchableOpacity
-					key={tab.id}
-					style={[
-						styles.filterTab,
-						selectedFilter === tab.name && styles.filterTabActive
-					]}
-					onPress={() => {
-						// If switching from "For You" to another filter, set flag to scroll
-						if (selectedFilter === 'For You' && tab.name !== 'For You' && selectedCategory === 'All') {
-							setShouldScrollToFilterTabs(true);
-						}
-						setSelectedFilter(tab.name);
-					}}
-				>
-					{tab.icon && (
-						<Ionicons 
-							name={tab.icon as any} 
-							size={16} 
-							color={selectedFilter === tab.name ? Colors.WHITE : Colors.BLACK} 
-						/>
-					)}
-					<Text style={[
-						styles.filterTabText,
-						selectedFilter === tab.name && styles.filterTabTextActive
-					]}>
-						{tab.name}
-					</Text>
-				</TouchableOpacity>
-					);
-				})}
-		</View>
-	);
-	};
-
-
-	// Memoized renderItem for "New In" products (New Arrivals)
-	const renderNewInItem = useCallback(({ item, index }: { item: any; index: number }) => {
-		const isLeftColumn = index % 2 === 0;
-		const row = Math.floor(index / 2);
-		const patterns = [
-			['tall', 'short'],
-			['medium', 'tall'],
-			['short', 'medium'],
-			['tall', 'short'],
-			['medium', 'tall'],
-		];
-		const patternIndex = row % patterns.length;
-		const variant = (isLeftColumn 
-			? patterns[patternIndex][0] 
-			: patterns[patternIndex][1]
-		) as 'tall' | 'medium' | 'short';
-		
-		// Get discount from pricing rules
-		const discount = getProductDiscount(item, pricingRules);
-		
-		return (
-						<ProductCard
-							product={item}
-							onPress={(productId) => {
-								(navigation as any).navigate('ProductDetails', { productId });
-							}}
-				onCartPress={async (productId, animationData) => {
-					if (!user?.email) {
-						Alert.alert('Login Required', 'Please log in to add items to your cart.');
-						return;
-					}
-					
-					try {
-						const itemCode = item.itemCode || productId;
-						const success = await addItemToCart(itemCode, 1);
-						if (success) {
-							// Trigger animation if data is available
-							if (animationData) {
-								const endX = width - 60; // Approx position of cart icon
-								const endY = 50; // Approx position of cart icon
-								setAnimationStartPos(animationData.startPos);
-								setAnimationEndPos({ x: endX, y: endY });
-								setAnimationProductImage(animationData.productImage);
-								setShowCartAnimation(true);
-							} else {
-								setToastMessage('Item added to cart!');
-								setToastVisible(true);
-							}
-						}
-					} catch (error) {
-						console.error('Error adding to cart:', error);
-						Alert.alert('Error', 'Failed to add item to cart. Please try again.');
-					}
-				}}
-				onWishlistPress={async (productId) => {
-					// Prevent multiple simultaneous operations on the same item
-					if (pendingOperations.has(productId)) {
-						return;
-					}
-					
-					const isWishlisted = wishlistedProductIds.has(productId);
-					
-					// Mark operation as pending
-					setPendingOperations(prev => new Set(prev).add(productId));
-					
-					// Optimistic update - immediately update UI
-					setOptimisticWishlist(prev => {
-						const newSet = new Set(prev);
-						if (isWishlisted) {
-							newSet.delete(productId);
-						} else {
-							newSet.add(productId);
-						}
-						return newSet;
-					});
-					
-					try {
-						const success = await toggleWishlist(productId, isWishlisted);
-						if (!success) {
-							// Revert optimistic update on failure
-							setOptimisticWishlist(prev => {
-								const newSet = new Set(prev);
-								if (isWishlisted) {
-									newSet.add(productId); // Re-add if removal failed
-								} else {
-									newSet.delete(productId); // Remove if add failed
-								}
-								return newSet;
-							});
-						}
-						// refreshWishlist is called automatically by useWishlistActions
-					} finally {
-						// Remove from pending immediately after operation completes
-						// This allows immediate toggling back and forth
-						setPendingOperations(prev => {
-							const newSet = new Set(prev);
-							newSet.delete(productId);
-							return newSet;
-						});
-					}
-				}}
-				isWishlisted={wishlistedProductIds.has(item.id)}
-				style={styles.newInProductCard}
-				variant={variant}
-				pricingDiscount={discount}
-						/>
-		);
-	}, [navigation, wishlistedProductIds, toggleWishlist, pricingRules, user, addItemToCart, pendingOperations]);
-
-	// Memoized renderItem for "Deals" products
-	const renderDealItem = useCallback(({ item, index }: { item: any; index: number }) => {
-		const isLeftColumn = index % 2 === 0;
-		const row = Math.floor(index / 2);
-		const patterns = [
-			['tall', 'short'],
-			['medium', 'tall'],
-			['short', 'medium'],
-			['tall', 'short'],
-			['medium', 'tall'],
-		];
-		const patternIndex = row % patterns.length;
-		const variant = (isLeftColumn 
-			? patterns[patternIndex][0] 
-			: patterns[patternIndex][1]
-		) as 'tall' | 'medium' | 'short';
-		
-		// Get discount from pricing rules (item already has discount from the hook)
-		const discount = item.discount || getProductDiscount(item, pricingRules);
-		
-		return (
-			<ProductCard
-				product={item}
-				onPress={(productId) => {
-					(navigation as any).navigate('ProductDetails', { productId });
-				}}
-				onCartPress={async (productId, animationData) => {
-					if (!user?.email) {
-						Alert.alert('Login Required', 'Please log in to add items to your cart.');
-						return;
-					}
-					
-					try {
-						const itemCode = item.itemCode || productId;
-						const success = await addItemToCart(itemCode, 1);
-						if (success) {
-							// Trigger animation if data is available
-							if (animationData) {
-								const endX = width - 60; // Approx position of cart icon
-								const endY = 50; // Approx position of cart icon
-								setAnimationStartPos(animationData.startPos);
-								setAnimationEndPos({ x: endX, y: endY });
-								setAnimationProductImage(animationData.productImage);
-								setShowCartAnimation(true);
-							} else {
-								setToastMessage('Item added to cart!');
-								setToastVisible(true);
-							}
-						}
-					} catch (error) {
-						console.error('Error adding to cart:', error);
-						Alert.alert('Error', 'Failed to add item to cart. Please try again.');
-					}
-				}}
-				onWishlistPress={async (productId) => {
-					// Prevent multiple simultaneous operations on the same item
-					if (pendingOperations.has(productId)) {
-						return;
-					}
-					
-					const isWishlisted = wishlistedProductIds.has(productId);
-					
-					// Mark operation as pending
-					setPendingOperations(prev => new Set(prev).add(productId));
-					
-					// Optimistic update - immediately update UI
-					setOptimisticWishlist(prev => {
-						const newSet = new Set(prev);
-						if (isWishlisted) {
-							newSet.delete(productId);
-						} else {
-							newSet.add(productId);
-						}
-						return newSet;
-					});
-					
-					try {
-						const success = await toggleWishlist(productId, isWishlisted);
-						if (!success) {
-							// Revert optimistic update on failure
-							setOptimisticWishlist(prev => {
-								const newSet = new Set(prev);
-								if (isWishlisted) {
-									newSet.add(productId); // Re-add if removal failed
-								} else {
-									newSet.delete(productId); // Remove if add failed
-								}
-								return newSet;
-							});
-						}
-						// refreshWishlist is called automatically by useWishlistActions
-					} finally {
-						// Remove from pending immediately after operation completes
-						// This allows immediate toggling back and forth
-						setPendingOperations(prev => {
-							const newSet = new Set(prev);
-							newSet.delete(productId);
-							return newSet;
-						});
-					}
-				}}
-				isWishlisted={wishlistedProductIds.has(item.id)}
-				style={styles.dealProductCard}
-				variant={variant}
-				pricingDiscount={discount}
-			/>
-	);
-	}, [navigation, wishlistedProductIds, toggleWishlist, pricingRules, user, addItemToCart, pendingOperations]);
-
-	const renderMainProducts = () => {
-		// Only show main products when "Best Sellers" is selected
-		if (selectedFilter !== 'Best Sellers') {
-			return null;
-		}
-
-	// Show empty state for Best Sellers since top items data removed
-		const bestSellerProducts = [];
-
-		return (
-			<View 
-				ref={mainProductsLayoutRef}
-				style={styles.mainProducts}
-				onLayout={(e) => {
-					const { y } = e.nativeEvent.layout;
-					sectionLayouts.current['mainProducts'] = y;
-				}}
-			>
-				{bestSellerProducts.length === 0 ? (
-					<View style={styles.emptyContainer}>
-						<Text style={styles.emptyText}>No best sellers available</Text>
-					</View>
-				) : (
-					<FlatList
-					data={bestSellerProducts}
-					numColumns={2}
-					showsVerticalScrollIndicator={false}
-					contentContainerStyle={styles.productsList}
-					scrollEnabled={false}
-					renderItem={({ item, index }) => {
-						const isLeftColumn = index % 2 === 0;
-						const row = Math.floor(index / 2);
-						const patterns = [
-							['tall', 'short'],
-							['medium', 'tall'],
-							['short', 'medium'],
-							['tall', 'short'],
-							['medium', 'tall'],
-						];
-						const patternIndex = row % patterns.length;
-						const variant = (isLeftColumn 
-							? patterns[patternIndex][0] 
-							: patterns[patternIndex][1]
-						) as 'tall' | 'medium' | 'short';
-						
-						// Get discount from pricing rules
-						const discount = getProductDiscount(item, pricingRules);
-						
-						return (
-							<ProductCard
-								product={item}
-								onPress={(productId) => {
-									(navigation as any).navigate('ProductDetails', { productId });
-								}}
-								onCartPress={async (productId, animationData) => {
-									console.log('HomeScreen: onCartPress called', { productId, hasAnimationData: !!animationData, animationData });
-									if (!user?.email) {
-										Alert.alert('Login Required', 'Please log in to add items to your cart.');
-										return;
-									}
-									
-									try {
-										// Use item.itemCode if available, otherwise fallback to productId
-										const itemCode = item.itemCode || productId;
-										const success = await addItemToCart(itemCode, 1);
-										console.log('HomeScreen: addItemToCart result', { success, hasAnimationData: !!animationData });
-										if (success) {
-											// Trigger animation if data is available
-											if (animationData) {
-												const endX = width - 60; // Approx position of cart icon
-												const endY = 50; // Approx position of cart icon
-												console.log('HomeScreen: Setting animation state', {
-													startPos: animationData.startPos,
-													endPos: { x: endX, y: endY },
-													productImage: animationData.productImage
-												});
-												setAnimationStartPos(animationData.startPos);
-												setAnimationEndPos({ x: endX, y: endY });
-												setAnimationProductImage(animationData.productImage);
-												setShowCartAnimation(true);
-												console.log('HomeScreen: Animation state set, showCartAnimation should be true');
-											} else {
-												console.log('HomeScreen: No animation data, item added to cart:', itemCode);
-											}
-										}
-									} catch (error) {
-										console.error('Error adding to cart:', error);
-										Alert.alert('Error', 'Failed to add item to cart. Please try again.');
-									}
-								}}
-								onWishlistPress={async (productId) => {
-									// Prevent multiple simultaneous operations on the same item
-									if (pendingOperations.has(productId)) {
-										return;
-									}
-									
-									const isWishlisted = wishlistedProductIds.has(productId);
-									
-									// Mark operation as pending
-									setPendingOperations(prev => new Set(prev).add(productId));
-									
-									// Optimistic update - immediately update UI
-									setOptimisticWishlist(prev => {
-										const newSet = new Set(prev);
-										if (isWishlisted) {
-											newSet.delete(productId);
-										} else {
-											newSet.add(productId);
-										}
-										return newSet;
-									});
-									
-									try {
-										const success = await toggleWishlist(productId, isWishlisted);
-										if (!success) {
-											// Revert optimistic update on failure
-											setOptimisticWishlist(prev => {
-												const newSet = new Set(prev);
-												if (isWishlisted) {
-													newSet.add(productId); // Re-add if removal failed
-												} else {
-													newSet.delete(productId); // Remove if add failed
-												}
-												return newSet;
-											});
-										}
-										// refreshWishlist is called automatically by useWishlistActions
-									} finally {
-										// Remove from pending immediately after operation completes
-										// This allows immediate toggling back and forth
-										setPendingOperations(prev => {
-											const newSet = new Set(prev);
-											newSet.delete(productId);
-											return newSet;
-										});
-									}
-								}}
-								isWishlisted={wishlistedProductIds.has(item.id)}
-								style={styles.mainProductCard}
-								variant={variant}
-								pricingDiscount={discount}
-							/>
-						);
-					}}
-					keyExtractor={(item) => item.id}
-				/>
-				)}
-			</View>
-		);
-	};
-
-	const renderCategoryProducts = () => {
-		// Only show category products when a specific category is selected (not "All")
-		if (selectedCategory === 'All') {
-			return null;
-		}
-
-		return (
-			<View style={styles.categoryView}>
-				{isLoadingProducts ? (
-					<ProductCardSkeletonList count={6} numColumns={2} />
-				) : productsError ? (
-					<View style={styles.errorContainer}>
-						<Ionicons name="alert-circle-outline" size={24} color={Colors.ERROR} />
-						<Text style={styles.errorText}>Failed to load {selectedCategory} items</Text>
-						<Text style={styles.errorSubtext}>{productsError.message}</Text>
-					</View>
-				) : displayedProducts && displayedProducts.length > 0 ? (
-					<FlatList
-						key={`category-${selectedCategory}`}
-						data={displayedProducts}
-						numColumns={2}
-						showsVerticalScrollIndicator={false}
-						contentContainerStyle={styles.categoryProductsList}
-						columnWrapperStyle={styles.categoryProductRow}
-						renderItem={({ item, index }) => {
-							const isLeftColumn = index % 2 === 0;
-							const row = Math.floor(index / 2);
-							const patterns = [
-								['tall', 'short'],
-								['medium', 'tall'],
-								['short', 'medium'],
-							];
-							const patternIndex = row % patterns.length;
-							const variant = (isLeftColumn 
-								? patterns[patternIndex][0] 
-								: patterns[patternIndex][1]
-							) as 'tall' | 'medium' | 'short';
-							
-							return (
-							<ProductCard
-								product={item}
-								onPress={(productId) => {
-									(navigation as any).navigate('ProductDetails', { productId });
-								}}
-								onCartPress={async (productId, animationData) => {
-									console.log('HomeScreen: onCartPress called (Best Sellers)', { productId, hasAnimationData: !!animationData, animationData });
-									if (!user?.email) {
-										Alert.alert('Login Required', 'Please log in to add items to your cart.');
-										return;
-									}
-									
-									try {
-										const itemCode = item.itemCode || productId;
-										const success = await addItemToCart(itemCode, 1);
-										console.log('HomeScreen: addItemToCart result (Best Sellers)', { success, hasAnimationData: !!animationData });
-										if (success) {
-											// Trigger animation if data is available
-											if (animationData) {
-												const endX = width - 60; // Approx position of cart icon
-												const endY = 50; // Approx position of cart icon
-												console.log('HomeScreen: Setting animation state (Best Sellers)', {
-													startPos: animationData.startPos,
-													endPos: { x: endX, y: endY },
-													productImage: animationData.productImage
-												});
-												setAnimationStartPos(animationData.startPos);
-												setAnimationEndPos({ x: endX, y: endY });
-												setAnimationProductImage(animationData.productImage);
-												setShowCartAnimation(true);
-												console.log('HomeScreen: Animation state set (Best Sellers), showCartAnimation should be true');
-											} else {
-												console.log('HomeScreen: No animation data (Best Sellers), item added to cart:', itemCode);
-											}
-										}
-									} catch (error) {
-										console.error('Error adding to cart:', error);
-										Alert.alert('Error', 'Failed to add item to cart. Please try again.');
-									}
-								}}
-								onWishlistPress={async (productId) => {
-									const isWishlisted = wishlistedProductIds.has(productId);
-									const success = await toggleWishlist(productId, isWishlisted);
-									if (success) {
-										refreshWishlist(); // Refresh wishlist to update UI
-									}
-								}}
-								isWishlisted={wishlistedProductIds.has(item.id)}
-								style={styles.categoryProductCard}
-								variant={variant}
-								pricingDiscount={getProductDiscount(item, pricingRules)}
-							/>
-							);
-						}}
-						keyExtractor={(item) => item.id}
-					/>
-				) : (
-					<View style={styles.emptyContainer}>
-						<Ionicons name="grid-outline" size={48} color={Colors.TEXT_SECONDARY} />
-						<Text style={styles.emptyText}>No items found in {selectedCategory}</Text>
-					</View>
-				)}
-			</View>
-		);
-	};
-
-	const renderRecentOrders = () => {
-		const topThreeOrders = (recentOrders || []).slice(0, 3) as Order[];
-		const lastIndex = topThreeOrders.length - 1;
-		return (
-			<View style={styles.recentOrdersSection}>
-				<View style={styles.recentOrdersHeader}>
-					<View style={styles.recentOrdersTitleBlock}>
-						<Text style={styles.recentOrdersKicker}>Orders</Text>
-						<Text style={styles.recentOrdersTitle}>Recent activity</Text>
-					</View>
-					<TouchableOpacity
-						style={styles.viewAllButton}
-						onPress={() => (navigation as any).navigate('OrderHistory')}
-						activeOpacity={0.7}
-						hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-					>
-						<Text style={styles.viewAllText}>View all</Text>
-					</TouchableOpacity>
-				</View>
-
-				{recentOrdersLoading ? (
-					<View style={styles.recentOrdersLoadingBox}>
-						<ActivityIndicator size="small" color={Colors.WINE} />
-						<Text style={styles.recentOrdersLoadingText}>Loading recent orders...</Text>
-					</View>
-				) : topThreeOrders.length === 0 ? (
-					<View style={styles.recentOrderEmptyWrap}>
-						<View style={styles.recentOrderEmptyIconWrap}>
-							<Ionicons name="receipt-outline" size={18} color={Colors.WINE} />
-						</View>
-						<Text style={styles.recentOrderEmptyTitle}>No recent orders</Text>
-						<Text style={styles.recentOrderEmptyText}>
-							Your latest purchases will appear here with totals and status updates.
-						</Text>
-						<TouchableOpacity
-							onPress={() => (navigation as any).navigate('Categories')}
-							activeOpacity={0.7}
-							hitSlop={{ top: 8, bottom: 8 }}
-						>
-							<Text style={styles.recentOrderEmptyLink}>Start shopping</Text>
-						</TouchableOpacity>
-					</View>
-				) : (
-					<View style={styles.recentOrdersList}>
-						{topThreeOrders.map((order, index) => {
-							const status =
-								RECENT_ORDER_STATUS_CONFIG[order.status] || RECENT_ORDER_STATUS_CONFIG.pending;
-							const itemCount = order.items?.length || 0;
-							const total = typeof order.total === 'number' ? order.total : 0;
-							const orderLabel = order.orderNumber
-								? String(order.orderNumber).replace(/^#/, '')
-								: String(order.id);
-							return (
-								<TouchableOpacity
-									key={order.id || order.orderNumber}
-									style={[
-										styles.recentOrderRow,
-										index === lastIndex && styles.recentOrderRowLast,
-									]}
-									onPress={() => (navigation as any).navigate('OrderDetails', { orderId: order.id })}
-									activeOpacity={0.8}
-								>
-									<View style={styles.recentOrderRowTop}>
-										<View style={styles.recentOrderIdPill}>
-											<Text style={styles.recentOrderIdPillText} numberOfLines={1}>
-												{orderLabel}
-											</Text>
-										</View>
-										<View style={styles.recentOrderAmountWrap}>
-											<Text style={styles.recentOrderAmount}>{formatGhanaCedis(total)}</Text>
-											<Ionicons name="chevron-forward" size={16} color={Colors.WINE} />
-										</View>
-									</View>
-
-									<View style={styles.recentOrderRowBottom}>
-										<Text style={styles.recentOrderMeta} numberOfLines={1}>
-											{formatRecentOrderDate(order.createdAt)}
-											{itemCount > 0
-												? ` • ${itemCount} item${itemCount !== 1 ? 's' : ''}`
-												: ''}
-										</Text>
-										<View style={[styles.recentOrderStatusChip, { backgroundColor: `${status.color}18` }]}>
-											<Text style={[styles.recentOrderStatusLabel, { color: status.color }]}>
-												{status.label}
-											</Text>
-										</View>
-									</View>
-								</TouchableOpacity>
-							);
-						})}
-					</View>
-				)}
-			</View>
-		);
-	};
-
-	type SectionItem = { 
-		type: string; 
-		id: string; 
-		data?: any;
-		ruleName?: string;
-		ruleTitle?: string;
-		discountPercent?: number;
-	};
-	
-	// Memoized renderItem for "For You" products FlatList
-	const renderForYouItem = useCallback(({ item, index }: { item: any; index: number }) => {
-		const isLeftColumn = index % 2 === 0;
-		const row = Math.floor(index / 2);
-		const patterns = [
-			['tall', 'short'],
-			['medium', 'tall'],
-			['short', 'medium'],
-			['tall', 'short'],
-			['medium', 'tall'],
-		];
-		const patternIndex = row % patterns.length;
-		const variant = (isLeftColumn 
-			? patterns[patternIndex][0] 
-			: patterns[patternIndex][1]
-		) as 'tall' | 'medium' | 'short';
-		
-		return (
-		<ProductCard
-			product={item}
-			onPress={(productId) => {
-				(navigation as any).navigate('ProductDetails', { productId });
-			}}
-			onCartPress={async (productId, animationData) => {
-				console.log('HomeScreen: onCartPress called (For You)', { productId, hasAnimationData: !!animationData, animationData });
-				if (!user?.email) {
-					Alert.alert('Login Required', 'Please log in to add items to your cart.');
-					return;
-				}
-				
-				try {
-					const itemCode = item.itemCode || productId;
-					const success = await addItemToCart(itemCode, 1);
-					console.log('HomeScreen: addItemToCart result (For You)', { success, hasAnimationData: !!animationData });
-					if (success) {
-						// Trigger animation if data is available
-						if (animationData) {
-							const endX = width - 60; // Approx position of cart icon
-							const endY = 50; // Approx position of cart icon
-							console.log('HomeScreen: Setting animation state (For You)', {
-								startPos: animationData.startPos,
-								endPos: { x: endX, y: endY },
-								productImage: animationData.productImage
-							});
-							setAnimationStartPos(animationData.startPos);
-							setAnimationEndPos({ x: endX, y: endY });
-							setAnimationProductImage(animationData.productImage);
-							setShowCartAnimation(true);
-							console.log('HomeScreen: Animation state set (For You), showCartAnimation should be true');
-						} else {
-							console.log('HomeScreen: No animation data (For You), item added to cart:', itemCode);
-						}
-					}
-				} catch (error) {
-					console.error('Error adding to cart:', error);
-					Alert.alert('Error', 'Failed to add item to cart. Please try again.');
-				}
-			}}
-			onWishlistPress={async (productId) => {
-				// Prevent multiple simultaneous operations on the same item
-				if (pendingOperations.has(productId)) {
-					return;
-				}
-				
-				const isWishlisted = wishlistedProductIds.has(productId);
-				
-				// Mark operation as pending
-				setPendingOperations(prev => new Set(prev).add(productId));
-				
-				// Optimistic update - immediately update UI
-				setOptimisticWishlist(prev => {
-					const newSet = new Set(prev);
-					if (isWishlisted) {
-						newSet.delete(productId);
-					} else {
-						newSet.add(productId);
-					}
-					return newSet;
-				});
-				
-				try {
-					const success = await toggleWishlist(productId, isWishlisted);
-					if (!success) {
-						// Revert optimistic update on failure
-						setOptimisticWishlist(prev => {
-							const newSet = new Set(prev);
-							if (isWishlisted) {
-								newSet.add(productId); // Re-add if removal failed
-							} else {
-								newSet.delete(productId); // Remove if add failed
-							}
-							return newSet;
-						});
-					}
-					// refreshWishlist is called automatically by useWishlistActions
-				} finally {
-					// Remove from pending immediately after operation completes
-					// This allows immediate toggling back and forth
-					setPendingOperations(prev => {
-						const newSet = new Set(prev);
-						newSet.delete(productId);
-						return newSet;
-					});
-				}
-			}}
-			isWishlisted={wishlistedProductIds.has(item.id)}
-			style={styles.forYouProductCard}
-			variant={variant}
-		/>
-	);
-	}, [navigation, wishlistedProductIds, toggleWishlist, refreshWishlist]);
-	
-	const renderSection = useCallback(({ item }: { item: SectionItem }) => {
-		switch (item.type) {
-			case 'flyerCarousel':
-				return renderFlyerCarousel();
-			case 'recentOrders':
-				return renderRecentOrders();
-			case 'topCustomerAward':
-				return null;
-			case 'topItemsCarousel':
-				// This case is now handled within topCustomerAward case
-				return null;
-			case 'categoryTabs':
-				// Category tabs are now rendered as overlay, return null here
-				return null;
-			case 'shippingBanner':
-				return renderShippingBanner();
-			case 'categoryImages':
-				return renderCategoryImages();
-			case 'superDeals':
-				return renderSuperDeals();
-			case 'pricingRule':
-				return renderDealSection(
-					item.ruleName || '',
-					item.ruleTitle || 'Deal',
-					item.discountPercent || 0
-				);
-			case 'filterTabs':
-				return renderFilterTabs();
-			case 'mainProducts':
-				// Only render mainProducts when filter is "Best Sellers"
-				if (selectedFilter === 'For You' || selectedFilter === 'New In' || selectedFilter === 'Deals') {
-					return null;
-				}
-				return renderMainProducts();
-			case 'forYouProducts':
-				// Only render forYouProducts when filter IS "For You"
-				if (selectedFilter !== 'For You' || selectedCategory !== 'All') {
-					return null;
-				}
-				// Render "For You" products in a grid
-				return (
-					<View style={styles.forYouProductsSection}>
-						<FlatList
-							data={sortedForYouProducts}
-							numColumns={2}
-							showsVerticalScrollIndicator={false}
-							contentContainerStyle={styles.forYouProductsList}
-							columnWrapperStyle={styles.forYouProductRow}
-							scrollEnabled={false}
-							renderItem={renderForYouItem}
-							keyExtractor={(item) => item.id}
-							removeClippedSubviews={true}
-							initialNumToRender={6}
-							maxToRenderPerBatch={4}
-							windowSize={10}
-							ListEmptyComponent={
-							forYouError ? (
-									<View style={styles.errorContainer}>
-										<Ionicons name="alert-circle-outline" size={24} color={Colors.ERROR} />
-										<Text style={styles.errorText}>Failed to load products</Text>
-										<Text style={styles.errorSubtext}>{forYouError.message}</Text>
-									</View>
-								) : (
-									<View style={styles.emptyContainer}>
-										<Text style={styles.emptyText}>No products available</Text>
-									</View>
-								)
-							}
-							ListFooterComponent={
-							!forYouHasMore && forYouProducts.length > 0 ? (
-									<View style={styles.loadMoreContainer}>
-										<Text style={styles.loadMoreText}>No more products</Text>
-									</View>
-								) : null
-							}
-						/>
-					</View>
-				);
-			case 'newInProducts':
-				// Only render newInProducts when filter IS "New In"
-				if (selectedFilter !== 'New In' || selectedCategory !== 'All') {
-					return null;
-				}
-				// Render "New In" products (New Arrivals) in a grid
-				return (
-					<View style={styles.newInProductsSection}>
-						<FlatList
-							data={newArrivals || []}
-							numColumns={2}
-							showsVerticalScrollIndicator={false}
-							contentContainerStyle={styles.newInProductsList}
-							columnWrapperStyle={styles.newInProductRow}
-							scrollEnabled={false}
-							renderItem={renderNewInItem}
-							keyExtractor={(item) => item.id}
-							removeClippedSubviews={true}
-							initialNumToRender={6}
-							maxToRenderPerBatch={4}
-							windowSize={10}
-							ListEmptyComponent={
-							newArrivalsError ? (
-									<View style={styles.errorContainer}>
-										<Ionicons name="alert-circle-outline" size={24} color={Colors.ERROR} />
-										<Text style={styles.errorText}>Failed to load new arrivals</Text>
-										<Text style={styles.errorSubtext}>{newArrivalsError.message}</Text>
-									</View>
-								) : (
-									<View style={styles.emptyContainer}>
-										<Text style={styles.emptyText}>No new arrivals available</Text>
-									</View>
-								)
-							}
-							ListFooterComponent={
-							!newArrivalsHasMore && newArrivals.length > 0 ? (
-									<View style={styles.loadMoreContainer}>
-										<Text style={styles.loadMoreText}>No more products</Text>
-									</View>
-								) : null
-							}
-						/>
-					</View>
-				);
-			case 'dealProducts':
-				// Only render dealProducts when filter IS "Deals"
-				if (selectedFilter !== 'Deals' || selectedCategory !== 'All') {
-					return null;
-				}
-				// Render "Deals" products in a grid
-				return (
-					<View style={styles.dealProductsSection}>
-						<FlatList
-							data={dealProducts || []}
-							numColumns={2}
-							showsVerticalScrollIndicator={false}
-							contentContainerStyle={styles.dealProductsList}
-							columnWrapperStyle={styles.dealProductRow}
-							scrollEnabled={false}
-							renderItem={renderDealItem}
-							keyExtractor={(item) => item.id}
-							removeClippedSubviews={true}
-							initialNumToRender={6}
-							maxToRenderPerBatch={4}
-							windowSize={10}
-							ListEmptyComponent={
-							dealProductsError ? (
-									<View style={styles.errorContainer}>
-										<Ionicons name="alert-circle-outline" size={24} color={Colors.ERROR} />
-										<Text style={styles.errorText}>Failed to load deals</Text>
-										<Text style={styles.errorSubtext}>Please try again later</Text>
-									</View>
-								) : (
-									<View style={styles.emptyContainer}>
-										<Text style={styles.emptyText}>No deals available</Text>
-									</View>
-								)
-							}
-							ListFooterComponent={
-							!dealProductsHasMore && dealProducts.length > 0 ? (
-									<View style={styles.loadMoreContainer}>
-										<Text style={styles.loadMoreText}>No more products</Text>
-									</View>
-								) : null
-							}
-						/>
-					</View>
-				);
-			default:
-				return null;
-		}
-	}, [
-		selectedCategory,
-		selectedFilter,
-		renderHeader,
-		renderShippingBanner,
-		renderSuperDeals,
-		renderDealSection,
-		renderFilterTabs,
-		renderMainProducts,
-		renderForYouItem,
-		renderNewInItem,
-		renderDealItem,
-		flyerMedia,
-		forYouProducts,
-		dealProducts,
-		forYouLoading,
-		forYouError,
-		forYouLoadingMore,
-		forYouHasMore,
-		forYouLoadMore,
-		newArrivals,
-		newArrivalsError,
-		newArrivalsHasMore,
-		newArrivalsLoadingMore,
-		newArrivalsLoading,
-		dealProducts,
-		dealProductsHasMore,
-		dealProductsLoadingMore,
-		dealProductsError,
-		allDealProducts,
-		pricingRules,
-	productsByRule,
-		navigation,
-	]);
-
-	// NOTE: We now use a single FlatList for all filters to prevent remounting and scroll resets
-	// The "For You" products are rendered as a section in the main list instead of a separate FlatList
-
-	// Calculate approximate heights for getItemLayout
-	// This helps FlatList scroll to the correct position immediately
-	// MUST be defined before useEffect that uses it
-	const getItemLayout = useCallback((data: any, index: number) => {
-		// Approximate section heights (in pixels)
-		const sectionHeights: { [key: string]: number } = {
-			'flyerCarousel': 350,
-			'shippingBanner': 80,
-			'categoryImages': 400, // 6 rows x ~65px per row
-			'latestCarousel': 280,
-			'newArrivals': 200,
-			'topCustomerAward': 200, // Increased to account for carousel
-			'superDeals': 120,
-			'pricingRule': 150, // Dynamic pricing rule sections
-			'filterTabs': 50,
-			'mainProducts': 200,
-			'forYouProducts': 0, // Height varies, will be calculated dynamically
-			'newInProducts': 0, // Height varies, will be calculated dynamically
-			'dealProducts': 0, // Height varies, will be calculated dynamically
-		};
-
-		let offset = 0;
-		for (let i = 0; i < index; i++) {
-			const section = sections[i];
-			if (section.id === 'forYouProducts' && selectedFilter === 'For You') {
-				// Estimate height based on number of products (2 columns, variable heights)
-				const estimatedRows = Math.ceil(forYouProducts.length / 2);
-				offset += estimatedRows * 250; // Average row height
-			} else if (section.id === 'newInProducts' && selectedFilter === 'New In') {
-				// Estimate height based on number of new arrivals (2 columns, variable heights)
-				const estimatedRows = Math.ceil((newArrivals?.length || 0) / 2);
-				offset += estimatedRows * 250; // Average row height
-			} else if (section.id === 'dealProducts' && selectedFilter === 'Deals') {
-				// Estimate height based on number of deal products (2 columns, variable heights)
-				const estimatedRows = Math.ceil((dealProducts?.length || 0) / 2);
-				offset += estimatedRows * 250; // Average row height
-			} else if (section.type === 'pricingRule') {
-				offset += sectionHeights['pricingRule'] || 150;
-			} else {
-				offset += sectionHeights[section.id] || 200; // Default to 200 if unknown
-			}
-		}
-
-		const currentSection = sections[index];
-		let length = currentSection?.type === 'pricingRule' 
-			? (sectionHeights['pricingRule'] || 150)
-			: (sectionHeights[currentSection?.id] || 200);
-		
-		// Special handling for forYouProducts (dynamic height)
-		if (currentSection?.id === 'forYouProducts' && selectedFilter === 'For You') {
-			const estimatedRows = Math.ceil(forYouProducts.length / 2);
-			length = estimatedRows * 250; // Average row height
-		}
-		
-		// Special handling for newInProducts (dynamic height)
-		if (currentSection?.id === 'newInProducts' && selectedFilter === 'New In') {
-			const estimatedRows = Math.ceil((newArrivals?.length || 0) / 2);
-			length = estimatedRows * 250; // Average row height
-		}
-		
-		// Special handling for dealProducts (dynamic height)
-		if (currentSection?.id === 'dealProducts' && selectedFilter === 'Deals') {
-			const estimatedRows = Math.ceil((dealProducts?.length || 0) / 2);
-			length = estimatedRows * 250; // Average row height
-		}
-
-		return {
-			length,
-			offset,
-			index,
-		};
-	}, [sections, selectedFilter, forYouProducts.length, newArrivals?.length, dealProducts?.length]);
-
-	// Store scroll position to restore when switching filters
-	const scrollPositionRef = useRef<number>(0);
-	const isScrollingRef = useRef<boolean>(false);
-
-	// Handle scroll position when switching from "For You" to another filter
-	// Use a ref to track if we need to scroll, and do it in onLayout of the first visible item
-	const needsScrollRef = useRef(false);
-	const targetScrollOffsetRef = useRef<number | null>(null);
-
-	useEffect(() => {
-		if (shouldScrollToFilterTabs && selectedFilter !== 'For You' && selectedCategory === 'All') {
-			const filterTabsIndex = sections.findIndex(s => s.id === 'filterTabs');
-			if (filterTabsIndex >= 0) {
-				const layout = getItemLayout(null, filterTabsIndex);
-				targetScrollOffsetRef.current = layout.offset;
-				needsScrollRef.current = true;
-				setShouldScrollToFilterTabs(false);
-				
-				// Try to scroll immediately if list is already mounted
-				if (mainListRef.current) {
-					// Use multiple strategies to scroll before paint
-					const scrollNow = () => {
-						if (mainListRef.current && targetScrollOffsetRef.current !== null) {
-							mainListRef.current.scrollToOffset({ 
-								offset: targetScrollOffsetRef.current,
-								animated: false
-							});
-							needsScrollRef.current = false;
-							targetScrollOffsetRef.current = null;
-						}
-					};
-					
-					// Try synchronously first (may not work if content not laid out)
-					scrollNow();
-					
-					// Then try on next frame
-					requestAnimationFrame(scrollNow);
-					
-					// And as a final fallback
-					setTimeout(scrollNow, 0);
-				}
-			}
-		}
-	}, [shouldScrollToFilterTabs, selectedFilter, selectedCategory, sections, getItemLayout]);
-
-	// Handle scroll when content size changes - this is our main opportunity to scroll
-	const handleContentSizeChange = useCallback((contentWidth: number, contentHeight: number) => {
-		if (needsScrollRef.current && targetScrollOffsetRef.current !== null && mainListRef.current) {
-			// Content is now laid out, scroll immediately
-			mainListRef.current.scrollToOffset({ 
-				offset: targetScrollOffsetRef.current,
-				animated: false
-			});
-			needsScrollRef.current = false;
-			targetScrollOffsetRef.current = null;
-		}
-	}, []);
-
-	// Handle infinite scroll for "For You", "New In", and "Deals" products
-	const handleEndReached = useCallback(() => {
-		if (selectedFilter === 'For You' && forYouHasMore && !forYouLoadingMore && !forYouLoading) {
-			forYouLoadMore();
-		} else if (selectedFilter === 'New In' && newArrivalsHasMore && !newArrivalsLoadingMore && !newArrivalsLoading) {
-			newArrivalsLoadMore();
-		} else if (selectedFilter === 'Deals' && dealProductsHasMore && !dealProductsLoadingMore) {
-			loadMoreDealProducts();
-		}
-	}, [selectedFilter, forYouHasMore, forYouLoadingMore, forYouLoading, forYouLoadMore, newArrivalsHasMore, newArrivalsLoadingMore, newArrivalsLoading, newArrivalsLoadMore, dealProductsHasMore, dealProductsLoadingMore, loadMoreDealProducts]);
-
-	// Track scroll position to maintain it when switching filters
-	const handleScroll = useCallback((event: any) => {
-		if (!isScrollingRef.current) {
-			scrollPositionRef.current = event.nativeEvent.contentOffset.y;
-		}
-		// Check if scrolled past carousel (350px height)
-		const scrollY = event.nativeEvent.contentOffset.y;
-		const carouselHeight = 350;
-		const scrolledPast = scrollY > carouselHeight - 50; // Start transition slightly before carousel ends
-		setIsScrolledPastCarousel(scrolledPast);
-		
-		// Animate header transitions smoothly
-		// Stop any running animations first to prevent conflicts
-		headerOpacity.stopAnimation();
-		headerBorderRadius.stopAnimation();
-		headerShadowOpacity.stopAnimation();
-		
-		// Run all animations with non-native driver to avoid conflicts
-		Animated.parallel([
-			Animated.timing(headerOpacity, {
-				toValue: scrolledPast ? 1 : 0,
-				duration: 300,
-				easing: Easing.out(Easing.cubic),
-				useNativeDriver: false, // backgroundColor doesn't support native driver
-			}),
-			Animated.timing(headerBorderRadius, {
-				toValue: scrolledPast ? 20 : 0,
-				duration: 300,
-				easing: Easing.out(Easing.cubic),
-				useNativeDriver: false,
-			}),
-			Animated.timing(headerShadowOpacity, {
-				toValue: scrolledPast ? 0.15 : 0,
-				duration: 300,
-				easing: Easing.out(Easing.cubic),
-				useNativeDriver: false,
-			}),
-		]).start();
-		
-		// Check if scrolled past filter tabs
-		// filterTabsY is the position in the FlatList content (relative to FlatList)
-		// scrollY is the scroll offset from the top of the FlatList
-		// When scrollY >= filterTabsY, we've scrolled past the filter tabs
-		const filterTabsY = sectionLayouts.current['filterTabs'];
-		if (filterTabsY !== undefined && filterTabsY > 0) {
-			// Set sticky when we've scrolled to where the filter tabs are
-			// Small threshold before the actual position to make it smooth
-			const threshold = 10;
-			const shouldBeSticky = scrollY >= filterTabsY - threshold;
-			setIsScrolledPastFilterTabs(shouldBeSticky);
-		} else {
-			// If filter tabs position hasn't been measured yet, keep it false
-			setIsScrolledPastFilterTabs(false);
-		}
-	}, []);
-
-	// Show loading screen on initial load
-	if (isInitialLoading) {
-		return <LoadingScreen />;
-	}
-
-	// Render sticky filter tabs overlay - only when scrolled past
-	const renderStickyFilterTabs = () => {
-		if (!isScrolledPastFilterTabs) return null;
-		
-		// Calculate position below header and category tabs:
-		// Header: insets.top - 16 + (24 + 5) + 42 + 8 = insets.top + 63
-		// Category Tabs: ~50px (with padding)
-		// Total: insets.top + 113
-		const topPosition = Math.max(insets.top - Spacing.PADDING_MD, 0) + (Spacing.PADDING_LG + 5) + 42 + Spacing.PADDING_SM + 50;
-		
-		return (
-			<View 
-				style={[
-					styles.filterTabs,
-					styles.filterTabsSticky,
-					{ 
-						top: topPosition,
-					}
-				]}
-			>
-				{filterTabs.map((tab) => {
-					if (!tab.name) return null;
-					return (
-						<TouchableOpacity
-							key={`sticky-${tab.id}`}
-							style={[
-								styles.filterTab,
-								selectedFilter === tab.name && styles.filterTabActive
-							]}
-							onPress={() => {
-								if (selectedFilter === 'For You' && tab.name !== 'For You' && selectedCategory === 'All') {
-									setShouldScrollToFilterTabs(true);
-								}
-								setSelectedFilter(tab.name);
-							}}
-						>
-							{tab.icon && (
-								<Ionicons 
-									name={tab.icon as any} 
-									size={16} 
-									color={selectedFilter === tab.name ? Colors.WHITE : Colors.WINE} 
-								/>
-							)}
-							<Text style={[
-								styles.filterTabText,
-								{ color: selectedFilter === tab.name ? Colors.WHITE : Colors.WINE },
-								selectedFilter === tab.name && styles.filterTabTextActiveStickyWhite
-							]}>
-								{tab.name}
-							</Text>
-						</TouchableOpacity>
-					);
-				})}
-			</View>
-		);
-	};
-
-	return (
-		<View style={styles.container}>
-			{/* Sticky filter tabs overlay - positioned absolutely over scrollable content */}
-			{isScrolledPastFilterTabs && renderStickyFilterTabs()}
-			<CartAnimation
-				visible={showCartAnimation}
-				startPosition={animationStartPos}
-				endPosition={animationEndPos}
-				productImage={animationProductImage}
-				onComplete={() => {
-					console.log('HomeScreen: Animation complete');
-					setShowCartAnimation(false);
-				}}
-			/>
-			<SafeAreaView style={styles.safeArea} edges={['bottom', 'left', 'right']}>
-			<Toast
-				message={toastMessage}
-				type="success"
-				visible={toastVisible}
-				onHide={() => setToastVisible(false)}
-			/>
-			{/* Header and Category Tabs positioned absolutely to overlay carousel */}
-			{renderHeader()}
-			<FlatList
-				ref={mainListRef}
-				key={mainListKey}
-				data={sections}
-				renderItem={renderSection}
-				keyExtractor={(item) => item.id}
-				showsVerticalScrollIndicator={false}
-				nestedScrollEnabled
-				ListFooterComponent={null}
-				getItemLayout={getItemLayout}
-				onContentSizeChange={handleContentSizeChange}
-				onScroll={handleScroll}
-				scrollEventThrottle={16}
-				onEndReached={(selectedFilter === 'For You' || selectedFilter === 'New In' || selectedFilter === 'Deals') ? handleEndReached : undefined}
-				onEndReachedThreshold={(selectedFilter === 'For You' || selectedFilter === 'New In' || selectedFilter === 'Deals') ? 0.5 : undefined}
-				removeClippedSubviews={true}
-				initialNumToRender={5}
-				maxToRenderPerBatch={3}
-				updateCellsBatchingPeriod={50}
-				windowSize={10}
-				refreshControl={
-					<RefreshControl
-						refreshing={refreshing}
-						onRefresh={onRefresh}
-						tintColor={Colors.SHEIN_PINK}
-						colors={[Colors.SHEIN_PINK]}
-					/>
-				}
-				maintainVisibleContentPosition={
-					// Prevent scroll jumps when content changes
-					needsScrollRef.current ? undefined : {
-						minIndexForVisible: 0,
-						autoscrollToTopThreshold: 100,
-					}
-				}
-			/>
-		</SafeAreaView>
-		</View>
-	);
+  const navigation = useNavigation();
+  const { t } = useTranslation();
+  const [refreshing, setRefreshing] = useState(false);
+  const [infoModalVisible, setInfoModalVisible] = useState(false);
+  const [resolvedCustomerId, setResolvedCustomerId] = useState('');
+  const { user } = useUserSession();
+  const { isActive: subscriptionActive, isLoading: subscriptionLoading } = useSubscription();
+
+  const { data: flyers, loading: flyersLoading, error: flyersError, refetch: refetchFlyers } = useFlyers();
+  const flyerScrollRef = useRef<ScrollView>(null);
+  const flyerIndexRef = useRef(0);
+  const flyersLenRef = useRef(0);
+  const flyersSigRef = useRef('');
+
+  const {
+    data: orders,
+    loading: ordersLoading,
+    error: ordersError,
+    refresh: refreshOrders,
+  } = useOrders(resolvedCustomerId, undefined, 20);
+
+  useEffect(() => {
+    let isMounted = true;
+    const resolveCustomer = async () => {
+      const sessionCustomerId = user?.user || '';
+      if (sessionCustomerId) {
+        if (isMounted) setResolvedCustomerId(sessionCustomerId);
+        return;
+      }
+      if (!user?.email) {
+        if (isMounted) setResolvedCustomerId('');
+        return;
+      }
+      try {
+        const client = (await import('../services/erpnext')).getERPNextClient();
+        const customer = await client.getCustomerByEmail(user.email);
+        if (isMounted) setResolvedCustomerId(customer?.name || '');
+      } catch {
+        if (isMounted) setResolvedCustomerId('');
+      }
+    };
+    void resolveCustomer();
+    return () => {
+      isMounted = false;
+    };
+  }, [user?.user, user?.email]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await refetchFlyers();
+      refreshOrders();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refetchFlyers, refreshOrders]);
+
+  const recentOrders = useMemo(() => {
+    if (!orders?.length) return [];
+    return [...orders]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 5);
+  }, [orders]);
+
+  useEffect(() => {
+    flyersLenRef.current = flyers?.length ?? 0;
+  }, [flyers?.length]);
+
+  useEffect(() => {
+    const list = flyers ?? [];
+    const sig = list.map((f: { name: string }) => f.name).join('\u0001');
+    if (sig === flyersSigRef.current) return;
+    flyersSigRef.current = sig;
+    flyerIndexRef.current = 0;
+    if (list.length > 0) {
+      requestAnimationFrame(() => {
+        flyerScrollRef.current?.scrollTo({ x: 0, animated: false });
+      });
+    }
+  }, [flyers]);
+
+  const onFlyerMomentumEnd = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const len = flyers?.length ?? 0;
+    if (len < 1) return;
+    const page = Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+    flyerIndexRef.current = Math.min(Math.max(0, page), len - 1);
+  }, [flyers?.length]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const len = flyers?.length ?? 0;
+      if (len < 2) return undefined;
+      const id = setInterval(() => {
+        const n = flyersLenRef.current;
+        if (n < 2) return;
+        flyerIndexRef.current = (flyerIndexRef.current + 1) % n;
+        flyerScrollRef.current?.scrollTo({
+          x: flyerIndexRef.current * SCREEN_WIDTH,
+          animated: true,
+        });
+      }, FLYER_AUTO_ADVANCE_MS);
+      return () => clearInterval(id);
+    }, [flyers?.length])
+  );
+
+  const goMessages = () => {
+    if (!user?.email) {
+      (navigation as any).navigate('Auth');
+      return;
+    }
+    if (!subscriptionLoading && !subscriptionActive) {
+      Alert.alert(t('suppliersPremium.menuBlockedTitle'), t('suppliersPremium.menuBlockedBody'), [
+        { text: t('settings.cancel'), style: 'cancel' },
+        {
+          text: t('suppliersPremium.subscribeCta'),
+          onPress: () => (navigation as any).navigate('Subscription'),
+        },
+      ]);
+      return;
+    }
+    (navigation as any).navigate('RavenChatInbox');
+  };
+
+  const goOrders = () => {
+    (navigation as any).navigate('OrderHistory');
+  };
+
+  const goAccount = () => {
+    (navigation as any).navigate('Profile');
+  };
+
+  const renderQuickActions = () => (
+    <View style={homeLayout.shortcutRow}>
+      <TouchableOpacity
+        style={[homeLayout.shortcutCell, homeLayout.shortcutCellBorder]}
+        activeOpacity={0.75}
+        onPress={goMessages}
+        accessibilityRole="button"
+        accessibilityLabel={t('home.quickMessages')}
+      >
+        <Ionicons name="chatbubbles-outline" size={22} color="#374151" />
+        <Text style={homeLayout.shortcutLabel}>{t('home.quickMessages')}</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[homeLayout.shortcutCell, homeLayout.shortcutCellBorder]}
+        activeOpacity={0.75}
+        onPress={goOrders}
+        accessibilityRole="button"
+        accessibilityLabel={t('home.quickOrders')}
+      >
+        <Ionicons name="receipt-outline" size={22} color="#374151" />
+        <Text style={homeLayout.shortcutLabel}>{t('home.quickOrders')}</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={homeLayout.shortcutCell}
+        activeOpacity={0.75}
+        onPress={goAccount}
+        accessibilityRole="button"
+        accessibilityLabel={t('home.quickAccount')}
+      >
+        <Ionicons name="person-circle-outline" size={22} color="#374151" />
+        <Text style={homeLayout.shortcutLabel}>{t('home.quickAccount')}</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const renderFlyerCarousel = () => {
+    if (flyersLoading) {
+      return (
+        <View style={homeLayout.flyerShell}>
+          <View style={[homeLayout.flyerFrame, { justifyContent: 'center', alignItems: 'center' }]}>
+            <ActivityIndicator size="large" color={Colors.SHEIN_PINK} />
+          </View>
+        </View>
+      );
+    }
+    if (flyersError || !flyers?.length) {
+      return (
+        <View style={homeLayout.flyerShell}>
+          <View style={[homeLayout.flyerEmpty, { minHeight: FLYER_H * 0.45 }]}>
+            <Ionicons name="images-outline" size={36} color="#D1D5DB" />
+            <Text style={homeLayout.flyerEmptyTitle}>{t('home.flyersHeading')}</Text>
+            <Text style={homeLayout.flyerEmptyText}>Nothing to show right now. Pull to refresh.</Text>
+          </View>
+        </View>
+      );
+    }
+    return (
+      <View style={homeLayout.flyerShell}>
+        <ScrollView
+          ref={flyerScrollRef}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          decelerationRate="fast"
+          snapToInterval={SCREEN_WIDTH}
+          snapToAlignment="start"
+          style={[styles.flyerCarouselScroll, { height: FLYER_H, width: SCREEN_WIDTH }]}
+          onMomentumScrollEnd={onFlyerMomentumEnd}
+        >
+          {flyers.map((flyer: { name: string; image: string | null }) => (
+            <TouchableOpacity
+              key={flyer.name}
+              activeOpacity={0.92}
+              style={[styles.flyerImageContainer, { width: SCREEN_WIDTH, height: FLYER_H }]}
+              onPress={() => {
+                (navigation as any).navigate('FlyerDetail', { flyerName: flyer.name });
+              }}
+            >
+              {flyer.image ? (
+                <ErpAuthenticatedImage uri={flyer.image} style={styles.flyerImage} resizeMode="cover" />
+              ) : (
+                <View style={styles.flyerPlaceholder}>
+                  <Ionicons name="image-outline" size={48} color={Colors.TEXT_SECONDARY} />
+                </View>
+              )}
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
+    );
+  };
+
+  const renderRecentOrders = () => {
+    if (!resolvedCustomerId.trim()) {
+      return (
+        <View style={homeLayout.ordersBlock}>
+          <Text style={homeLayout.ordersKicker}>{t('home.ordersHeading')}</Text>
+          <Text style={homeLayout.ordersEmpty}>{t('home.ordersSignIn')}</Text>
+        </View>
+      );
+    }
+    if (ordersLoading && !orders?.length) {
+      return (
+        <View style={homeLayout.ordersBlock}>
+          <View style={homeLayout.ordersBlockHeader}>
+            <Text style={homeLayout.ordersBlockTitle}>{t('home.ordersHeading')}</Text>
+          </View>
+          <ActivityIndicator style={homeLayout.ordersLoading} color={Colors.TEXT_SECONDARY} />
+        </View>
+      );
+    }
+    if (ordersError) return null;
+    if (!recentOrders.length) {
+      return (
+        <View style={homeLayout.ordersBlock}>
+          <Text style={homeLayout.ordersKicker}>{t('home.ordersHeading')}</Text>
+          <Text style={homeLayout.ordersEmpty}>{t('home.ordersEmpty')}</Text>
+        </View>
+      );
+    }
+    return (
+      <View style={homeLayout.ordersBlock}>
+        <View style={homeLayout.ordersBlockHeader}>
+          <Text style={homeLayout.ordersBlockTitle}>{t('home.ordersHeading')}</Text>
+          <TouchableOpacity onPress={() => (navigation as any).navigate('OrderHistory')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Text style={homeLayout.seeAll}>{t('home.seeAll')}</Text>
+          </TouchableOpacity>
+        </View>
+        {recentOrders.map((o, idx) => (
+          <TouchableOpacity
+            key={o.id}
+            style={[homeLayout.orderRow, idx === recentOrders.length - 1 && homeLayout.orderRowLast]}
+            onPress={() => (navigation as any).navigate('OrderDetails', { orderId: o.id })}
+            activeOpacity={0.7}
+          >
+            <View style={homeLayout.orderRowText}>
+              <Text style={homeLayout.orderId} numberOfLines={1}>
+                {o.orderNumber || o.id}
+              </Text>
+              <Text style={homeLayout.orderMeta} numberOfLines={1}>
+                {new Date(o.createdAt).toLocaleDateString()} · {o.status || '—'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+          </TouchableOpacity>
+        ))}
+      </View>
+    );
+  };
+
+  return (
+    <SafeAreaView style={homeLayout.root} edges={['bottom']}>
+      <Header
+        title={t('tabs.activity')}
+        prependMenuItems={[
+          {
+            key: 'about-sourcewave',
+            label: t('home.menuAboutSourceWave'),
+            icon: 'information-circle-outline',
+            onPress: () => setInfoModalVisible(true),
+          },
+        ]}
+      />
+      <Modal
+        visible={infoModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setInfoModalVisible(false)}
+      >
+        <View style={homeLayout.modalRoot}>
+          <Pressable style={homeLayout.modalBackdrop} onPress={() => setInfoModalVisible(false)} />
+          <View style={homeLayout.modalCard}>
+            <Text style={homeLayout.modalTitle}>{t('home.sourcewaveInfoTitle')}</Text>
+            <Text style={homeLayout.modalBody}>{t('home.sourcewaveInfoLead')}</Text>
+            <Text style={[homeLayout.modalBody, homeLayout.modalBodyGap]}>{t('home.sourcewaveInfoMore')}</Text>
+            <TouchableOpacity
+              style={homeLayout.modalButton}
+              onPress={() => setInfoModalVisible(false)}
+              activeOpacity={0.85}
+            >
+              <Text style={homeLayout.modalButtonText}>{t('home.infoModalClose')}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      <ScrollView
+        style={homeLayout.scroll}
+        contentContainerStyle={homeLayout.scrollContent}
+        contentInsetAdjustmentBehavior="never"
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.SHEIN_PINK]} />}
+      >
+        {renderFlyerCarousel()}
+        <View style={homeLayout.belowFlyerPanel}>
+          {renderQuickActions()}
+          {renderRecentOrders()}
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
 };
+
+const homeLayout = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: '#F2F2F7',
+  },
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    paddingBottom: Spacing.PADDING_XL,
+  },
+  modalRoot: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 400,
+    backgroundColor: Colors.WHITE,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.BORDER,
+    borderRadius: 4,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 16,
+    zIndex: 2,
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 12,
+  },
+  modalBody: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: '#4B5563',
+  },
+  modalBodyGap: {
+    marginTop: 12,
+  },
+  modalButton: {
+    marginTop: 20,
+    alignSelf: 'flex-start',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: '#111827',
+    borderRadius: 4,
+  },
+  modalButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.WHITE,
+  },
+  belowFlyerPanel: {
+    width: SCREEN_WIDTH,
+    alignSelf: 'center',
+    backgroundColor: Colors.WHITE,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.BORDER,
+  },
+  shortcutRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
+  shortcutCell: {
+    flex: 1,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 4,
+    minHeight: 76,
+  },
+  shortcutCellBorder: {
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: Colors.BORDER,
+  },
+  shortcutLabel: {
+    marginTop: 8,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#374151',
+    textAlign: 'center',
+  },
+  ordersBlock: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.BORDER,
+    paddingBottom: 2,
+  },
+  ordersBlockHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.BORDER,
+  },
+  ordersBlockTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    color: '#6B7280',
+  },
+  ordersKicker: {
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    color: '#6B7280',
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 6,
+  },
+  ordersLoading: {
+    marginVertical: 22,
+  },
+  orderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.BORDER,
+  },
+  orderRowLast: {
+    borderBottomWidth: 0,
+  },
+  orderRowText: {
+    flex: 1,
+    marginRight: 8,
+  },
+  orderId: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111827',
+    letterSpacing: -0.2,
+  },
+  orderMeta: {
+    marginTop: 4,
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  flyerShell: {
+    width: SCREEN_WIDTH,
+    alignSelf: 'center',
+    marginTop: 0,
+    marginHorizontal: 0,
+    borderRadius: 0,
+    overflow: 'hidden',
+    backgroundColor: Colors.WHITE,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.BORDER,
+  },
+  flyerFrame: {
+    width: '100%',
+    height: FLYER_H,
+    backgroundColor: '#F2F2F7',
+  },
+  flyerEmpty: {
+    paddingVertical: 28,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  flyerEmptyTitle: {
+    marginTop: 10,
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#374151',
+  },
+  flyerEmptyText: {
+    marginTop: 6,
+    fontSize: 14,
+    color: '#9CA3AF',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  seeAll: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  ordersEmpty: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: '#6B7280',
+    paddingHorizontal: 16,
+    paddingBottom: 18,
+    paddingTop: 2,
+  },
+});
 
 const styles = StyleSheet.create({
 	container: {
@@ -2749,13 +781,18 @@ const styles = StyleSheet.create({
 	},
 	flyerCarouselContainer: {
 		width: width,
-		height: 350,
+		height: HOME_FLYER_CAROUSEL_HEIGHT,
 		position: 'relative',
 		zIndex: 1,
 	},
+	/** Horizontal ScrollView must have explicit height or it can collapse / clip on some layouts. */
+	flyerCarouselScroll: {
+		height: HOME_FLYER_CAROUSEL_HEIGHT,
+		width: '100%',
+	},
 	flyerImageContainer: {
 		width: width,
-		height: 350,
+		height: HOME_FLYER_CAROUSEL_HEIGHT,
 		backgroundColor: Colors.LIGHT_GRAY,
 		justifyContent: 'center',
 		alignItems: 'center',
@@ -3812,4 +1849,3 @@ const styles = StyleSheet.create({
 			lineHeight: 12,
 		},
 });
-

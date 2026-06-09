@@ -1,501 +1,546 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput } from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Platform,
+  Modal,
+  Pressable,
+  ScrollView,
+  Dimensions,
+  Alert,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../constants/colors';
-import { useNavigation, useNavigationState, useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Spacing } from '../constants/spacing';
 import { useUserSession } from '../context/UserContext';
+import { useSubscription } from '../context/SubscriptionContext';
 import { useRavenUnread } from '../context/RavenUnreadContext';
-import { RavenGlobalSearchModal } from './RavenGlobalSearchModal';
+import { useTranslation } from 'react-i18next';
 
-interface HeaderProps {
-  onSearchPress?: () => void;
+const BAR_ROW_HEIGHT = 44;
+
+export type HeaderMenuLeaf = {
+  key: string;
+  label: string;
+  onPress: () => void;
+  icon?: keyof typeof Ionicons.glyphMap;
+};
+
+/** Expandable section in the side menu (tap to show children). */
+export type HeaderMenuGroup = {
+  key: string;
+  type: 'group';
+  label: string;
+  icon?: keyof typeof Ionicons.glyphMap;
+  children: HeaderMenuLeaf[];
+};
+
+export type HeaderMenuItem = HeaderMenuLeaf | HeaderMenuGroup;
+
+function isHeaderMenuGroup(item: HeaderMenuItem): item is HeaderMenuGroup {
+  return (item as HeaderMenuGroup).type === 'group';
+}
+
+export interface HeaderProps {
+  title?: string;
+  subtitle?: string;
+  /** Extra rows at the top of the left menu (e.g. About SourceWave on Home). */
+  prependMenuItems?: HeaderMenuItem[];
+  /** Override default chat → inbox / auth behaviour. */
   onMailPress?: () => void;
-  onWishlistPress?: () => void;
-  onCartPress?: () => void;
-  onMenuPress?: () => void;
-  onCameraPress?: () => void;
-  onCalendarPress?: () => void;
-  searchValue?: string;
-  onSearchChange?: (text: string) => void;
   showBackButton?: boolean;
   onBackPress?: () => void;
-  customPaddingTop?: number;
-  isScrolled?: boolean;
+  elevated?: boolean;
   headerBackgroundColor?: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
-  onSearchPress,
+  title,
+  subtitle,
+  prependMenuItems,
   onMailPress,
-  onWishlistPress,
-  onCartPress,
-  onMenuPress,
-  onCameraPress,
-  onCalendarPress,
-  searchValue: controlledSearchValue,
-  onSearchChange,
   showBackButton = false,
   onBackPress,
-  customPaddingTop,
-  isScrolled = false,
+  elevated = false,
   headerBackgroundColor: customHeaderBackgroundColor,
 }) => {
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation();
+  const { t } = useTranslation();
   const { user } = useUserSession();
+  const { isActive: subscriptionActive, isLoading: subscriptionLoading } = useSubscription();
   const { unreadTotal, refreshUnreadCounts } = useRavenUnread();
-  const [localSearchValue, setLocalSearchValue] = useState('');
-  const [ravenSearchOpen, setRavenSearchOpen] = useState(false);
-  const searchInputRef = useRef<TextInput>(null);
-  const preventFocusNavigationRef = useRef(false);
-  const previousRouteNameRef = useRef<string | undefined>(undefined);
-  
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+
   useFocusEffect(
     useCallback(() => {
       void refreshUnreadCounts();
     }, [refreshUnreadCounts])
   );
 
-  // Get current route name using navigation state
-  const currentRouteName = useNavigationState((state) => {
-    const route = state?.routes[state?.index || 0];
-    return route?.name;
-  });
-  
-  // Determine if we're on Home screen - Home screen has special transparent styling
-  const isHomeScreen = currentRouteName === 'Home';
-  
-  // For non-Home screens, use wine background with white text
-  // For Home screen, use transparent when not scrolled, wine when scrolled
-  // Unless a custom headerBackgroundColor is provided
-  const headerBackgroundColor = customHeaderBackgroundColor ?? (!isHomeScreen ? Colors.ROYAL_BLUE : (isScrolled ? Colors.ROYAL_BLUE : 'transparent'));
-  const headerTopBackgroundColor = customHeaderBackgroundColor ?? (!isHomeScreen ? Colors.ROYAL_BLUE : (isScrolled ? Colors.ROYAL_BLUE : 'transparent'));
-  
-  // Icon color logic:
-  // - Custom white background: black text
-  // - Other screens: white (on wine background)
-  // - Home screen, not scrolled: white (on transparent, over carousel)
-  // - Home screen, scrolled: white (on wine background)
-  const iconColor = customHeaderBackgroundColor === Colors.WHITE
-    ? Colors.BLACK
-    : (!isHomeScreen 
-      ? Colors.WHITE 
-      : (isScrolled ? Colors.WHITE : Colors.WHITE));
+  const barBg = customHeaderBackgroundColor ?? Colors.WHITE;
+  const iconColor = customHeaderBackgroundColor === Colors.BLACK ? Colors.WHITE : '#1C1C1E';
+  const titleColor = customHeaderBackgroundColor === Colors.BLACK ? Colors.WHITE : '#111827';
+  const subtitleColor = customHeaderBackgroundColor === Colors.BLACK ? 'rgba(255,255,255,0.75)' : '#6B7280';
 
-  // Use controlled value if provided, otherwise use local state
-  const searchValue = controlledSearchValue !== undefined ? controlledSearchValue : localSearchValue;
-
-  // Track route changes to detect when we come back from Search screen
-  useEffect(() => {
-    // If we were on Search and now we're not, we just navigated back
-    if (previousRouteNameRef.current === 'Search' && currentRouteName !== 'Search') {
-      // Set flag to prevent navigation on focus for a longer period
-      preventFocusNavigationRef.current = true;
-      // Blur the input if it's focused
-      if (searchInputRef.current) {
-        searchInputRef.current.blur();
-      }
-      // Reset flag after a longer delay to ensure we don't trigger again
-      setTimeout(() => {
-        preventFocusNavigationRef.current = false;
-      }, 1000);
-    }
-    // Update previous route name
-    previousRouteNameRef.current = currentRouteName;
-  }, [currentRouteName]);
-
-  const handleSearchFocus = () => {
-    // Prevent navigation if we just came back from Search screen
-    if (preventFocusNavigationRef.current) {
-      // Blur immediately to prevent any further focus events
-      if (searchInputRef.current) {
-        searchInputRef.current.blur();
-      }
-      return;
-    }
-    // Navigate to Search screen when user taps/focuses on search input
-    // This happens before typing, so transition is smooth
-    // Use navigate (not replace) so we can go back
-    if (currentRouteName !== 'Search') {
-      (navigation as any).navigate('Search', { query: searchValue });
-    }
-  };
-  
-  const handleSearchChange = (text: string) => {
-    if (onSearchChange) {
-      onSearchChange(text);
-    } else {
-      setLocalSearchValue(text);
-      // Only update params when typing (no navigation, smooth typing)
-      if (currentRouteName === 'Search') {
-        (navigation as any).setParams({ query: text });
-      }
-    }
+  const nav = navigation as {
+    navigate: (name: string, params?: object) => void;
+    canGoBack?: () => boolean;
+    goBack: () => void;
   };
 
-  const handleSearchPress = () => {
-    if (onSearchPress) {
-      onSearchPress();
-    } else {
-      // Only navigate if we're not already on Search and not preventing navigation
-      if (currentRouteName !== 'Search' && !preventFocusNavigationRef.current) {
-        // Navigate to Search screen with the search query
-        if (searchValue.trim()) {
-          (navigation as any).navigate('Search', { query: searchValue });
-        } else {
-          (navigation as any).navigate('Search', { query: '' });
-        }
-      }
-    }
-  };
+  const closeMenu = useCallback(() => {
+    setMenuOpen(false);
+    setOpenGroups({});
+  }, []);
 
-  const handleMailPress = () => {
+  const closeMenuThen = useCallback(
+    (fn: () => void) => {
+      closeMenu();
+      setTimeout(fn, 0);
+    },
+    [closeMenu]
+  );
+
+  const showSuppliersPremiumMenuAlert = useCallback(() => {
+    Alert.alert(t('suppliersPremium.menuBlockedTitle'), t('suppliersPremium.menuBlockedBody'), [
+      { text: t('settings.cancel'), style: 'cancel' },
+      { text: t('suppliersPremium.subscribeCta'), onPress: () => nav.navigate('Subscription') },
+    ]);
+  }, [nav, t]);
+
+  const toggleGroup = useCallback((key: string) => {
+    setOpenGroups((prev) => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
+  const defaultMenuItems: HeaderMenuItem[] = useMemo(
+    () => [
+      {
+        key: 'tab-home',
+        label: t('tabs.activity'),
+        icon: 'home-outline',
+        onPress: () => nav.navigate('Main', { screen: 'Home' }),
+      },
+      {
+        key: 'group-sourcing',
+        type: 'group',
+        label: t('home.menuGroupSourcing'),
+        icon: 'briefcase-outline',
+        children: [
+          {
+            key: 'sourcing-make-order',
+            label: t('home.menuMakeOrder'),
+            icon: 'add-circle-outline',
+            onPress: () => nav.navigate('Main', { screen: 'Sourcing' }),
+          },
+          {
+            key: 'sourcing-orders',
+            label: t('home.menuSalesOrders'),
+            icon: 'receipt-outline',
+            onPress: () => nav.navigate('OrderHistory'),
+          },
+          {
+            key: 'sourcing-category',
+            label: t('home.menuCategory'),
+            icon: 'grid-outline',
+            onPress: () => nav.navigate('Main', { screen: 'Categories' }),
+          },
+        ],
+      },
+      {
+        key: 'group-suppliers',
+        type: 'group',
+        label: t('home.menuGroupSuppliers'),
+        icon: 'people-outline',
+        children: [
+          {
+            key: 'suppliers-browse',
+            label: t('home.menuBrowseSuppliers'),
+            icon: 'storefront-outline',
+            onPress: () => {
+              if (!user?.email) {
+                nav.navigate('Auth');
+                return;
+              }
+              if (!subscriptionLoading && !subscriptionActive) {
+                showSuppliersPremiumMenuAlert();
+                return;
+              }
+              nav.navigate('Main', { screen: 'Suppliers' });
+            },
+          },
+          {
+            key: 'suppliers-chat',
+            label: t('home.menuChat'),
+            icon: 'chatbubbles-outline',
+            onPress: () => {
+              if (!user?.email) {
+                nav.navigate('Auth');
+                return;
+              }
+              if (!subscriptionLoading && !subscriptionActive) {
+                showSuppliersPremiumMenuAlert();
+                return;
+              }
+              nav.navigate('RavenChatInbox');
+            },
+          },
+          {
+            key: 'suppliers-subscription',
+            label: t('home.menuSubscription'),
+            icon: 'diamond-outline',
+            onPress: () => nav.navigate('Subscription'),
+          },
+          {
+            key: 'suppliers-invoices',
+            label: t('home.menuInvoices'),
+            icon: 'wallet-outline',
+            onPress: () => nav.navigate('InvoicesPayments'),
+          },
+        ],
+      },
+      {
+        key: 'tab-profile',
+        label: t('tabs.account'),
+        icon: 'person-outline',
+        onPress: () => nav.navigate('Main', { screen: 'Profile' }),
+      },
+    ],
+    [nav, t, user?.email, subscriptionActive, subscriptionLoading, showSuppliersPremiumMenuAlert]
+  );
+
+  const menuItems = useMemo(() => {
+    const prefix = prependMenuItems ?? [];
+    return [...prefix, ...defaultMenuItems];
+  }, [prependMenuItems, defaultMenuItems]);
+
+  const menuSheetWidth = useMemo(
+    () => Math.min(340, Math.round(Dimensions.get('window').width * 0.86)),
+    []
+  );
+
+  const handleChatPress = () => {
     if (onMailPress) {
       onMailPress();
       return;
     }
     if (!user?.email) {
-      (navigation as any).navigate('Auth');
+      nav.navigate('Auth');
       return;
     }
-    // Dedicated inbox (channels / DMs), separate from the Suppliers tab.
-    (navigation as any).navigate('RavenChatInbox');
-  };
-
-  const handleSourcingPress = () => {
-    if (onWishlistPress) {
-      onWishlistPress();
-    } else {
-      (navigation as any).navigate('SourcingRequest');
+    if (!subscriptionLoading && !subscriptionActive) {
+      showSuppliersPremiumMenuAlert();
+      return;
     }
-  };
-
-  const handleCartPress = () => {
-    if (onCartPress) {
-      onCartPress();
-    } else {
-      (navigation as any).navigate('OrderHistory');
-    }
-  };
-
-  const handleMenuPress = () => {
-    if (onMenuPress) {
-      onMenuPress();
-    }
-  };
-
-  const handleCameraPress = () => {
-    if (onCameraPress) {
-      onCameraPress();
-    }
-  };
-
-  const handleCalendarPress = () => {
-    if (onCalendarPress) {
-      onCalendarPress();
-    }
-  };
-
-  const handleSearchSubmit = () => {
-    if (searchValue.trim()) {
-      handleSearchPress();
-    }
+    nav.navigate('RavenChatInbox');
   };
 
   const handleBackPress = () => {
     if (onBackPress) {
       onBackPress();
     } else {
-      // Check if we can go back, otherwise navigate to Main/Home
-      const nav = navigation as any;
-      if (nav.canGoBack && nav.canGoBack()) {
+      if (nav.canGoBack?.()) {
         nav.goBack();
       } else {
-        // If no screen to go back to, navigate to Main tab
         nav.navigate('Main', { screen: 'Home' });
       }
     }
   };
 
-  return (
-    <View style={[
-      styles.header, 
-      customPaddingTop !== undefined && { paddingTop: customPaddingTop },
-      { backgroundColor: headerBackgroundColor },
-      (!isHomeScreen || customHeaderBackgroundColor === Colors.WHITE) && styles.headerScrolled
-    ]}>
-      {/* Search and Icons Row */}
-      <View style={[
-        styles.headerTop, 
-        styles.headerTopWithBackground,
-        { backgroundColor: headerTopBackgroundColor }
-      ]}>
-        {/* Left side icons */}
-        <View style={styles.leftIcons}>
-          {showBackButton ? (
-            <TouchableOpacity 
-              style={styles.iconButton} 
-              onPress={handleBackPress}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Ionicons name="arrow-back" size={18} color={iconColor} />
-            </TouchableOpacity>
-          ) : (
-            <>
-              <View style={styles.chatIconWrap}>
-                <TouchableOpacity
-                  style={styles.iconButton}
-                  onPress={handleMailPress}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
-                  <Ionicons name="chatbubbles-outline" size={18} color={iconColor} />
-                </TouchableOpacity>
-                {user?.email && unreadTotal > 0 ? (
-                  <View style={styles.chatBadge} pointerEvents="none">
-                    <Text style={styles.chatBadgeText}>{unreadTotal > 99 ? '99+' : String(unreadTotal)}</Text>
-                  </View>
-                ) : null}
-              </View>
+  const runMenuLeaf = (item: HeaderMenuLeaf) => {
+    closeMenuThen(item.onPress);
+  };
 
-              <TouchableOpacity 
-                style={styles.iconButton} 
-                onPress={handleCalendarPress}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+  return (
+    <View
+      style={[
+        styles.wrap,
+        {
+          paddingTop: insets.top > 0 ? insets.top : Platform.OS === 'ios' ? 12 : 8,
+          backgroundColor: barBg,
+          borderBottomWidth: StyleSheet.hairlineWidth,
+          borderBottomColor: elevated ? 'rgba(0,0,0,0.12)' : 'rgba(0,0,0,0.06)',
+        },
+      ]}
+    >
+      <Modal visible={menuOpen} transparent animationType="none" onRequestClose={closeMenu}>
+        <View style={styles.menuOverlay}>
+          <View style={[styles.menuSheet, { width: menuSheetWidth, paddingTop: insets.top + 8 }]}>
+            <View style={styles.menuSheetHeader}>
+              <Text style={styles.menuSheetTitle}>{t('home.menuTitle')}</Text>
+              <TouchableOpacity
+                onPress={closeMenu}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                accessibilityRole="button"
+                accessibilityLabel={t('home.menuCloseA11y')}
               >
-                <Ionicons name="cube-outline" size={18} color={iconColor} />
-              </TouchableOpacity>
-            </>
-          )}
-        </View>
-        
-        {/* Search bar */}
-        <View style={styles.searchWrapper}>
-          <TouchableOpacity 
-            style={[
-              styles.searchContainer,
-              isScrolled && styles.searchContainerScrolled,
-              !isHomeScreen && styles.searchContainerWhite
-            ]}
-            activeOpacity={0.7}
-            onPress={handleSearchPress}
-          >
-            <TextInput
-              ref={searchInputRef}
-              style={[
-                styles.searchInput,
-                !isHomeScreen && styles.searchInputWhite
-              ]}
-              placeholder="Search"
-              placeholderTextColor={Colors.TEXT_SECONDARY}
-              value={searchValue}
-              onChangeText={handleSearchChange}
-              onFocus={handleSearchFocus}
-              onSubmitEditing={handleSearchSubmit}
-              returnKeyType="search"
-              editable={currentRouteName === 'Search'}
-              pointerEvents={currentRouteName === 'Search' ? 'auto' : 'none'}
-            />
-            <View style={styles.searchIconsContainer} pointerEvents="box-none">
-              {user?.email ? (
-                <TouchableOpacity
-                  style={styles.searchIconButton}
-                  onPress={() => setRavenSearchOpen(true)}
-                  hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
-                  accessibilityLabel="Search team messages and channels"
-                >
-                  <Ionicons name="people-outline" size={18} color={Colors.TEXT_SECONDARY} />
-                </TouchableOpacity>
-              ) : null}
-              <TouchableOpacity 
-                style={styles.cameraButton} 
-                onPress={handleCameraPress}
-                hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
-              >
-                <Ionicons name="camera-outline" size={18} color={Colors.TEXT_SECONDARY} />
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.searchIconButton} 
-                onPress={currentRouteName === 'Search' ? handleSearchSubmit : handleSearchPress}
-                hitSlop={{ top: 5, bottom: 5, left: 5, right: 5 }}
-              >
-                <Ionicons name="search" size={18} color={Colors.ROYAL_BLUE} />
+                <Ionicons name="close" size={26} color="#111827" />
               </TouchableOpacity>
             </View>
-          </TouchableOpacity>
+            <ScrollView style={styles.menuScroll} bounces={false} showsVerticalScrollIndicator={false}>
+              {menuItems.map((item) => {
+                if (isHeaderMenuGroup(item)) {
+                  const open = !!openGroups[item.key];
+                  return (
+                    <View key={item.key}>
+                      <TouchableOpacity
+                        style={styles.menuRow}
+                        onPress={() => toggleGroup(item.key)}
+                        activeOpacity={0.65}
+                        accessibilityRole="button"
+                        accessibilityLabel={item.label}
+                        accessibilityState={{ expanded: open }}
+                      >
+                        <Ionicons
+                          name={item.icon ?? 'ellipse-outline'}
+                          size={22}
+                          color="#374151"
+                          style={styles.menuRowIcon}
+                        />
+                        <Text style={styles.menuRowLabel}>{item.label}</Text>
+                        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={20} color="#6B7280" />
+                      </TouchableOpacity>
+                      {open
+                        ? item.children.map((child) => (
+                            <TouchableOpacity
+                              key={child.key}
+                              style={[styles.menuRow, styles.menuSubRow]}
+                              onPress={() => runMenuLeaf(child)}
+                              activeOpacity={0.65}
+                              accessibilityRole="button"
+                              accessibilityLabel={child.label}
+                            >
+                              <Ionicons
+                                name={child.icon ?? 'ellipse-outline'}
+                                size={20}
+                                color="#6B7280"
+                                style={styles.menuSubIcon}
+                              />
+                              <Text style={styles.menuSubLabel}>{child.label}</Text>
+                              <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
+                            </TouchableOpacity>
+                          ))
+                        : null}
+                    </View>
+                  );
+                }
+                return (
+                  <TouchableOpacity
+                    key={item.key}
+                    style={styles.menuRow}
+                    onPress={() => runMenuLeaf(item)}
+                    activeOpacity={0.65}
+                    accessibilityRole="button"
+                    accessibilityLabel={item.label}
+                  >
+                    <Ionicons name={item.icon ?? 'ellipse-outline'} size={22} color="#374151" style={styles.menuRowIcon} />
+                    <Text style={styles.menuRowLabel}>{item.label}</Text>
+                    <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+          <Pressable style={styles.menuBackdrop} onPress={closeMenu} />
         </View>
-        
-        {/* Right side icons */}
-        <View style={styles.rightIcons}>
-          <TouchableOpacity 
-            style={styles.iconButton} 
-            onPress={handleSourcingPress}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="briefcase-outline" size={18} color={iconColor} />
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={styles.iconButton} 
-            onPress={handleCartPress}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="cart-outline" size={18} color={iconColor} />
-          </TouchableOpacity>
+      </Modal>
+
+      <View style={[styles.row, { minHeight: BAR_ROW_HEIGHT }]}>
+        <View style={styles.sideSlot}>
+          {showBackButton ? (
+            <TouchableOpacity
+              style={styles.iconHit}
+              onPress={handleBackPress}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              accessibilityRole="button"
+              accessibilityLabel={t('home.menuBackA11y')}
+            >
+              <Ionicons name="arrow-back" size={22} color={iconColor} />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.iconHit}
+              onPress={() => setMenuOpen(true)}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              accessibilityRole="button"
+              accessibilityLabel={t('home.menuOpenA11y')}
+            >
+              <Ionicons name="menu-outline" size={26} color={iconColor} />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <View style={styles.titleArea} pointerEvents="none">
+          {title ? (
+            <>
+              <Text style={[styles.titleText, { color: titleColor }]} numberOfLines={1}>
+                {title}
+              </Text>
+              {subtitle ? (
+                <Text style={[styles.subtitleText, { color: subtitleColor }]} numberOfLines={1}>
+                  {subtitle}
+                </Text>
+              ) : null}
+            </>
+          ) : null}
+        </View>
+
+        <View style={styles.sideSlotRight}>
+          <View style={styles.chatIconWrap}>
+            <TouchableOpacity
+              style={styles.iconHit}
+              onPress={handleChatPress}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              accessibilityRole="button"
+              accessibilityLabel={t('home.menuChatA11y')}
+            >
+              <Ionicons name="chatbubble-ellipses-outline" size={22} color={iconColor} />
+            </TouchableOpacity>
+            {user?.email && unreadTotal > 0 ? (
+              <View style={styles.chatBadge} pointerEvents="none">
+                <Text style={styles.chatBadgeText}>{unreadTotal > 99 ? '99+' : String(unreadTotal)}</Text>
+              </View>
+            ) : null}
+          </View>
         </View>
       </View>
-
-      <RavenGlobalSearchModal
-        visible={ravenSearchOpen}
-        onClose={() => setRavenSearchOpen(false)}
-        title="Team search"
-        onChannelPicked={(workspaceId, channelId) => {
-          (navigation as { navigate: (name: string, params?: object) => void }).navigate('RavenChatInbox', {
-            openWorkspaceId: workspaceId,
-            openChannelId: channelId,
-          });
-        }}
-      />
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  header: {
-    paddingHorizontal: Spacing.SCREEN_PADDING,
-    paddingTop: Spacing.PADDING_LG + 30,
-    paddingBottom: Spacing.PADDING_SM,
-    backgroundColor: 'transparent',
+  wrap: {
     width: '100%',
-    marginBottom: 0,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-    overflow: 'hidden',
   },
-  headerScrolled: {
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 8,
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.SCREEN_PADDING - 4,
+    paddingBottom: 6,
   },
-  appNameRow: {
+  sideSlot: {
+    width: 44,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingTop: 0,
-    paddingBottom: 2,
-    marginBottom: 2,
   },
-  appName: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: Colors.BLACK,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  headerTop: {
-    flexDirection: 'row',
+  sideSlotRight: {
+    width: 44,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.MARGIN_SM,
+    justifyContent: 'center',
   },
-  leftIcons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  iconButton: {
-    width: 20,
-    height: 20,
+  iconHit: {
+    width: 40,
+    height: 40,
     justifyContent: 'center',
     alignItems: 'center',
   },
   chatIconWrap: {
     position: 'relative',
-    width: 20,
-    height: 20,
+    width: 40,
+    height: 40,
     justifyContent: 'center',
     alignItems: 'center',
   },
   chatBadge: {
     position: 'absolute',
-    top: -6,
-    right: -8,
-    minWidth: 16,
-    height: 16,
-    paddingHorizontal: 4,
-    borderRadius: 8,
-    backgroundColor: '#E53935',
+    top: 2,
+    right: 2,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 5,
+    borderRadius: 9,
+    backgroundColor: Colors.SHEIN_PINK,
     alignItems: 'center',
     justifyContent: 'center',
   },
   chatBadgeText: {
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '800',
     color: Colors.WHITE,
   },
-  rightIcons: {
-    flexDirection: 'row',
+  titleArea: {
+    flex: 1,
     alignItems: 'center',
-    gap: 4,
+    justifyContent: 'center',
+    paddingHorizontal: 8,
   },
-  searchWrapper: {
+  titleText: {
+    fontSize: 17,
+    fontWeight: '700',
+    letterSpacing: -0.3,
+  },
+  subtitleText: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  menuOverlay: {
     flex: 1,
     flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: 4,
   },
-  searchContainer: {
+  menuBackdrop: {
     flex: 1,
-    flexDirection: 'row',
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    borderRadius: 24,
-    paddingHorizontal: Spacing.PADDING_MD,
-    paddingVertical: Spacing.PADDING_XS,
-    minHeight: 36,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(200, 200, 200, 0.2)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
+    backgroundColor: 'rgba(0,0,0,0.35)',
   },
-  searchInput: {
-    flex: 1,
-    fontSize: 14,
-    color: Colors.BLACK,
-    padding: 0,
-    margin: 0,
+  menuSheet: {
+    backgroundColor: Colors.WHITE,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: Colors.BORDER,
   },
-  searchIconsContainer: {
+  menuSheetHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.MARGIN_XS,
-    marginLeft: Spacing.MARGIN_XS,
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.BORDER,
   },
-  cameraButton: {
-    padding: 4,
+  menuSheetTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111827',
   },
-  searchIconButton: {
-    padding: 4,
+  menuScroll: {
+    flexGrow: 0,
   },
-  headerTopWithBackground: {
-    backgroundColor: 'transparent',
-    borderRadius: 12,
-    paddingHorizontal: Spacing.PADDING_SM,
-    paddingVertical: Spacing.PADDING_XS,
+  menuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.BORDER,
   },
-  searchContainerScrolled: {
-    backgroundColor: Colors.LIGHT_GRAY,
-    borderColor: Colors.BORDER,
+  menuRowIcon: {
+    marginRight: 14,
+    width: 26,
+    textAlign: 'center',
   },
-  searchContainerWhite: {
-    backgroundColor: Colors.LIGHT_GRAY,
-    borderColor: Colors.BORDER,
+  menuRowLabel: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#111827',
   },
-  searchInputWhite: {
-    color: Colors.BLACK,
+  menuSubRow: {
+    backgroundColor: '#F9FAFB',
+    paddingLeft: 12,
+  },
+  menuSubIcon: {
+    marginRight: 12,
+    width: 26,
+    textAlign: 'center',
+  },
+  menuSubLabel: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#374151',
   },
 });

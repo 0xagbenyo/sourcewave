@@ -2,7 +2,6 @@ import './src/i18n';
 import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { Platform } from 'react-native';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { initializeERPNext, initializeNetworkAwareTimeout } from './src/services/erpnext';
 import { UserProvider } from './src/context/UserContext';
@@ -16,8 +15,7 @@ initializeERPNext({
   apiSecret: process.env.EXPO_PUBLIC_API_SECRET || 'e7a66aae836bc8f',
 });
 
-// Initialize network-aware timeout system
-// This will dynamically adjust API timeout based on network conditions
+// Initialize network listener + periodic reachability refresh (used for retry decisions).
 initializeNetworkAwareTimeout();
 
 export default function App() {
@@ -27,7 +25,7 @@ export default function App() {
       <RavenUnreadProvider>
         <SubscriptionProvider>
           <SafeAreaProvider>
-            <StatusBar style={Platform.OS === 'ios' ? 'dark' : 'light'} />
+            <StatusBar style="dark" />
             <AppNavigator />
           </SafeAreaProvider>
         </SubscriptionProvider>

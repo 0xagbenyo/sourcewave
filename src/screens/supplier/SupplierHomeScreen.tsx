@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,10 +8,11 @@ import {
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../../constants/colors';
 import { useUserSession } from '../../context/UserContext';
+import { useRavenUnread } from '../../context/RavenUnreadContext';
 
 const shadowCard =
   Platform.OS === 'ios'
@@ -34,6 +35,13 @@ type MenuItem = {
 export const SupplierHomeScreen: React.FC = () => {
   const navigation = useNavigation();
   const { user } = useUserSession();
+  const { unreadTotal, refreshUnreadCounts } = useRavenUnread();
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshUnreadCounts();
+    }, [refreshUnreadCounts])
+  );
 
   const displayName = user?.supplierName || user?.fullName || 'Supplier';
 
@@ -107,7 +115,16 @@ export const SupplierHomeScreen: React.FC = () => {
         >
           <Ionicons name={item.icon} size={22} color={Colors.DARK_GRAY} style={styles.rowIcon} />
           <View style={styles.rowText}>
-            <Text style={styles.rowTitle}>{item.title}</Text>
+            <View style={styles.titleRow}>
+              <Text style={styles.rowTitle}>{item.title}</Text>
+              {item.key === 'chat' && unreadTotal > 0 ? (
+                <View style={styles.countBadge}>
+                  <Text style={styles.countBadgeText}>
+                    {unreadTotal > 99 ? '99+' : String(unreadTotal)}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
             <Text style={styles.rowSubtitle}>{item.subtitle}</Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color={Colors.MEDIUM_GRAY} />
@@ -213,6 +230,26 @@ const styles = StyleSheet.create({
     marginRight: 14,
     width: 26,
     textAlign: 'center',
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  countBadge: {
+    minWidth: 22,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+    backgroundColor: Colors.WINE,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  countBadgeText: {
+    color: Colors.WHITE,
+    fontSize: 12,
+    fontWeight: '700',
   },
   rowText: {
     flex: 1,

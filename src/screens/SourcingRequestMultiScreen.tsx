@@ -9,13 +9,19 @@ import {
   TextInput,
   Alert,
   Image,
+  Platform,
+  Keyboard,
+  KeyboardAvoidingView,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { Colors } from '../constants/colors';
+import { Spacing } from '../constants/spacing';
+import { Header } from '../components/Header';
 import { useUserSession } from '../context/UserContext';
+import { useTranslation } from 'react-i18next';
 import { getERPNextClient } from '../services/erpnext';
 import {
   buildSourcingCategoryOptions,
@@ -25,6 +31,8 @@ import {
 import { Category } from '../types';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { withOtherItemOption, SourcingItemOption } from '../utils/sourcingItems';
+
+const hairline = StyleSheet.hairlineWidth;
 
 type DropdownItem = SourcingItemOption;
 type RequestForm = {
@@ -56,7 +64,10 @@ const newForm = (expanded: boolean): RequestForm => ({
 export const SourcingRequestMultiScreen: React.FC = () => {
   const navigation = useNavigation();
   const route = useRoute<any>();
+  const { t } = useTranslation();
   const { user } = useUserSession();
+  const insets = useSafeAreaInsets();
+  const [keyboardPad, setKeyboardPad] = useState(0);
 
   const [allGroups, setAllGroups] = useState<any[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(false);
@@ -79,6 +90,19 @@ export const SourcingRequestMultiScreen: React.FC = () => {
       }
     };
     fetchGroups();
+  }, []);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const subShow = Keyboard.addListener(showEvent, (e) => {
+      setKeyboardPad(e.endCoordinates?.height ?? 0);
+    });
+    const subHide = Keyboard.addListener(hideEvent, () => setKeyboardPad(0));
+    return () => {
+      subShow.remove();
+      subHide.remove();
+    };
   }, []);
 
   const categoryTree = useMemo<Category[]>(
@@ -205,9 +229,10 @@ export const SourcingRequestMultiScreen: React.FC = () => {
       Alert.alert('Permission Required', 'Please allow media library access to select an image.');
       return;
     }
+    // Android crop UI (allowsEditing) often has no visible confirm; pick full image on Android.
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      allowsEditing: true,
+      allowsEditing: Platform.OS === 'ios',
       quality: 0.8,
     });
     if (!result.canceled && result.assets?.length) {
@@ -342,21 +367,24 @@ export const SourcingRequestMultiScreen: React.FC = () => {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerIconButton}>
-          <Ionicons name="arrow-back" size={20} color={Colors.BLACK} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Request Items From China</Text>
-        <View style={styles.headerIconButton} />
-      </View>
-
-      <ScrollView
-        style={styles.content}
-        contentContainerStyle={styles.contentContainer}
-        keyboardShouldPersistTaps="handled"
-        nestedScrollEnabled
+    <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
+      <Header showBackButton title={t('sourcing.stackTitle')} />
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoid}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={insets.top + 56}
       >
+        <ScrollView
+          style={styles.content}
+          contentContainerStyle={[
+            styles.contentContainer,
+            { paddingBottom: 40 + (Platform.OS === 'android' ? keyboardPad : 0) },
+          ]}
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+          keyboardDismissMode="interactive"
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+        >
         {forms.map((form, idx) => {
           const product = selectedProductFor(form);
           const formProducts = productsByFormId[form.id] || [];
@@ -368,7 +396,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
                 onPress={() => updateForm(form.id, { expanded: !form.expanded })}
               >
                 <View>
-                  <Text style={styles.cardTitle}>Item Request #{idx + 1}</Text>
+                  <Text style={styles.cardTitle}>{t('sourcing.lineLabel', { n: idx + 1 })}</Text>
                   {!form.expanded && (
                     <Text style={styles.cardSubtitle}>
                       {product?.name || 'Tap to edit'}
@@ -430,7 +458,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
 
                   <Text style={styles.label}>Preference Image *</Text>
                   <TouchableOpacity style={styles.imagePickerButton} onPress={() => pickImageFor(form.id)}>
-                    <Ionicons name="image-outline" size={16} color={Colors.ROYAL_BLUE} />
+                    <Ionicons name="image-outline" size={18} color={Colors.WINE} />
                     <Text style={styles.imagePickerButtonText}>
                       {form.referenceImageUri ? 'Change Image' : 'Upload Image'}
                     </Text>
@@ -473,7 +501,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
         })}
 
         <TouchableOpacity style={styles.addAnotherButton} onPress={addAnotherItem}>
-          <Ionicons name="add-circle-outline" size={18} color={Colors.ROYAL_BLUE} />
+          <Ionicons name="add-circle-outline" size={20} color={Colors.WINE} />
           <Text style={styles.addAnotherText}>Add Another Item</Text>
         </TouchableOpacity>
 
@@ -485,86 +513,97 @@ export const SourcingRequestMultiScreen: React.FC = () => {
           {submitting ? <ActivityIndicator color={Colors.WHITE} /> : <Text style={styles.submitButtonText}>Submit Request</Text>}
         </TouchableOpacity>
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.BACKGROUND },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.BORDER,
-    backgroundColor: Colors.WHITE,
-  },
-  headerIconButton: { width: 28, alignItems: 'center' },
-  headerTitle: { fontSize: 14, fontWeight: '700', color: Colors.BLACK },
+  container: { flex: 1, backgroundColor: Colors.OFF_WHITE },
+  keyboardAvoid: { flex: 1 },
   content: { flex: 1 },
-  contentContainer: { padding: 16 },
-  card: {
-    borderWidth: 1,
-    borderColor: Colors.BORDER,
-    borderRadius: 10,
-    backgroundColor: Colors.WHITE,
-    padding: 12,
-    marginBottom: 12,
+  contentContainer: {
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    paddingTop: 12,
+    paddingBottom: 40,
   },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  cardTitle: { fontSize: 13, fontWeight: '700', color: Colors.BLACK },
-  cardSubtitle: { fontSize: 11, color: Colors.TEXT_SECONDARY, marginTop: 3 },
-  label: { fontSize: 12, fontWeight: '600', color: Colors.BLACK, marginBottom: 6, marginTop: 10 },
-  input: {
-    borderWidth: 1,
-    borderColor: Colors.BORDER,
-    borderRadius: 8,
+  card: {
     backgroundColor: Colors.WHITE,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    fontSize: 13,
+    marginBottom: 0,
+    borderBottomWidth: hairline,
+    borderBottomColor: Colors.BORDER,
+    paddingBottom: 4,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 4,
+    borderBottomWidth: hairline,
+    borderBottomColor: Colors.BORDER,
+  },
+  cardTitle: { fontSize: 16, fontWeight: '700', color: Colors.BLACK, letterSpacing: -0.2 },
+  cardSubtitle: { fontSize: 13, color: Colors.TEXT_SECONDARY, marginTop: 4, fontWeight: '500' },
+  label: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.TEXT_SECONDARY,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+    marginTop: 14,
+    paddingHorizontal: 4,
+  },
+  input: {
+    marginHorizontal: 4,
+    borderWidth: 0,
+    borderBottomWidth: hairline,
+    borderBottomColor: Colors.BORDER,
+    borderRadius: 0,
+    backgroundColor: Colors.WHITE,
+    paddingHorizontal: 4,
+    paddingVertical: 12,
+    fontSize: 16,
     color: Colors.BLACK,
   },
-  textArea: { minHeight: 90, paddingTop: 10 },
+  textArea: { minHeight: 90, paddingTop: 12 },
   imagePickerButton: {
-    borderWidth: 1,
-    borderColor: Colors.ROYAL_BLUE,
-    borderRadius: 8,
-    backgroundColor: Colors.WHITE,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    marginHorizontal: 4,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 4,
+    borderBottomWidth: hairline,
+    borderBottomColor: 'rgba(230, 0, 18, 0.35)',
+    backgroundColor: Colors.WHITE,
   },
-  imagePickerButtonText: { fontSize: 13, fontWeight: '600', color: Colors.ROYAL_BLUE },
-  imagePreviewWrap: { marginTop: 10, position: 'relative', width: 120, height: 120 },
-  imagePreview: { width: 120, height: 120, borderRadius: 8, backgroundColor: Colors.LIGHT_GRAY },
-  removeImageButton: { position: 'absolute', right: -8, top: -8, backgroundColor: Colors.WHITE, borderRadius: 10 },
+  imagePickerButtonText: { fontSize: 15, fontWeight: '600', color: Colors.WINE },
+  imagePreviewWrap: { marginTop: 12, marginHorizontal: 4, position: 'relative', width: 140, height: 140, backgroundColor: Colors.LIGHT_GRAY, borderWidth: hairline, borderColor: Colors.BORDER },
+  imagePreview: { width: '100%', height: '100%', backgroundColor: Colors.LIGHT_GRAY },
+  removeImageButton: { position: 'absolute', right: 6, top: 6, backgroundColor: Colors.WHITE, borderRadius: 14, padding: 2 },
   addAnotherButton: {
-    marginTop: 4,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: Colors.ROYAL_BLUE,
-    borderRadius: 8,
-    paddingVertical: 11,
+    marginTop: 16,
+    marginBottom: 12,
+    borderBottomWidth: hairline,
+    borderBottomColor: 'rgba(230, 0, 18, 0.35)',
+    paddingVertical: 14,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
     gap: 8,
     backgroundColor: Colors.WHITE,
   },
-  addAnotherText: { fontSize: 13, fontWeight: '700', color: Colors.ROYAL_BLUE },
+  addAnotherText: { fontSize: 15, fontWeight: '700', color: Colors.WINE },
   submitButton: {
-    marginTop: 6,
-    backgroundColor: Colors.ROYAL_BLUE,
-    borderRadius: 8,
-    paddingVertical: 12,
+    marginTop: 8,
+    backgroundColor: Colors.WINE,
+    borderRadius: 10,
+    paddingVertical: 15,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  submitButtonDisabled: { opacity: 0.6 },
-  submitButtonText: { color: Colors.WHITE, fontSize: 14, fontWeight: '700' },
+  submitButtonDisabled: { opacity: 0.5 },
+  submitButtonText: { color: Colors.WHITE, fontSize: 16, fontWeight: '700' },
 });

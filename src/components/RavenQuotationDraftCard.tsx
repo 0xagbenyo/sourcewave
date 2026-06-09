@@ -20,7 +20,7 @@ type Props = {
   busy?: boolean;
   onAccept?: () => void;
   onReject?: () => void;
-  /** Long-press on the card body (e.g. supplier Reply/Pay menu). */
+  /** Long-press on the card body (e.g. supplier Reply / Approve payment menu). */
   onCardLongPress?: () => void;
 };
 

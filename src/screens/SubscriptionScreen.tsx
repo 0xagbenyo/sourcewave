@@ -16,9 +16,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NavigationProp } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
-import { SourceWaveStackHeader } from '../components/SourceWaveStackHeader';
+import { Header } from '../components/Header';
 import {
   SOURCEWAVE_SUBSCRIPTION_PLANS,
   type SubscriptionPlanId,
@@ -39,6 +40,8 @@ import { formatGhanaCedis } from '../utils/currency';
 import { toYmd, erpSubscriptionCoversThrough } from '../utils/subscriptionErpnext';
 import type { RootStackParamList } from '../types';
 
+const hairline = StyleSheet.hairlineWidth;
+
 const mtnMomoImage = require('../assets/images/mtn momo.png');
 const telecelCashImage = require('../assets/images/telecel cash.png');
 
@@ -48,7 +51,16 @@ function addMonths(base: Date, months: number): Date {
   return d;
 }
 
+function formatShortDate(d: Date): string {
+  return d.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
 export const SubscriptionScreen: React.FC = () => {
+  const { t } = useTranslation();
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const { user } = useUserSession();
   const { subscription, isActive, isLoading, refresh } = useSubscription();
@@ -71,7 +83,7 @@ export const SubscriptionScreen: React.FC = () => {
         const client = getERPNextClient();
         const customer = await client.getCustomerByEmail(user.email);
         if (!customer?.name) {
-          erpWarning = 'No customer record is linked to this email — your subscription was not saved on the server.';
+          erpWarning = t('subscriptionPage.erpNoCustomer');
         } else {
           const rows = await client.listSubscriptionsForCustomer(customer.name);
           const shouldCreate = !erpSubscriptionCoversThrough(rows, expires);
@@ -92,38 +104,32 @@ export const SubscriptionScreen: React.FC = () => {
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         console.warn('Subscription create failed', e);
-        erpWarning = `Subscription was not saved on the server: ${msg}`;
+        erpWarning = t('subscriptionPage.erpSaveFailed', { message: msg });
       }
     }
 
     await refresh();
 
-    Alert.alert(
-      'Welcome to SourceWave supplier access',
-      [
-        `Your plan is active until ${expires.toLocaleDateString('en-GB', {
-          day: 'numeric',
-          month: 'short',
-          year: 'numeric',
-        })}.`,
-        ` Reference: ${reference}.`,
-        erpWarning ? `\n\n${erpWarning}` : '',
-      ].join(''),
-      [{ text: 'OK', onPress: () => navigation.goBack() }]
-    );
+    const body =
+      t('subscriptionPage.welcomeBody', {
+        date: formatShortDate(expires),
+        reference,
+      }) + (erpWarning ? `\n\n${erpWarning}` : '');
+
+    Alert.alert(t('subscriptionPage.welcomeTitle'), body, [{ text: t('contactUs.ok'), onPress: () => navigation.goBack() }]);
   };
 
   const handlePay = async () => {
     if (!user?.email) {
-      Alert.alert('Sign in required', 'Please log in to purchase a subscription.');
+      Alert.alert(t('subscriptionPage.signInRequired'), t('subscriptionPage.signInBody'));
       return;
     }
     if (!selectedPayment) {
-      Alert.alert('Payment method', 'Choose MTN Mobile Money or Telecel Cash.');
+      Alert.alert(t('subscriptionPage.choosePayment'), t('subscriptionPage.choosePaymentBody'));
       return;
     }
     if (!paymentNumber.trim()) {
-      Alert.alert('Phone number', 'Enter the wallet number you will pay from.');
+      Alert.alert(t('subscriptionPage.enterWallet'), t('subscriptionPage.enterWalletBody'));
       return;
     }
 
@@ -153,21 +159,16 @@ export const SubscriptionScreen: React.FC = () => {
 
       setLastReference(ref);
       setPaying(false);
-      Alert.alert(
-        'Complete payment',
-        displayText ||
-          'Approve the prompt on your phone. When your network confirms payment, tap “I have paid” to verify.',
-        [
-          { text: 'OK' },
-          {
-            text: 'I have paid',
-            onPress: () => handleVerify(ref),
-          },
-        ]
-      );
+      Alert.alert(t('subscriptionPage.completePayment'), displayText || t('subscriptionPage.completePaymentBody'), [
+        { text: t('contactUs.ok') },
+        {
+          text: t('subscriptionPage.verifyPayment'),
+          onPress: () => handleVerify(ref),
+        },
+      ]);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Payment could not be started.';
-      Alert.alert('Payment', msg);
+      Alert.alert(t('subscriptionPage.paymentFailed'), msg);
       setPaying(false);
     }
   };
@@ -181,7 +182,7 @@ export const SubscriptionScreen: React.FC = () => {
   const handleVerify = async (ref?: string) => {
     const r = ref || lastReference;
     if (!r) {
-      Alert.alert('Verify', 'No payment reference yet. Try Pay again.');
+      Alert.alert(t('subscriptionPage.verifyNoRef'), t('subscriptionPage.verifyNoRefBody'));
       return;
     }
     setVerifying(true);
@@ -191,222 +192,251 @@ export const SubscriptionScreen: React.FC = () => {
         await finishActivation(v.data.reference || r);
         setLastReference(null);
       } else {
-        Alert.alert('Not completed yet', v.data?.gateway_response || 'Status is not success yet.');
+        Alert.alert(t('subscriptionPage.notCompleted'), v.data?.gateway_response || 'Status is not success yet.');
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Verification failed.';
-      Alert.alert('Verify payment', msg);
+      Alert.alert(t('subscriptionPage.verifyFailed'), msg);
     } finally {
       setVerifying(false);
     }
   };
 
+  const showPurchaseFooter = !isLoading && !isActive;
+  const showActiveFooter = !isLoading && isActive && !!subscription;
+
   return (
-    <View style={styles.root}>
-      <SourceWaveStackHeader
-        title="SourceWave access"
-        subtitle="Supplier messaging & Paystack checkout"
-        onBack={() => navigation.goBack()}
-      />
+    <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
+      <Header showBackButton title={t('subscriptionPage.title')} subtitle={t('subscriptionPage.subtitle')} />
+
       <KeyboardAvoidingView
         style={styles.kav}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={0}
       >
-        <SafeAreaView style={styles.safe} edges={['bottom']}>
-          <ScrollView
-            contentContainerStyle={styles.scroll}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="on-drag"
-          >
-        {isLoading ? (
-          <View style={styles.loadingBanner}>
-            <ActivityIndicator size="small" color={Colors.WINE} />
-            <Text style={styles.loadingBannerText}>Checking your subscription…</Text>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
+          {isLoading ? (
+            <View style={styles.loadingRow}>
+              <ActivityIndicator size="small" color={Colors.WINE} />
+              <Text style={styles.loadingText}>{t('subscriptionPage.loading')}</Text>
+            </View>
+          ) : null}
+
+          {!isLoading && isActive && subscription ? (
+            <>
+              <Text style={styles.mutedLead}>{t('subscriptionPage.activeLead')}</Text>
+              <Text style={styles.sectionLabel}>{t('subscriptionPage.sectionStatus')}</Text>
+              <View style={styles.group}>
+                <View style={styles.statusBlock}>
+                  <Ionicons name="checkmark-circle" size={24} color={Colors.SUCCESS} />
+                  <View style={styles.statusText}>
+                    <Text style={styles.statusTitle}>{t('subscriptionPage.activeTitle')}</Text>
+                    <Text style={styles.statusSub}>
+                      {t('subscriptionPage.activeEnds', {
+                        plan: subscription.planTitle,
+                        date: new Date(subscription.expiresAt).toLocaleDateString('en-GB', {
+                          day: 'numeric',
+                          month: 'short',
+                          year: 'numeric',
+                        }),
+                      })}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            </>
+          ) : null}
+
+          {!isLoading && !isActive ? (
+            <Text style={styles.mutedLead}>{t('subscriptionPage.inactiveLead')}</Text>
+          ) : null}
+
+          {!isLoading && !isActive ? (
+            <>
+              <Text style={styles.sectionLabel}>{t('subscriptionPage.sectionPlan')}</Text>
+              <View style={styles.group}>
+                {SOURCEWAVE_SUBSCRIPTION_PLANS.map((plan, index) => {
+                  const selected = plan.id === selectedPlanId;
+                  const last = index === SOURCEWAVE_SUBSCRIPTION_PLANS.length - 1;
+                  return (
+                    <TouchableOpacity
+                      key={plan.id}
+                      style={[styles.planRow, !last && styles.planRowBorder, selected && styles.planRowSelected]}
+                      onPress={() => setSelectedPlanId(plan.id)}
+                      activeOpacity={0.75}
+                    >
+                      <View style={styles.radioOuter}>{selected ? <View style={styles.radioInner} /> : null}</View>
+                      <View style={styles.planMain}>
+                        <Text style={styles.planTitle}>{plan.title}</Text>
+                        <Text style={styles.planDuration}>{plan.durationLabel}</Text>
+                        <Text style={styles.planDesc}>{plan.description}</Text>
+                      </View>
+                      <Text style={styles.planPrice}>{formatGhanaCedis(plan.priceGhs)}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <Text style={styles.sectionLabel}>{t('subscriptionPage.sectionPay')}</Text>
+              <View style={styles.group}>
+                <View style={styles.payRow}>
+                  <TouchableOpacity
+                    style={[styles.payOption, selectedPayment === 'mtn' && styles.payOptionSelected]}
+                    onPress={() => setSelectedPayment('mtn')}
+                    activeOpacity={0.85}
+                  >
+                    <Image source={mtnMomoImage} style={styles.payLogo} resizeMode="contain" />
+                    <Text style={styles.payLabel}>MTN</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.payOption, selectedPayment === 'telecel' && styles.payOptionSelected]}
+                    onPress={() => setSelectedPayment('telecel')}
+                    activeOpacity={0.85}
+                  >
+                    <Image source={telecelCashImage} style={styles.payLogo} resizeMode="contain" />
+                    <Text style={styles.payLabel}>Telecel</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={[styles.fieldPad, styles.fieldPadLast]}>
+                  <Text style={styles.label}>{t('subscriptionPage.walletLabel')}</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder={t('subscriptionPage.walletPlaceholder')}
+                    placeholderTextColor={Colors.TEXT_SECONDARY}
+                    keyboardType="phone-pad"
+                    value={paymentNumber}
+                    onChangeText={setPaymentNumber}
+                  />
+                </View>
+              </View>
+
+              <Text style={styles.footnote}>{t('subscriptionPage.footnote')}</Text>
+            </>
+          ) : null}
+
+          <View style={{ height: 16 }} />
+        </ScrollView>
+
+        {showActiveFooter ? (
+          <View style={styles.footer}>
+            <TouchableOpacity style={styles.doneBtn} onPress={() => navigation.goBack()} activeOpacity={0.85}>
+              <Text style={styles.doneBtnText}>{t('subscriptionPage.done')}</Text>
+            </TouchableOpacity>
           </View>
         ) : null}
 
-        {!isLoading && isActive && subscription ? (
-          <>
-            <Text style={styles.lead}>
-              You already have an active SourceWave access plan. Supplier messaging is available — you do not
-              need to purchase again until it ends.
-            </Text>
-            <View style={styles.activeBanner}>
-              <Ionicons name="checkmark-circle" size={22} color={Colors.SUCCESS} />
-              <View style={{ flex: 1, marginLeft: 10 }}>
-                <Text style={styles.activeTitle}>Plan active</Text>
-                <Text style={styles.activeSub}>
-                  {subscription.planTitle} · ends{' '}
-                  {new Date(subscription.expiresAt).toLocaleDateString('en-GB', {
-                    day: 'numeric',
-                    month: 'short',
-                    year: 'numeric',
-                  })}
-                </Text>
-              </View>
-            </View>
-            <TouchableOpacity style={styles.primaryBtn} onPress={() => navigation.goBack()}>
-              <Text style={styles.primaryBtnText}>Back</Text>
-            </TouchableOpacity>
-          </>
-        ) : null}
-
-        {!isLoading && !isActive ? (
-          <Text style={styles.lead}>
-            Subscribe to unlock in-app supplier messaging and transparent markup guidance on SourceWave-listed
-            inventory.
-          </Text>
-        ) : null}
-
-        {!isLoading && !isActive ? (
-          <>
-        <Text style={styles.sectionLabel}>Choose term</Text>
-        {SOURCEWAVE_SUBSCRIPTION_PLANS.map((plan) => {
-          const selected = plan.id === selectedPlanId;
-          return (
+        {showPurchaseFooter ? (
+          <View style={styles.footer}>
             <TouchableOpacity
-              key={plan.id}
-              style={[styles.planCard, selected && styles.planCardSelected]}
-              onPress={() => setSelectedPlanId(plan.id)}
-              activeOpacity={0.9}
+              style={[styles.payBtn, paying && styles.payBtnDisabled]}
+              onPress={handlePay}
+              disabled={paying}
+              activeOpacity={0.85}
             >
-              <View style={styles.planRow}>
-                <View style={styles.radioOuter}>{selected ? <View style={styles.radioInner} /> : null}</View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.planTitle}>{plan.title}</Text>
-                  <Text style={styles.planDuration}>{plan.durationLabel}</Text>
-                  <Text style={styles.planDesc}>{plan.description}</Text>
-                </View>
-                <Text style={styles.planPrice}>{formatGhanaCedis(plan.priceGhs)}</Text>
-              </View>
+              {paying ? (
+                <ActivityIndicator color={Colors.WHITE} />
+              ) : (
+                <Text style={styles.payBtnText}>
+                  {t('subscriptionPage.payCta', { amount: formatGhanaCedis(selectedPlan.priceGhs) })}
+                </Text>
+              )}
             </TouchableOpacity>
-          );
-        })}
-
-        <Text style={styles.sectionLabel}>Pay with mobile money</Text>
-        <View style={styles.payRow}>
-          <TouchableOpacity
-            style={[styles.payOption, selectedPayment === 'mtn' && styles.payOptionSelected]}
-            onPress={() => setSelectedPayment('mtn')}
-          >
-            <Image source={mtnMomoImage} style={styles.payLogo} resizeMode="contain" />
-            <Text style={styles.payLabel}>MTN</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.payOption, selectedPayment === 'telecel' && styles.payOptionSelected]}
-            onPress={() => setSelectedPayment('telecel')}
-          >
-            <Image source={telecelCashImage} style={styles.payLogo} resizeMode="contain" />
-            <Text style={styles.payLabel}>Telecel</Text>
-          </TouchableOpacity>
-        </View>
-
-        <Text style={styles.sectionLabel}>Wallet number</Text>
-        <TextInput
-          style={styles.phoneInput}
-          placeholder="e.g. 0244123456"
-          placeholderTextColor={Colors.TEXT_SECONDARY}
-          keyboardType="phone-pad"
-          value={paymentNumber}
-          onChangeText={setPaymentNumber}
-        />
-
-        <TouchableOpacity
-          style={[styles.primaryBtn, paying && styles.primaryBtnDisabled]}
-          onPress={handlePay}
-          disabled={paying}
-        >
-          {paying ? (
-            <ActivityIndicator color={Colors.WHITE} />
-          ) : (
-            <Text style={styles.primaryBtnText}>
-              Pay {formatGhanaCedis(selectedPlan.priceGhs)} with Paystack
-            </Text>
-          )}
-        </TouchableOpacity>
-
-        {lastReference ? (
-          <TouchableOpacity
-            style={styles.secondaryBtn}
-            onPress={() => handleVerify()}
-            disabled={verifying}
-          >
-            {verifying ? (
-              <ActivityIndicator color={Colors.WINE} />
-            ) : (
-              <Text style={styles.secondaryBtnText}>Verify completed payment</Text>
-            )}
-          </TouchableOpacity>
+            {lastReference ? (
+              <TouchableOpacity
+                style={styles.verifyBtn}
+                onPress={() => handleVerify()}
+                disabled={verifying}
+                activeOpacity={0.75}
+              >
+                {verifying ? (
+                  <ActivityIndicator color={Colors.WINE} />
+                ) : (
+                  <Text style={styles.verifyBtnText}>{t('subscriptionPage.verifyCompleted')}</Text>
+                )}
+              </TouchableOpacity>
+            ) : null}
+          </View>
         ) : null}
-
-        <Text style={styles.footnote}>
-          Prices are in Ghana Cedis (GHS). After Paystack, access is saved on this device and your plan is recorded on
-          the server using the selected term (3, 6, or 9 months).
-        </Text>
-          </>
-        ) : null}
-          </ScrollView>
-        </SafeAreaView>
       </KeyboardAvoidingView>
-    </View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Colors.BACKGROUND },
-  kav: { flex: 1 },
-  safe: { flex: 1, backgroundColor: Colors.BACKGROUND },
-  scroll: { padding: Spacing.MD, paddingBottom: 40 },
-  lead: {
-    fontSize: 14,
-    color: Colors.DARK_GRAY,
-    lineHeight: 21,
-    marginBottom: Spacing.LG,
+  container: {
+    flex: 1,
+    backgroundColor: Colors.OFF_WHITE,
   },
-  loadingBanner: {
+  kav: { flex: 1 },
+  scroll: { flex: 1 },
+  scrollContent: {
+    paddingBottom: 12,
+  },
+  loadingRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    marginBottom: Spacing.MD,
-    paddingVertical: Spacing.SM,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    paddingVertical: 16,
   },
-  loadingBannerText: {
+  loadingText: {
     fontSize: 14,
     color: Colors.TEXT_SECONDARY,
+    fontWeight: '500',
   },
-  activeBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: Spacing.MD,
-    borderRadius: 14,
-    backgroundColor: Colors.LIGHT_GRAY,
-    marginBottom: Spacing.LG,
+  mutedLead: {
+    fontSize: 14,
+    color: Colors.DARK_GRAY,
+    lineHeight: 21,
+    marginBottom: Spacing.MD,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    marginTop: 4,
   },
-  activeTitle: { fontWeight: '700', fontSize: 15, color: Colors.BLACK },
-  activeSub: { fontSize: 13, color: Colors.TEXT_SECONDARY, marginTop: 4 },
   sectionLabel: {
-    fontSize: 13,
+    fontSize: 11,
     fontWeight: '700',
     color: Colors.TEXT_SECONDARY,
-    marginBottom: Spacing.SM,
+    letterSpacing: 0.8,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    marginTop: 18,
+    marginBottom: 8,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
   },
-  planCard: {
-    borderWidth: 2,
-    borderColor: Colors.BORDER,
-    borderRadius: 16,
-    padding: Spacing.MD,
-    marginBottom: Spacing.SM,
+  group: {
     backgroundColor: Colors.WHITE,
+    borderTopWidth: hairline,
+    borderBottomWidth: hairline,
+    borderColor: Colors.BORDER,
   },
-  planCardSelected: {
-    borderColor: Colors.WINE,
-    backgroundColor: Colors.LIGHT_PINK,
+  statusBlock: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    paddingVertical: 16,
+    gap: 12,
   },
-  planRow: { flexDirection: 'row', alignItems: 'flex-start' },
+  statusText: { flex: 1, minWidth: 0 },
+  statusTitle: { fontWeight: '700', fontSize: 16, color: Colors.BLACK },
+  statusSub: { fontSize: 14, color: Colors.TEXT_SECONDARY, marginTop: 6, lineHeight: 20 },
+  planRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    paddingVertical: 14,
+  },
+  planRowBorder: {
+    borderBottomWidth: hairline,
+    borderBottomColor: Colors.BORDER,
+  },
+  planRowSelected: {
+    backgroundColor: 'rgba(230, 0, 18, 0.05)',
+  },
   radioOuter: {
     width: 22,
     height: 22,
@@ -424,51 +454,94 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: Colors.WINE,
   },
-  planTitle: { fontSize: 17, fontWeight: '800', color: Colors.BLACK },
+  planMain: { flex: 1, minWidth: 0 },
+  planTitle: { fontSize: 16, fontWeight: '700', color: Colors.BLACK },
   planDuration: { fontSize: 13, color: Colors.TEXT_SECONDARY, marginTop: 2 },
-  planDesc: { fontSize: 13, color: Colors.DARK_GRAY, marginTop: 8, lineHeight: 18 },
-  planPrice: { fontSize: 16, fontWeight: '800', color: Colors.WINE, marginLeft: 8 },
-  payRow: { flexDirection: 'row', gap: 12, marginBottom: Spacing.MD },
+  planDesc: { fontSize: 13, color: Colors.DARK_GRAY, marginTop: 6, lineHeight: 18 },
+  planPrice: { fontSize: 15, fontWeight: '800', color: Colors.WINE, marginLeft: 8 },
+  payRow: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    paddingTop: 14,
+    paddingBottom: 14,
+    borderBottomWidth: hairline,
+    borderBottomColor: Colors.BORDER,
+  },
   payOption: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    paddingVertical: 14,
-    borderRadius: 14,
-    borderWidth: 2,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: hairline,
     borderColor: Colors.BORDER,
-    backgroundColor: Colors.WHITE,
+    backgroundColor: Colors.OFF_WHITE,
   },
-  payOptionSelected: { borderColor: Colors.WINE, backgroundColor: Colors.LIGHT_PINK },
-  payLogo: { width: 36, height: 36 },
-  payLabel: { fontWeight: '700', color: Colors.BLACK },
-  phoneInput: {
+  payOptionSelected: {
+    borderColor: Colors.WINE,
+    backgroundColor: 'rgba(230, 0, 18, 0.06)',
+  },
+  payLogo: { width: 32, height: 32 },
+  payLabel: { fontWeight: '700', fontSize: 14, color: Colors.BLACK },
+  fieldPad: {
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    paddingVertical: 14,
+  },
+  fieldPadLast: {},
+  label: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: Colors.BLACK,
+    marginBottom: 8,
+  },
+  textInput: {
     borderWidth: 1,
     borderColor: Colors.BORDER,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 16,
-    marginBottom: Spacing.MD,
-    backgroundColor: Colors.WHITE,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
     color: Colors.BLACK,
+    backgroundColor: Colors.OFF_WHITE,
   },
-  primaryBtn: {
-    backgroundColor: Colors.WINE,
-    paddingVertical: 16,
-    borderRadius: 14,
-    alignItems: 'center',
-    marginBottom: Spacing.SM,
+  footnote: {
+    fontSize: 12,
+    color: Colors.TEXT_SECONDARY,
+    lineHeight: 17,
+    marginTop: Spacing.MD,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
   },
-  primaryBtnDisabled: { opacity: 0.6 },
-  primaryBtnText: { color: Colors.WHITE, fontSize: 16, fontWeight: '700' },
-  secondaryBtn: {
+  footer: {
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    paddingTop: 12,
+    paddingBottom: 12,
+    backgroundColor: Colors.WHITE,
+    borderTopWidth: hairline,
+    borderTopColor: Colors.BORDER,
+    gap: 10,
+  },
+  payBtn: {
+    backgroundColor: Colors.SUCCESS,
+    borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
-    marginBottom: Spacing.LG,
+    justifyContent: 'center',
   },
-  secondaryBtnText: { color: Colors.WINE, fontWeight: '700', fontSize: 15 },
-  footnote: { fontSize: 12, color: Colors.TEXT_SECONDARY, lineHeight: 17 },
+  payBtnDisabled: { opacity: 0.65 },
+  payBtnText: { color: Colors.WHITE, fontSize: 16, fontWeight: '600' },
+  verifyBtn: {
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  verifyBtnText: { color: Colors.WINE, fontWeight: '700', fontSize: 15 },
+  doneBtn: {
+    backgroundColor: Colors.SUCCESS,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  doneBtnText: { color: Colors.WHITE, fontSize: 16, fontWeight: '600' },
 });

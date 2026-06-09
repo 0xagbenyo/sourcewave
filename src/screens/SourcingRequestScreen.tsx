@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -9,13 +9,18 @@ import {
   TextInput,
   Alert,
   Image,
+  Platform,
+  Keyboard,
+  KeyboardAvoidingView,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { Colors } from '../constants/colors';
+import { Spacing } from '../constants/spacing';
+import { Header } from '../components/Header';
 import { useUserSession } from '../context/UserContext';
+import { useTranslation } from 'react-i18next';
 import { getERPNextClient } from '../services/erpnext';
 import {
   buildSourcingCategoryOptions,
@@ -25,22 +30,45 @@ import { Category } from '../types';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { withOtherItemOption, SourcingItemOption } from '../utils/sourcingItems';
 
+const hairline = StyleSheet.hairlineWidth;
+
+type RequestForm = {
+  id: string;
+  expanded: boolean;
+  selectedCategoryId: string;
+  selectedCategoryName: string;
+  selectedProductId: string;
+  itemDescription: string;
+  referenceImageUri: string | null;
+  quantity: string;
+  expectedRate: string;
+  loadingProducts: boolean;
+};
+
+const newForm = (expanded: boolean): RequestForm => ({
+  id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+  expanded,
+  selectedCategoryId: '',
+  selectedCategoryName: '',
+  selectedProductId: '',
+  itemDescription: '',
+  referenceImageUri: null,
+  quantity: '1',
+  expectedRate: '',
+  loadingProducts: false,
+});
+
 export const SourcingRequestScreen: React.FC = () => {
-  const navigation = useNavigation();
+  const { t } = useTranslation();
   const { user } = useUserSession();
+  const insets = useSafeAreaInsets();
+  const [keyboardPad, setKeyboardPad] = useState(0);
+
   const [allGroups, setAllGroups] = useState<any[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(false);
-
-  const [selectedCategoryId, setSelectedCategoryId] = useState('');
-  const [selectedCategoryName, setSelectedCategoryName] = useState('');
-  const [selectedProductId, setSelectedProductId] = useState('');
-  const [itemDescription, setItemDescription] = useState('');
-  const [referenceImageUri, setReferenceImageUri] = useState<string | null>(null);
-  const [quantity, setQuantity] = useState('1');
-  const [expectedRate, setExpectedRate] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [categoryProducts, setCategoryProducts] = useState<SourcingItemOption[]>([]);
-  const [loadingProducts, setLoadingProducts] = useState(false);
+  const [forms, setForms] = useState<RequestForm[]>([newForm(true)]);
+  const [productsByFormId, setProductsByFormId] = useState<Record<string, SourcingItemOption[]>>({});
 
   useEffect(() => {
     const fetchGroups = async () => {
@@ -55,8 +83,20 @@ export const SourcingRequestScreen: React.FC = () => {
         setLoadingGroups(false);
       }
     };
+    void fetchGroups();
+  }, []);
 
-    fetchGroups();
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const subShow = Keyboard.addListener(showEvent, (e) => {
+      setKeyboardPad(e.endCoordinates?.height ?? 0);
+    });
+    const subHide = Keyboard.addListener(hideEvent, () => setKeyboardPad(0));
+    return () => {
+      subShow.remove();
+      subHide.remove();
+    };
   }, []);
 
   const categoryTree = useMemo<Category[]>(
@@ -71,123 +111,116 @@ export const SourcingRequestScreen: React.FC = () => {
     [allGroups]
   );
 
-  const itemCategoryList = useMemo(
-    () => buildSourcingCategoryOptions(allGroups),
-    [allGroups]
-  );
+  const itemCategoryList = useMemo(() => buildSourcingCategoryOptions(allGroups), [allGroups]);
 
-  useEffect(() => {
-    const fetchProductsForCategory = async () => {
-      if (!selectedCategoryId) {
-        setCategoryProducts([]);
-        return;
-      }
+  const updateForm = (formId: string, updates: Partial<RequestForm>) => {
+    setForms((prev) => prev.map((f) => (f.id === formId ? { ...f, ...updates } : f)));
+  };
 
-      try {
-        setLoadingProducts(true);
-        const client = getERPNextClient();
-        const groupIds = resolveItemGroupIdsForSourcingCategory(selectedCategoryId, categoryTree);
-        const items = await client.getRawItemsByGroups(groupIds, 500);
-        const uniqueMap = new Map<string, any>();
-        items.forEach((item: any) => {
-          if (item?.name) uniqueMap.set(item.name, item);
-        });
-        const dropdownItems: SourcingItemOption[] = Array.from(uniqueMap.values())
+  const fetchItemsForForm = async (formId: string, categoryId: string) => {
+    try {
+      updateForm(formId, { loadingProducts: true });
+      const client = getERPNextClient();
+      const groupIds = resolveItemGroupIdsForSourcingCategory(categoryId, categoryTree);
+      const items = await client.getRawItemsByGroups(groupIds, 500);
+      const unique = new Map<string, any>();
+      items.forEach((item: any) => {
+        if (item?.name) unique.set(item.name, item);
+      });
+      const dropdownItems: SourcingItemOption[] = withOtherItemOption(
+        Array.from(unique.values())
           .filter((item: any) => Number(item?.disabled) !== 1)
           .map((item: any) => ({
             id: item.name,
             name: item.item_name || item.name,
             itemCode: item.name,
-          }));
-        setCategoryProducts(withOtherItemOption(dropdownItems));
-      } catch (error) {
-        console.error('Error fetching category items:', error);
-        setCategoryProducts([]);
-      } finally {
-        setLoadingProducts(false);
-      }
-    };
-
-    fetchProductsForCategory();
-  }, [selectedCategoryId, categoryTree]);
-
-  const selectedProduct = useMemo(
-    () => categoryProducts.find((product) => product.id === selectedProductId),
-    [categoryProducts, selectedProductId]
-  );
-  const quantityNum = parseInt(quantity, 10);
-  const rateNum = parseFloat(expectedRate);
-
-  const canSubmit =
-    !!selectedCategoryId &&
-    !!selectedProduct &&
-    !!itemDescription.trim() &&
-    !!quantity.trim() &&
-    quantityNum >= 1 &&
-    !!expectedRate.trim() &&
-    rateNum > 0 &&
-    !!referenceImageUri &&
-    !submitting;
-
-  const handleCategorySelect = (category: { id: string; name: string }) => {
-    setSelectedCategoryId(category.id);
-    setSelectedCategoryName(category.name);
-    setSelectedProductId('');
+          }))
+      );
+      setProductsByFormId((prev) => ({ ...prev, [formId]: dropdownItems }));
+    } catch (error) {
+      console.error('Error fetching items for form:', error);
+      setProductsByFormId((prev) => ({ ...prev, [formId]: [] }));
+    } finally {
+      updateForm(formId, { loadingProducts: false });
+    }
   };
 
-  const handleItemSelect = (product: { id: string; name: string }) => {
-    setSelectedProductId(product.id);
+  const selectedProductFor = (form: RequestForm) =>
+    (productsByFormId[form.id] || []).find((p) => p.id === form.selectedProductId);
+
+  const addAnotherLine = () => {
+    setForms((prev) => [...prev.map((f) => ({ ...f, expanded: false })), newForm(true)]);
   };
 
-  const handlePickImage = async () => {
+  const removeLine = (formId: string) => {
+    setForms((prev) => {
+      if (prev.length <= 1) return prev;
+      return prev.filter((f) => f.id !== formId);
+    });
+    setProductsByFormId((prev) => {
+      const next = { ...prev };
+      delete next[formId];
+      return next;
+    });
+  };
+
+  const resetAll = useCallback(() => {
+    setForms([newForm(true)]);
+    setProductsByFormId({});
+  }, []);
+
+  const pickImageFor = async (formId: string) => {
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
         Alert.alert('Permission Required', 'Please allow media library access to select an image.');
         return;
       }
-
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        allowsEditing: true,
+        allowsEditing: Platform.OS === 'ios',
         quality: 0.8,
       });
-
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        setReferenceImageUri(result.assets[0].uri);
+      if (!result.canceled && result.assets?.length) {
+        updateForm(formId, { referenceImageUri: result.assets[0].uri });
       }
-    } catch (error) {
+    } catch {
       Alert.alert('Image Error', 'Unable to pick image right now.');
     }
   };
 
-  const handleSubmit = async () => {
-    const qty = parseInt(quantity, 10);
-    const rate = parseFloat(expectedRate);
+  const submitAll = async () => {
+    for (let i = 0; i < forms.length; i += 1) {
+      const form = forms[i];
+      const product = selectedProductFor(form);
+      const qty = parseInt(form.quantity, 10);
+      const rate = parseFloat(form.expectedRate);
+      const requestNum = i + 1;
 
-    if (!selectedProduct) {
-      Alert.alert('Missing Item', 'Please select an item to request.');
-      return;
-    }
-    if (!qty || qty < 1) {
-      Alert.alert('Invalid Quantity', 'Quantity must be at least 1.');
-      return;
-    }
-    if (!rate || rate <= 0) {
-      Alert.alert('Invalid Expected Rate', 'Expected rate must be greater than 0.');
-      return;
-    }
-    if (!itemDescription.trim()) {
-      Alert.alert('Description Required', 'Please enter an item description.');
-      return;
-    }
-    if (!selectedCategoryId) {
-      Alert.alert('Missing Category', 'Please select an item category.');
-      return;
-    }
-    if (!referenceImageUri) {
-      Alert.alert('Reference Image Required', 'Please upload a preference image before submitting.');
-      return;
+      if (!form.selectedCategoryId) {
+        Alert.alert('Missing Category', `Line ${requestNum}: select an item category.`);
+        return;
+      }
+      if (!product) {
+        Alert.alert('Missing Item', `Line ${requestNum}: select an item.`);
+        return;
+      }
+      if (!form.itemDescription.trim()) {
+        Alert.alert('Description Required', `Line ${requestNum}: enter an item description.`);
+        return;
+      }
+      if (!form.referenceImageUri) {
+        Alert.alert('Image Required', `Line ${requestNum}: upload a reference image.`);
+        return;
+      }
+      if (!qty || qty < 1) {
+        Alert.alert('Invalid Quantity', `Line ${requestNum}: quantity must be at least 1.`);
+        return;
+      }
+      if (!rate || rate <= 0) {
+        Alert.alert('Invalid Rate', `Line ${requestNum}: expected rate must be greater than 0.`);
+        return;
+      }
     }
 
     try {
@@ -196,32 +229,24 @@ export const SourcingRequestScreen: React.FC = () => {
       const sessionUser = (user?.user || '').trim();
       const sessionEmail = (user?.email || '').trim();
 
-      // Always resolve ERPNext Customer ID (e.g., CUST-00001), not email.
       let customerId = '';
       if (sessionEmail) {
         const customerByEmail = await client.getCustomerByEmail(sessionEmail);
-        if (customerByEmail?.name) {
-          customerId = customerByEmail.name;
-        }
+        if (customerByEmail?.name) customerId = customerByEmail.name;
       }
       if (!customerId && sessionUser && !sessionUser.includes('@')) {
         customerId = sessionUser;
       }
-
       if (!customerId) {
         Alert.alert('Error', 'Unable to resolve your customer profile. Please log in again.');
-        setSubmitting(false);
         return;
       }
 
-      // Resolve a valid company from ERPNext.
       let companyName = 'Your Company';
       try {
         const companies = await client.getCompanies(1);
-        if (companies && companies.length > 0 && companies[0]?.name) {
-          companyName = companies[0].name;
-        }
-      } catch (error) {
+        if (companies?.[0]?.name) companyName = companies[0].name;
+      } catch {
         console.warn('Could not auto-resolve company, using fallback value.');
       }
 
@@ -229,80 +254,57 @@ export const SourcingRequestScreen: React.FC = () => {
       const deliveryDate = new Date(transactionDate);
       deliveryDate.setDate(deliveryDate.getDate() + 21);
 
-      const orderData = {
+      const items = forms.map((form) => {
+        const product = selectedProductFor(form) as SourcingItemOption;
+        const qty = parseInt(form.quantity, 10);
+        const rate = parseFloat(form.expectedRate);
+        return {
+          item_code: product.itemCode || product.id,
+          qty,
+          rate,
+          amount: qty * rate,
+          description: form.itemDescription.trim(),
+        };
+      });
+
+      const createdOrder = await client.createSalesOrder({
         customer: customerId,
         company: companyName,
         transaction_date: transactionDate.toISOString().split('T')[0],
         delivery_date: deliveryDate.toISOString().split('T')[0],
-        items: [
-          {
-            item_code: selectedProduct.itemCode || selectedProduct.id,
-            qty,
-            rate,
-            amount: qty * rate,
-            description: [
-              itemDescription.trim(),
-              referenceImageUri ? `Reference Image: ${referenceImageUri}` : '',
-            ]
-              .filter(Boolean)
-              .join('\n'),
-          },
-        ],
-      };
+        items,
+      });
 
-      const createdOrder = await client.createSalesOrder(orderData);
-
-      // Upload and attach reference image to the created Sales Order.
-      if (referenceImageUri) {
+      for (let i = 0; i < forms.length; i += 1) {
+        const form = forms[i];
+        if (!form.referenceImageUri) continue;
         try {
-          const fileName = `sourcing-reference-${Date.now()}.jpg`;
           const uploadResponse = await client.uploadFileToDoc(
-            referenceImageUri,
-            fileName,
+            form.referenceImageUri,
+            `sourcing-reference-${i + 1}-${Date.now()}.jpg`,
             'Sales Order',
             createdOrder.name,
             true
           );
-
-          // If Sales Order has an image field, populate it with uploaded file URL.
-          const fileUrl =
-            uploadResponse?.message?.file_url ||
-            uploadResponse?.message?.file_url?.toString?.() ||
-            uploadResponse?.file_url ||
-            '';
-          if (fileUrl) {
+          const fileUrl = uploadResponse?.message?.file_url || uploadResponse?.file_url || '';
+          if (fileUrl && i === 0) {
             try {
               await client.updateSalesOrder(createdOrder.name, { image: fileUrl });
-            } catch (imageFieldError: any) {
-              const errText = String(imageFieldError?.message || '');
-              if (errText.includes('image')) {
-                // Fallback for custom field naming used in many ERPNext instances.
-                await client.updateSalesOrder(createdOrder.name, { custom_image: fileUrl });
-              } else {
-                throw imageFieldError;
-              }
+            } catch {
+              await client.updateSalesOrder(createdOrder.name, { custom_image: fileUrl });
             }
           }
-        } catch (uploadError) {
-          console.warn('Reference image upload failed:', uploadError);
-          Alert.alert(
-            'Image Not Attached',
-            'Order was created, but the reference image could not be attached.'
-          );
+        } catch (e) {
+          console.warn('Reference image upload failed:', e);
         }
       }
 
       await client.submitSalesOrder(createdOrder.name);
 
       Alert.alert(
-        'Request Submitted',
-        `Purchase order ${createdOrder.name} has been created successfully.`,
-        [
-          {
-            text: 'OK',
-            onPress: () => navigation.goBack(),
-          },
-        ]
+        t('sourcing.submittedTitle'),
+        t('sourcing.submittedBody', { name: createdOrder.name }),
+        [{ text: 'OK', onPress: () => resetAll() }]
       );
     } catch (error: any) {
       console.error('Error creating sourcing request order:', error);
@@ -312,107 +314,187 @@ export const SourcingRequestScreen: React.FC = () => {
     }
   };
 
+  const canSubmit = forms.length > 0 && !submitting;
+
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerIconButton}>
-          <Ionicons name="arrow-back" size={20} color={Colors.BLACK} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Request Item From China</Text>
-        <View style={styles.headerIconButton} />
-      </View>
-
-      <ScrollView
-        style={styles.content}
-        contentContainerStyle={styles.contentContainer}
-        keyboardShouldPersistTaps="handled"
-        nestedScrollEnabled
+    <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
+      <Header title={t('tabs.sourcing')} />
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoid}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={insets.top + 56}
       >
-        <Text style={styles.label}>Item Category *</Text>
-        <SearchableSelect
-          options={itemCategoryList}
-          selectedId={selectedCategoryId}
-          selectedLabel={selectedCategoryName}
-          onSelect={handleCategorySelect}
-          placeholder="Select item category"
-          searchPlaceholder="Search categories..."
-          loading={loadingGroups}
-          emptyText="No item categories available right now."
-        />
-
-        <Text style={styles.label}>Item *</Text>
-        <SearchableSelect
-          options={categoryProducts}
-          selectedId={selectedProductId}
-          selectedLabel={selectedProduct?.name}
-          onSelect={handleItemSelect}
-          placeholder={selectedCategoryId ? 'Select item' : 'Select item category first'}
-          searchPlaceholder="Search items..."
-          disabled={!selectedCategoryId}
-          loading={loadingProducts}
-          emptyText="No items found in this category."
-          listMaxHeight={320}
-        />
-
-        <Text style={styles.label}>Item Description *</Text>
-        <TextInput
-          style={[styles.input, styles.textArea]}
-          value={itemDescription}
-          onChangeText={setItemDescription}
-          placeholder="Describe the item you need"
-          placeholderTextColor={Colors.TEXT_SECONDARY}
-          multiline
-          textAlignVertical="top"
-        />
-
-        <Text style={styles.label}>Preference Image *</Text>
-        <TouchableOpacity style={styles.imagePickerButton} onPress={handlePickImage}>
-          <Ionicons name="image-outline" size={16} color={Colors.ROYAL_BLUE} />
-          <Text style={styles.imagePickerButtonText}>
-            {referenceImageUri ? 'Change Image' : 'Upload Image'}
-          </Text>
-        </TouchableOpacity>
-        {referenceImageUri && (
-          <View style={styles.imagePreviewWrap}>
-            <Image source={{ uri: referenceImageUri }} style={styles.imagePreview} />
-            <TouchableOpacity onPress={() => setReferenceImageUri(null)} style={styles.removeImageButton}>
-              <Ionicons name="close-circle" size={20} color={Colors.ERROR} />
-            </TouchableOpacity>
-          </View>
-        )}
-
-        <Text style={styles.label}>Quantity *</Text>
-        <TextInput
-          style={styles.input}
-          value={quantity}
-          onChangeText={(value) => setQuantity(value.replace(/[^0-9]/g, ''))}
-          keyboardType="numeric"
-          placeholder="Enter quantity"
-          placeholderTextColor={Colors.TEXT_SECONDARY}
-        />
-
-        <Text style={styles.label}>Expected Rate (GH₵) *</Text>
-        <TextInput
-          style={styles.input}
-          value={expectedRate}
-          onChangeText={(value) => setExpectedRate(value.replace(/[^0-9.]/g, ''))}
-          keyboardType="decimal-pad"
-          placeholder="Enter expected rate"
-          placeholderTextColor={Colors.TEXT_SECONDARY}
-        />
-
-        <TouchableOpacity
-          style={[styles.submitButton, !canSubmit && styles.submitButtonDisabled]}
-          onPress={handleSubmit}
-          disabled={!canSubmit}
+        <ScrollView
+          style={styles.content}
+          contentContainerStyle={[
+            styles.contentContainer,
+            { paddingBottom: 48 + (Platform.OS === 'android' ? keyboardPad : 0) },
+          ]}
+          keyboardShouldPersistTaps="handled"
+          nestedScrollEnabled
+          keyboardDismissMode="interactive"
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
         >
-          {submitting ? (
-            <ActivityIndicator color={Colors.WHITE} />
-          ) : (
-            <Text style={styles.submitButtonText}>Submit Request</Text>
-          )}
-        </TouchableOpacity>
-      </ScrollView>
+          <Text style={styles.pageHint}>{t('sourcing.pageHint')}</Text>
+
+          {forms.map((form, idx) => {
+            const product = selectedProductFor(form);
+            const formProducts = productsByFormId[form.id] || [];
+
+            return (
+              <View key={form.id} style={styles.lineCard}>
+                <TouchableOpacity
+                  style={styles.lineHeader}
+                  onPress={() => updateForm(form.id, { expanded: !form.expanded })}
+                  activeOpacity={0.75}
+                >
+                  <Text style={styles.lineIndex}>{String(idx + 1).padStart(2, '0')}</Text>
+                  <View style={styles.lineHeaderText}>
+                    <Text style={styles.lineTitle}>{t('sourcing.lineLabel', { n: idx + 1 })}</Text>
+                    {!form.expanded ? (
+                      <Text style={styles.linePreview} numberOfLines={1}>
+                        {product?.name || t('sourcing.tapToExpand')}
+                      </Text>
+                    ) : null}
+                  </View>
+                  {forms.length > 1 ? (
+                    <TouchableOpacity
+                      onPress={() => removeLine(form.id)}
+                      style={styles.removeHit}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={t('sourcing.removeLineA11y')}
+                    >
+                      <Ionicons name="trash-outline" size={20} color={Colors.TEXT_SECONDARY} />
+                    </TouchableOpacity>
+                  ) : (
+                    <View style={styles.removeHit} />
+                  )}
+                  <Ionicons
+                    name={form.expanded ? 'chevron-up' : 'chevron-down'}
+                    size={20}
+                    color={Colors.TEXT_SECONDARY}
+                  />
+                </TouchableOpacity>
+
+                {form.expanded ? (
+                  <View style={styles.lineBody}>
+                    <Text style={styles.fieldLabel}>{t('sourcing.fieldCategory')}</Text>
+                    <SearchableSelect
+                      options={itemCategoryList}
+                      selectedId={form.selectedCategoryId}
+                      selectedLabel={form.selectedCategoryName}
+                      onSelect={async (category) => {
+                        updateForm(form.id, {
+                          selectedCategoryId: category.id,
+                          selectedCategoryName: category.name,
+                          selectedProductId: '',
+                        });
+                        await fetchItemsForForm(form.id, category.id);
+                      }}
+                      placeholder={t('sourcing.phCategory')}
+                      searchPlaceholder={t('sourcing.searchCategory')}
+                      loading={loadingGroups}
+                      emptyText={t('sourcing.emptyCategories')}
+                    />
+
+                    <Text style={styles.fieldLabel}>{t('sourcing.fieldItem')}</Text>
+                    <SearchableSelect
+                      options={formProducts}
+                      selectedId={form.selectedProductId}
+                      selectedLabel={product?.name}
+                      onSelect={(item) => updateForm(form.id, { selectedProductId: item.id })}
+                      placeholder={
+                        form.selectedCategoryId ? t('sourcing.phItem') : t('sourcing.phItemNeedCategory')
+                      }
+                      searchPlaceholder={t('sourcing.searchItem')}
+                      disabled={!form.selectedCategoryId}
+                      loading={form.loadingProducts}
+                      emptyText={t('sourcing.emptyItems')}
+                      listMaxHeight={320}
+                    />
+
+                    <Text style={styles.fieldLabel}>{t('sourcing.fieldDescription')}</Text>
+                    <TextInput
+                      style={[styles.input, styles.textArea]}
+                      value={form.itemDescription}
+                      onChangeText={(v) => updateForm(form.id, { itemDescription: v })}
+                      placeholder={t('sourcing.phDescription')}
+                      placeholderTextColor={Colors.TEXT_SECONDARY}
+                      multiline
+                      textAlignVertical="top"
+                    />
+
+                    <Text style={styles.fieldLabel}>{t('sourcing.fieldImage')}</Text>
+                    <TouchableOpacity style={styles.imageRow} onPress={() => pickImageFor(form.id)}>
+                      <Ionicons name="image-outline" size={20} color={Colors.WINE} />
+                      <Text style={styles.imageRowText}>
+                        {form.referenceImageUri ? t('sourcing.changeImage') : t('sourcing.uploadImage')}
+                      </Text>
+                    </TouchableOpacity>
+                    {form.referenceImageUri ? (
+                      <View style={styles.previewWrap}>
+                        <Image source={{ uri: form.referenceImageUri }} style={styles.preview} />
+                        <TouchableOpacity
+                          onPress={() => updateForm(form.id, { referenceImageUri: null })}
+                          style={styles.previewClear}
+                        >
+                          <Ionicons name="close-circle" size={22} color={Colors.ERROR} />
+                        </TouchableOpacity>
+                      </View>
+                    ) : null}
+
+                    <View style={styles.rowTwo}>
+                      <View style={styles.rowTwoCell}>
+                        <Text style={styles.fieldLabel}>{t('sourcing.fieldQty')}</Text>
+                        <TextInput
+                          style={styles.input}
+                          value={form.quantity}
+                          onChangeText={(v) => updateForm(form.id, { quantity: v.replace(/[^0-9]/g, '') })}
+                          keyboardType="numeric"
+                          placeholder="1"
+                          placeholderTextColor={Colors.TEXT_SECONDARY}
+                        />
+                      </View>
+                      <View style={styles.rowTwoGap} />
+                      <View style={styles.rowTwoCell}>
+                        <Text style={styles.fieldLabel}>{t('sourcing.fieldRate')}</Text>
+                        <TextInput
+                          style={styles.input}
+                          value={form.expectedRate}
+                          onChangeText={(v) =>
+                            updateForm(form.id, { expectedRate: v.replace(/[^0-9.]/g, '') })
+                          }
+                          keyboardType="decimal-pad"
+                          placeholder={t('sourcing.phRate')}
+                          placeholderTextColor={Colors.TEXT_SECONDARY}
+                        />
+                      </View>
+                    </View>
+                  </View>
+                ) : null}
+              </View>
+            );
+          })}
+
+          <TouchableOpacity style={styles.addLine} onPress={addAnotherLine} activeOpacity={0.7}>
+            <Ionicons name="add" size={22} color={Colors.WINE} />
+            <Text style={styles.addLineText}>{t('sourcing.addAnotherLine')}</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.submit, !canSubmit && styles.submitDisabled]}
+            onPress={submitAll}
+            disabled={!canSubmit}
+          >
+            {submitting ? (
+              <ActivityIndicator color={Colors.WHITE} />
+            ) : (
+              <Text style={styles.submitText}>{t('sourcing.submitAll')}</Text>
+            )}
+          </TouchableOpacity>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
@@ -420,103 +502,149 @@ export const SourcingRequestScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.BACKGROUND,
+    backgroundColor: Colors.OFF_WHITE,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.BORDER,
-    backgroundColor: Colors.WHITE,
-  },
-  headerIconButton: {
-    width: 28,
-    alignItems: 'center',
-  },
-  headerTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: Colors.BLACK,
-  },
-  content: {
-    flex: 1,
-  },
+  keyboardAvoid: { flex: 1 },
+  content: { flex: 1 },
   contentContainer: {
-    padding: 16,
-  },
-  label: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.BLACK,
-    marginBottom: 6,
-    marginTop: 10,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: Colors.BORDER,
-    borderRadius: 8,
-    backgroundColor: Colors.WHITE,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    fontSize: 13,
-    color: Colors.BLACK,
-  },
-  textArea: {
-    minHeight: 90,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
     paddingTop: 10,
   },
-  imagePickerButton: {
-    borderWidth: 1,
-    borderColor: Colors.ROYAL_BLUE,
-    borderRadius: 8,
+  pageHint: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: Colors.TEXT_SECONDARY,
+    marginBottom: 18,
+    fontWeight: '500',
+  },
+  lineCard: {
     backgroundColor: Colors.WHITE,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    marginBottom: 14,
+    borderBottomWidth: hairline,
+    borderBottomColor: Colors.BORDER,
+  },
+  lineHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderBottomWidth: hairline,
+    borderBottomColor: Colors.BORDER,
   },
-  imagePickerButtonText: {
+  lineIndex: {
     fontSize: 13,
-    fontWeight: '600',
-    color: Colors.ROYAL_BLUE,
+    fontWeight: '800',
+    color: Colors.WINE,
+    width: 28,
+    fontVariant: ['tabular-nums'],
   },
-  imagePreviewWrap: {
-    marginTop: 10,
-    position: 'relative',
-    width: 120,
-    height: 120,
+  lineHeaderText: { flex: 1, minWidth: 0 },
+  lineTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.BLACK,
+    letterSpacing: -0.3,
   },
-  imagePreview: {
-    width: 120,
-    height: 120,
-    borderRadius: 8,
-    backgroundColor: Colors.LIGHT_GRAY,
+  linePreview: {
+    marginTop: 4,
+    fontSize: 13,
+    color: Colors.TEXT_SECONDARY,
+    fontWeight: '500',
   },
-  removeImageButton: {
-    position: 'absolute',
-    right: -8,
-    top: -8,
+  removeHit: { width: 36, alignItems: 'center', justifyContent: 'center' },
+  lineBody: {
+    paddingHorizontal: 12,
+    paddingTop: 6,
+    paddingBottom: 16,
+  },
+  fieldLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.TEXT_SECONDARY,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginTop: 14,
+    marginBottom: 8,
+  },
+  input: {
+    borderWidth: 0,
+    borderBottomWidth: hairline,
+    borderBottomColor: Colors.BORDER,
+    paddingVertical: 10,
+    paddingHorizontal: 2,
+    fontSize: 16,
+    color: Colors.BLACK,
     backgroundColor: Colors.WHITE,
-    borderRadius: 10,
   },
-  submitButton: {
-    marginTop: 24,
-    backgroundColor: Colors.ROYAL_BLUE,
-    borderRadius: 8,
+  textArea: {
+    minHeight: 96,
+    paddingTop: 10,
+  },
+  imageRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
     paddingVertical: 12,
+    borderBottomWidth: hairline,
+    borderBottomColor: 'rgba(230, 0, 18, 0.25)',
+  },
+  imageRowText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.WINE,
+  },
+  previewWrap: {
+    marginTop: 12,
+    width: 132,
+    height: 132,
+    backgroundColor: Colors.LIGHT_GRAY,
+    borderWidth: hairline,
+    borderColor: Colors.BORDER,
+  },
+  preview: { width: '100%', height: '100%' },
+  previewClear: {
+    position: 'absolute',
+    right: 4,
+    top: 4,
+    backgroundColor: Colors.WHITE,
+    borderRadius: 14,
+    padding: 2,
+  },
+  rowTwo: {
+    flexDirection: 'row',
+    marginTop: 4,
+  },
+  rowTwoCell: { flex: 1 },
+  rowTwoGap: { width: 14 },
+  addLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 16,
+    marginTop: 4,
+    marginBottom: 8,
+    borderTopWidth: hairline,
+    borderBottomWidth: hairline,
+    borderColor: Colors.BORDER,
+  },
+  addLineText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.WINE,
+  },
+  submit: {
+    marginTop: 12,
+    backgroundColor: Colors.WINE,
+    paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  submitButtonDisabled: {
-    opacity: 0.6,
-  },
-  submitButtonText: {
+  submitDisabled: { opacity: 0.45 },
+  submitText: {
     color: Colors.WHITE,
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: '700',
+    letterSpacing: 0.2,
   },
 });

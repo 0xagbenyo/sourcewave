@@ -16,6 +16,7 @@ import {
 } from './frappeRavenSession';
 import { plainTextFromMaybeHtml } from '../utils/chatPlainText';
 import { sanitizeRavenWebMessageFileUrl } from '../utils/ravenFileUrl';
+import { prepareLocalFileUriForUpload } from '../utils/ravenUploadFilePrep';
 import { getERPNextClient } from './erpnext';
 
 const LOG = '[ravenNativeApi]';
@@ -1482,6 +1483,26 @@ export async function sendRavenChannelDocumentLinkMessage(
 }
 
 /**
+ * Raven/Frappe multipart parsers can choke on names with many dots (e.g. Python module paths).
+ */
+function sanitizeRavenMultipartFileName(raw: string): string {
+  const t = (raw || '').trim() || 'upload.bin';
+  const lastDot = t.lastIndexOf('.');
+  const hasExt = lastDot > 0 && lastDot < t.length - 1;
+  const extRaw = hasExt ? t.slice(lastDot) : '';
+  const ext = extRaw.replace(/[^a-zA-Z0-9.]/g, '').slice(0, 16).toLowerCase();
+  const baseRaw = hasExt ? t.slice(0, lastDot) : t;
+  const base = baseRaw.replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'file';
+  const baseTrim = base.slice(0, 80);
+  return ext ? `${baseTrim}${ext.startsWith('.') ? ext : `.${ext}`}` : baseTrim;
+}
+
+/** Use the same URI React Native gave us (including file://); path-only can break on some devices. */
+function formDataLocalUriForUpload(uri: string): string {
+  return uri.trim();
+}
+
+/**
  * Upload image/file into a channel using Raven's multipart API (creates Raven Message + attaches file).
  * @see raven.api.upload_file.upload_file_with_message
  */
@@ -1492,9 +1513,25 @@ export async function uploadRavenFileWithMessage(
   mimeType: string,
   opts?: { caption?: string; replyToMessageId?: string; compressImages?: boolean }
 ): Promise<any> {
+  console.log(LOG, 'uploadRavenFileWithMessage:start', {
+    channelId,
+    fileName,
+    mimeType,
+    originalUri: fileUri.slice(0, 120),
+    hasSession: hasFrappeRavenSession(),
+  });
+  const uploadUri = await prepareLocalFileUriForUpload(fileUri, fileName);
+  const safeFileName = sanitizeRavenMultipartFileName(fileName);
+  const uriForPart = formDataLocalUriForUpload(uploadUri);
+  console.log(LOG, 'uploadRavenFileWithMessage:uriReady', {
+    uploadUri: uploadUri.slice(0, 120),
+    uriForPart: uriForPart.slice(0, 120),
+    safeFileName,
+    changed: uploadUri !== fileUri,
+  });
   const form = new FormData();
   form.append('channelID', channelId);
-  form.append('file', { uri: fileUri, name: fileName, type: mimeType } as any);
+  form.append('file', { uri: uriForPart, name: safeFileName, type: mimeType } as any);
   form.append('caption', opts?.caption ?? '');
   const compress =
     opts?.compressImages !== undefined
@@ -1507,7 +1544,18 @@ export async function uploadRavenFileWithMessage(
   } else {
     form.append('is_reply', '0');
   }
-  return ravenCallMultipartFrappeMethod('raven.api.upload_file.upload_file_with_message', form);
+  try {
+    const res = await ravenCallMultipartFrappeMethod('raven.api.upload_file.upload_file_with_message', form);
+    console.log(LOG, 'uploadRavenFileWithMessage:ok', { channelId, fileName });
+    return res;
+  } catch (e) {
+    console.warn(LOG, 'uploadRavenFileWithMessage:fail', {
+      channelId,
+      fileName,
+      message: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
 }
 
 /** Workspace members (whitelist API), merged with resource rows for `custom_supplier` / Supplier link. */

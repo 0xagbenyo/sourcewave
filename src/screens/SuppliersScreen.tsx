@@ -15,12 +15,19 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NavigationProp } from '@react-navigation/native';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
+import { useTranslation } from 'react-i18next';
+import { useUserSession } from '../context/UserContext';
+import { useSubscription } from '../context/SubscriptionContext';
 import { SUPPLIERS, fetchSuppliersFromErp, type Supplier } from '../data/suppliers';
 import { SourceWaveStackHeader } from '../components/SourceWaveStackHeader';
+import { SuppliersPremiumGateContent } from '../components/SuppliersPremiumGateContent';
 import type { RootStackParamList } from '../types';
 
 export const SuppliersScreen: React.FC = () => {
+  const { t } = useTranslation();
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
+  const { user } = useUserSession();
+  const { isActive, isLoading: subscriptionLoading, refresh: refreshSubscription } = useSubscription();
   const [query, setQuery] = useState('');
   const [erpRows, setErpRows] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,6 +43,18 @@ export const SuppliersScreen: React.FC = () => {
 
   useFocusEffect(
     useCallback(() => {
+      void refreshSubscription();
+      if (!user?.email) {
+        setLoading(false);
+        return undefined;
+      }
+      if (subscriptionLoading) {
+        return undefined;
+      }
+      if (!isActive) {
+        setLoading(false);
+        return undefined;
+      }
       let cancelled = false;
       (async () => {
         setLoading(true);
@@ -46,10 +65,11 @@ export const SuppliersScreen: React.FC = () => {
       return () => {
         cancelled = true;
       };
-    }, [load])
+    }, [load, user?.email, isActive, subscriptionLoading, refreshSubscription])
   );
 
   const onRefresh = useCallback(async () => {
+    if (!user?.email || !isActive) return;
     setRefreshing(true);
     setError(null);
     try {
@@ -59,7 +79,7 @@ export const SuppliersScreen: React.FC = () => {
     } finally {
       setRefreshing(false);
     }
-  }, [load]);
+  }, [load, user?.email, isActive]);
 
   const combined = useMemo(() => {
     const byId = new Map<string, Supplier>();
@@ -86,6 +106,76 @@ export const SuppliersScreen: React.FC = () => {
       return hay.includes(q);
     });
   }, [combined, query]);
+
+  if (!user?.email) {
+    return (
+      <View style={styles.root}>
+        <SourceWaveStackHeader
+          title={t('tabs.suppliers')}
+          subtitle={t('suppliersPremium.subtitle')}
+          onBack={() => {
+            if (navigation.canGoBack()) {
+              navigation.goBack();
+            } else {
+              (navigation as { navigate: (name: string) => void }).navigate('Home');
+            }
+          }}
+        />
+        <SafeAreaView style={[styles.safe, styles.gateSafe]} edges={['bottom']}>
+          <Text style={styles.gateTitle}>{t('suppliersPremium.signInTitle')}</Text>
+          <Text style={styles.gateBody}>{t('suppliersPremium.signInBody')}</Text>
+          <TouchableOpacity style={styles.gateCta} onPress={() => navigation.navigate('Auth')} activeOpacity={0.85}>
+            <Text style={styles.gateCtaText}>{t('suppliersPremium.signInCta')}</Text>
+          </TouchableOpacity>
+        </SafeAreaView>
+      </View>
+    );
+  }
+
+  if (subscriptionLoading) {
+    return (
+      <View style={styles.root}>
+        <SourceWaveStackHeader
+          title={t('tabs.suppliers')}
+          subtitle={t('subscriptionPage.loading')}
+          onBack={() => {
+            if (navigation.canGoBack()) {
+              navigation.goBack();
+            } else {
+              (navigation as { navigate: (name: string) => void }).navigate('Home');
+            }
+          }}
+        />
+        <SafeAreaView style={styles.safe} edges={['bottom']}>
+          <View style={styles.centered}>
+            <ActivityIndicator size="large" color={Colors.WINE} />
+            <Text style={styles.loadingLabel}>{t('subscriptionPage.loading')}</Text>
+          </View>
+        </SafeAreaView>
+      </View>
+    );
+  }
+
+  if (!isActive) {
+    return (
+      <View style={styles.root}>
+        <SourceWaveStackHeader
+          title={t('tabs.suppliers')}
+          subtitle={t('suppliersPremium.subtitle')}
+          onBack={() => {
+            if (navigation.canGoBack()) {
+              navigation.goBack();
+            } else {
+              (navigation as { navigate: (name: string) => void }).navigate('Home');
+            }
+          }}
+        />
+        <SafeAreaView style={styles.safe} edges={['bottom']}>
+          <SuppliersPremiumGateContent onSubscribe={() => navigation.navigate('Subscription')} />
+        </SafeAreaView>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.root}>
@@ -211,6 +301,23 @@ export const SuppliersScreen: React.FC = () => {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.BACKGROUND },
   safe: { flex: 1, backgroundColor: Colors.BACKGROUND },
+  gateSafe: { justifyContent: 'center', paddingHorizontal: Spacing.LG },
+  gateTitle: { fontSize: 20, fontWeight: '800', color: Colors.BLACK, textAlign: 'center' },
+  gateBody: {
+    marginTop: Spacing.SM,
+    fontSize: 15,
+    color: Colors.TEXT_SECONDARY,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  gateCta: {
+    marginTop: Spacing.XL,
+    backgroundColor: Colors.WINE,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  gateCtaText: { color: Colors.WHITE, fontWeight: '700', fontSize: 16 },
   subtitle: {
     paddingHorizontal: Spacing.MD,
     fontSize: 13,

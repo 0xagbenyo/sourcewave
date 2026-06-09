@@ -190,6 +190,12 @@ export function RavenUnreadProvider({ children }: { children: ReactNode }) {
     return () => sub.remove();
   }, [user?.email, refreshUnreadCounts]);
 
+  /** First load + login: supplier portal never mounts retail Header (which refetches on focus). */
+  useEffect(() => {
+    if (!user?.email) return;
+    void refreshUnreadCounts();
+  }, [user?.email, refreshUnreadCounts]);
+
   useEffect(() => {
     if (!user?.email) return;
     const id = setInterval(() => {

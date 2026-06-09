@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  FlatList,
   Dimensions,
   RefreshControl,
   Animated,
@@ -16,21 +15,21 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
-import { useCategories, usePricingRules, useWishlistActions, useWishlist } from '../hooks/erpnext';
-import { useUserSession } from '../context/UserContext';
+import { useCategories } from '../hooks/erpnext';
 import { LoadingScreen } from '../components/LoadingScreen';
-import { ProductCard } from '../components/ProductCard';
 import { Header } from '../components/Header';
+import { useTranslation } from 'react-i18next';
 import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
-import { SortOption } from '../components/PriceFilter';
-import { getProductDiscount } from '../utils/pricingRules';
 import { getERPNextClient } from '../services/erpnext';
 import { mapERPItemToProduct } from '../services/mappers';
-import { collectDescendantItemGroupIds } from '../utils/itemGroup';
+import { collectDescendantItemGroupIds, isReservedItemGroupName } from '../utils/itemGroup';
 
 const { width } = Dimensions.get('window');
 
 const isTopLevelParentGroup = (category: any): boolean => {
+  const id = String(category?.id ?? '').trim();
+  const label = String(category?.name ?? '').trim();
+  if (isReservedItemGroupName(id) || isReservedItemGroupName(label)) return false;
   const isGroup = Number(category?.isGroup ?? category?.is_group) === 1;
   const parent = String(category?.parentItemGroup ?? category?.parent_item_group ?? '').trim();
   return (
@@ -39,7 +38,7 @@ const isTopLevelParentGroup = (category: any): boolean => {
   );
 };
 
-// Animated Category Item Component
+// Subcategory row: flat horizontal image bar + title (no circles).
 const AnimatedCategoryItem: React.FC<{
   category: any;
   image: string | undefined;
@@ -48,121 +47,74 @@ const AnimatedCategoryItem: React.FC<{
   onPress: () => void;
 }> = ({ category, image, categoryName, index, onPress }) => {
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(30)).current;
-  const rotateAnim = useRef(new Animated.Value(0)).current;
-  const scaleAnim = useRef(new Animated.Value(0.8)).current;
-  
+  const slideAnim = useRef(new Animated.Value(16)).current;
+
   useEffect(() => {
-    // Staggered entrance animation with fade, slide, rotate, and scale
-    const delay = index * 80;
-    
+    const delay = index * 45;
     Animated.parallel([
-      // Fade in
       Animated.timing(fadeAnim, {
         toValue: 1,
-        duration: 600,
-        delay: delay,
+        duration: 320,
+        delay,
         useNativeDriver: true,
       }),
-      // Slide up
       Animated.spring(slideAnim, {
         toValue: 0,
-        delay: delay,
+        delay,
         useNativeDriver: true,
-        tension: 50,
-        friction: 8,
+        tension: 80,
+        friction: 12,
       }),
-      // Rotate with bounce
-      Animated.sequence([
-        Animated.timing(rotateAnim, {
-          toValue: 1,
-          duration: 400,
-          delay: delay,
-          useNativeDriver: true,
-        }),
-        Animated.spring(rotateAnim, {
-          toValue: 0,
-          useNativeDriver: true,
-          tension: 100,
-          friction: 3,
-        }),
-      ]),
-      // Scale bounce
-      Animated.sequence([
-        Animated.spring(scaleAnim, {
-          toValue: 1.1,
-          delay: delay,
-          useNativeDriver: true,
-          tension: 100,
-          friction: 4,
-        }),
-        Animated.spring(scaleAnim, {
-          toValue: 1,
-          useNativeDriver: true,
-          tension: 100,
-          friction: 6,
-        }),
-      ]),
     ]).start();
-  }, []);
-  
-  const rotateInterpolate = rotateAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '10deg'],
-  });
-  
+  }, [fadeAnim, slideAnim, index]);
+
   return (
     <Animated.View
       style={[
-        styles.childCategoryItem,
+        styles.categoryBarWrap,
         {
           opacity: fadeAnim,
-          transform: [
-            { translateY: slideAnim },
-            { rotate: rotateInterpolate },
-            { scale: scaleAnim },
-          ],
+          transform: [{ translateY: slideAnim }],
         },
       ]}
     >
       <TouchableOpacity
-        style={{ alignItems: 'center' }}
+        style={styles.categoryBarTouchable}
         onPress={onPress}
+        activeOpacity={0.88}
       >
-        {image ? (
-          <View style={styles.childCategoryCircle}>
+        <View style={styles.categoryBarImageZone}>
+          {image ? (
             <ErpAuthenticatedImage
               uri={image}
-              style={styles.childCategoryImage}
+              style={styles.categoryBarImage}
               resizeMode="cover"
               onError={() => {
                 console.warn(`Failed to load image for category ${category.name}:`, image);
               }}
             />
-          </View>
-        ) : (
-          <View style={styles.childCategoryCircle}>
-            <Ionicons name="image" size={18} color={Colors.TEXT_SECONDARY} />
-          </View>
-        )}
-        {categoryName ? (
-          <Text style={styles.childCategoryName} numberOfLines={2}>
-            {categoryName}
-            </Text>
-        ) : null}
-          </TouchableOpacity>
+          ) : (
+            <View style={styles.categoryBarPlaceholder}>
+              <Ionicons name="grid-outline" size={20} color={Colors.TEXT_SECONDARY} />
+            </View>
+          )}
+        </View>
+        <View style={styles.categoryBarMeta}>
+          <Text style={styles.categoryBarTitle} numberOfLines={2}>
+            {categoryName || 'Category'}
+          </Text>
+          <Ionicons name="chevron-forward" size={16} color={Colors.MEDIUM_GRAY} />
+        </View>
+      </TouchableOpacity>
     </Animated.View>
   );
 };
 
 export const CategoriesScreen: React.FC = () => {
   const navigation = useNavigation();
+  const { t } = useTranslation();
   const route = useRoute<any>();
-  const { user } = useUserSession();
-  const { wishlistItems, refresh: refreshWishlist } = useWishlist(user?.email || null);
-  const { toggleWishlist } = useWishlistActions(refreshWishlist);
   const { data: parentCategories, loading: categoriesLoading } = useCategories();
-  const { data: pricingRules = [], loading: pricingRulesLoading } = usePricingRules();
   
   // Pull-to-refresh state
   const [refreshing, setRefreshing] = useState(false);
@@ -171,7 +123,6 @@ export const CategoriesScreen: React.FC = () => {
   const [childCategories, setChildCategories] = useState<any[]>([]);
   const [loadingChildren, setLoadingChildren] = useState(false);
   const [childImages, setChildImages] = useState<Record<string, string>>({});
-  const [sortOption, setSortOption] = useState<SortOption>('default');
   const preselectedParent = route?.params?.selectedParent;
 
   const parentOnly = useMemo(
@@ -185,58 +136,8 @@ export const CategoriesScreen: React.FC = () => {
     return match?.name || selectedParentId;
   }, [parentOnly, selectedParentId]);
   
-  // Optimistic state for immediate UI updates
-  const [optimisticWishlist, setOptimisticWishlist] = useState<Set<string>>(new Set());
-  const [pendingOperations, setPendingOperations] = useState<Set<string>>(new Set());
-  
-  // Create a Set of wishlisted product IDs for quick lookup
-  const wishlistedProductIds = useMemo(() => {
-    const baseSet = new Set(wishlistItems.map(item => item.productId));
-    // Merge with optimistic updates
-    optimisticWishlist.forEach(id => baseSet.add(id));
-    return baseSet;
-  }, [wishlistItems, optimisticWishlist]);
-  
-  // Sync optimistic state with actual wishlist when it updates
-  // Only sync when not currently performing operations to avoid infinite loops
-  const wishlistIdsRef = useRef<string>('');
-  const currentWishlistIds = useMemo(() => {
-    const ids = [...new Set(wishlistItems.map(item => item.productId))].sort();
-    return JSON.stringify(ids);
-  }, [wishlistItems]);
-  
-  useEffect(() => {
-    if (pendingOperations.size > 0) {
-      return; // Don't sync while operations are pending
-    }
-    
-    // Only update if the wishlist IDs actually changed
-    if (currentWishlistIds === wishlistIdsRef.current) {
-      return;
-    }
-    
-    wishlistIdsRef.current = currentWishlistIds;
-    
-    // Parse IDs from the string to avoid depending on wishlistItems array
-    const actualIds = JSON.parse(currentWishlistIds) as string[];
-    const actualSet = new Set(actualIds);
-    
-    setOptimisticWishlist(prev => {
-      // Clear optimistic state and sync with actual wishlist
-      // This ensures we start fresh after operations complete
-      const newSet = new Set(actualSet);
-      
-      // Only update if there's a change to prevent unnecessary re-renders
-      if (newSet.size !== prev.size || Array.from(newSet).some(id => !prev.has(id)) || Array.from(prev).some(id => !newSet.has(id))) {
-        return newSet;
-      }
-      return prev; // Return same reference if no change
-    });
-  }, [currentWishlistIds, pendingOperations.size]);
-  
   // Check if page is initially loading (fresh load - no data loaded yet)
-  const isInitialLoading = (!parentCategories && categoriesLoading) && 
-    (!pricingRules || pricingRules.length === 0);
+  const isInitialLoading = !parentCategories && categoriesLoading;
 
   // Set first parent category when data loads
   useEffect(() => {
@@ -330,14 +231,13 @@ export const CategoriesScreen: React.FC = () => {
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      // Refresh wishlist when user pulls to refresh
-      if (refreshWishlist) refreshWishlist();
+      // Pull-to-refresh: parent categories reload via useCategories if wired; no-op for now.
     } catch (error) {
       console.error('Error refreshing data:', error);
     } finally {
       setRefreshing(false);
     }
-  }, [refreshWishlist]);
+  }, []);
 
 
   const renderSidebar = () => (
@@ -381,121 +281,15 @@ export const CategoriesScreen: React.FC = () => {
     </View>
   );
 
-  const renderProductGrid = (products: any[], title: string, showTrendsLogo = false) => (
-    <View style={styles.productSection}>
-      <View style={styles.sectionHeader}>
-        {showTrendsLogo ? (
-          <View style={styles.trendsLogoContainer}>
-            <Text style={styles.trendsLogo}>SOURCEWAVE</Text>
-            <Text style={styles.trendsSubtitle}>Trends</Text>
-          </View>
-        ) : (
-          <Text style={styles.sectionTitle}>{title}</Text>
-        )}
-      </View>
-      <FlatList
-        data={products}
-        numColumns={2}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.productGridList}
-        columnWrapperStyle={styles.productGridRow}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={Colors.SHEIN_PINK}
-            colors={[Colors.SHEIN_PINK]}
-          />
-        }
-        renderItem={({ item, index }) => {
-          const discount = getProductDiscount(item, pricingRules);
-          const isLeftColumn = index % 2 === 0;
-          const row = Math.floor(index / 2);
-          const patterns = [
-            ['tall', 'short'],
-            ['medium', 'tall'],
-            ['short', 'medium'],
-          ];
-          const patternIndex = row % patterns.length;
-          const variant = (isLeftColumn 
-            ? patterns[patternIndex][0] 
-            : patterns[patternIndex][1]
-          ) as 'tall' | 'medium' | 'short';
-
-          return (
-            <ProductCard
-              product={item}
-              onPress={(productId) => {
-                (navigation as any).navigate('ProductDetails', { productId });
-              }}
-              onWishlistPress={async (productId) => {
-                // Prevent multiple simultaneous operations on the same item
-                if (pendingOperations.has(productId)) {
-                  return;
-                }
-                
-                const isWishlisted = wishlistedProductIds.has(productId);
-                
-                // Mark operation as pending
-                setPendingOperations(prev => new Set(prev).add(productId));
-                
-                // Optimistic update - immediately update UI
-                setOptimisticWishlist(prev => {
-                  const newSet = new Set(prev);
-                  if (isWishlisted) {
-                    newSet.delete(productId);
-                  } else {
-                    newSet.add(productId);
-                  }
-                  return newSet;
-                });
-                
-                try {
-                  const success = await toggleWishlist(productId, isWishlisted);
-                  if (!success) {
-                    // Revert optimistic update on failure
-                    setOptimisticWishlist(prev => {
-                      const newSet = new Set(prev);
-                      if (isWishlisted) {
-                        newSet.add(productId); // Re-add if removal failed
-                      } else {
-                        newSet.delete(productId); // Remove if add failed
-                      }
-                      return newSet;
-                    });
-                  }
-                  // refreshWishlist is called automatically by useWishlistActions
-                } finally {
-                  // Remove from pending immediately after operation completes
-                  // This allows immediate toggling back and forth
-                  setPendingOperations(prev => {
-                    const newSet = new Set(prev);
-                    newSet.delete(productId);
-                    return newSet;
-                  });
-                }
-              }}
-              isWishlisted={wishlistedProductIds.has(item.id)}
-              style={styles.productCard}
-              variant={variant}
-              pricingDiscount={discount}
-            />
-          );
-        }}
-        keyExtractor={(item) => item.id}
-      />
-    </View>
-  );
-
   const renderChildCategoriesGrid = () => (
-    <View style={styles.productSection}>
+    <View style={[styles.productSection, styles.productSectionFlush]}>
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>Picks for You</Text>
       </View>
       {loadingChildren ? (
         <ActivityIndicator style={styles.childLoader} color={Colors.SHEIN_PINK} />
       ) : childCategories.length > 0 ? (
-        <View style={styles.childCategoriesGridContainer}>
+        <View style={styles.childCategoriesList}>
           {childCategories.map((item, index) => {
             const image = childImages[item.name];
             const categoryName = item.item_group_name || item.name || 'Category';
@@ -536,7 +330,7 @@ export const CategoriesScreen: React.FC = () => {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
-      <Header />
+      <Header title={t('tabs.category')} />
       <View style={styles.content}>
         {renderSidebar()}
         <ScrollView
@@ -626,9 +420,16 @@ const styles = StyleSheet.create({
   productSection: {
     paddingVertical: 16,
   },
+  /** Picks for You: edge-to-edge rows in the main column (divider meets sidebar rail). */
+  productSectionFlush: {
+    paddingVertical: 0,
+    marginTop: 8,
+    marginBottom: 8,
+  },
   sectionHeader: {
     paddingHorizontal: 16,
-    marginBottom: 16,
+    marginBottom: 12,
+    marginTop: 12,
   },
   sectionTitle: {
     fontSize: 18,
@@ -710,44 +511,50 @@ const styles = StyleSheet.create({
   childLoader: {
     marginVertical: 32,
   },
-  childCategoriesGridContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    paddingHorizontal: 8,
-    justifyContent: 'flex-start',
+  childCategoriesList: {
+    paddingHorizontal: 0,
+    alignSelf: 'stretch',
+    width: '100%',
   },
-  childCategoryItem: {
-    alignItems: 'center',
-    marginBottom: 16,
-    width: (width * 0.68 - 16) / 4,
-    paddingHorizontal: 4,
+  categoryBarWrap: {
+    alignSelf: 'stretch',
+    width: '100%',
   },
-  childCategoryCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+  categoryBarTouchable: {
+    width: '100%',
+    backgroundColor: Colors.WHITE,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.BORDER,
+  },
+  categoryBarImageZone: {
+    width: '100%',
+    height: 52,
     backgroundColor: Colors.LIGHT_GRAY,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 6,
-    overflow: 'hidden',
-    borderWidth: 2,
-    borderColor: Colors.WINE_LIGHT,
   },
-  childCategoryImage: {
+  categoryBarImage: {
     width: '100%',
     height: '100%',
     backgroundColor: Colors.LIGHT_GRAY,
   },
-  childCategoryEmoji: {
-    fontSize: 28,
+  categoryBarPlaceholder: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  childCategoryName: {
-    fontSize: 9,
-    color: Colors.TEXT_SECONDARY,
-    textAlign: 'center',
-    fontWeight: '500',
-    lineHeight: 12,
+  categoryBarMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    gap: 8,
+  },
+  categoryBarTitle: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.BLACK,
+    letterSpacing: -0.2,
   },
   backButton: {
     flexDirection: 'row',

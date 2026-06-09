@@ -6,6 +6,8 @@ import {
   FlatList,
   ActivityIndicator,
   RefreshControl,
+  TextInput,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,8 +21,10 @@ import * as Updates from 'expo-updates';
 import { Spacing } from '../constants/spacing';
 import { Header } from '../components/Header';
 import { PriceFilter, SortOption } from '../components/PriceFilter';
+import { useTranslation } from 'react-i18next';
 
 export const SearchScreen: React.FC = () => {
+  const { t } = useTranslation();
   const route = useRoute();
   const navigation = useNavigation();
   const routeQuery = (route.params as any)?.query || '';
@@ -136,7 +140,6 @@ export const SearchScreen: React.FC = () => {
           <ProductCard
             product={item}
             variant={['tall', 'medium', 'short'][Math.floor(Math.random() * 3)] as any}
-            onPress={() => (navigation as any).navigate('ProductDetails', { productId: item.id })}
             style={styles.productCard}
           />
         )}
@@ -155,19 +158,28 @@ export const SearchScreen: React.FC = () => {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
-      <Header 
-        searchValue={searchQuery}
-        onSearchChange={(text) => {
-          setSearchQuery(text);
-          // Update route params to keep navigation in sync
-          (navigation as any).setParams({ query: text });
-        }}
+      <Header
+        title={t('search.title')}
         showBackButton={true}
         onBackPress={() => {
           (navigation as any).goBack();
         }}
         headerBackgroundColor={Colors.WHITE}
       />
+      <View style={styles.searchBarRow}>
+        <Ionicons name="search-outline" size={20} color={Colors.TEXT_SECONDARY} style={styles.searchIcon} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search products"
+          placeholderTextColor={Colors.TEXT_SECONDARY}
+          value={searchQuery}
+          onChangeText={(text) => {
+            setSearchQuery(text);
+            (navigation as any).setParams({ query: text });
+          }}
+          returnKeyType="search"
+        />
+      </View>
       {renderSearchResults()}
     </SafeAreaView>
   );
@@ -177,6 +189,27 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.BACKGROUND,
+  },
+  searchBarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: Spacing.SCREEN_PADDING,
+    marginBottom: Spacing.PADDING_SM,
+    paddingHorizontal: Spacing.PADDING_MD,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 6,
+    borderRadius: 12,
+    backgroundColor: Colors.WHITE,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.BORDER,
+  },
+  searchIcon: {
+    marginRight: Spacing.PADDING_SM,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    color: Colors.TEXT_PRIMARY,
+    paddingVertical: 0,
   },
   loadingContainer: {
     flex: 1,

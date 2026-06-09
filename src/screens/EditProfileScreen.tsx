@@ -15,12 +15,16 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useNavigation } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
+import { Header } from '../components/Header';
 import { useUserSession } from '../context/UserContext';
 import { getERPNextClient } from '../services/erpnext';
 import { encodeErpFileUrl } from '../utils/erpImageUrl';
 import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
+
+const hairline = StyleSheet.hairlineWidth;
 
 function profileImageUrl(userData: any): string | undefined {
   const raw = userData?.user_image || userData?.image;
@@ -29,6 +33,7 @@ function profileImageUrl(userData: any): string | undefined {
 }
 
 export const EditProfileScreen: React.FC = () => {
+  const { t } = useTranslation();
   const navigation = useNavigation();
   const { user } = useUserSession();
   const [loading, setLoading] = useState(true);
@@ -54,11 +59,11 @@ export const EditProfileScreen: React.FC = () => {
       }
     } catch (error) {
       console.error('Error fetching user details:', error);
-      Alert.alert('Error', 'Failed to load user details');
+      Alert.alert('Error', t('editProfile.loadError'));
     } finally {
       setLoading(false);
     }
-  }, [user?.email]);
+  }, [user?.email, t]);
 
   useEffect(() => {
     loadUser();
@@ -86,13 +91,13 @@ export const EditProfileScreen: React.FC = () => {
 
   const handlePickProfilePhoto = async () => {
     if (!user?.email || !userDetails?.name) {
-      Alert.alert('Error', 'User profile is not loaded yet.');
+      Alert.alert('Error', t('editProfile.notLoaded'));
       return;
     }
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert('Permission needed', 'Please allow photo library access to set a profile picture.');
+        Alert.alert('Permission needed', t('editProfile.permissionPhotos'));
         return;
       }
 
@@ -132,11 +137,11 @@ export const EditProfileScreen: React.FC = () => {
       }
 
       await applyUploadedFileToUser(typeof fileUrl === 'string' ? fileUrl : String(fileUrl));
-      Alert.alert('Photo updated', 'Your profile picture has been saved.');
+      Alert.alert(t('editProfile.photoUpdatedTitle'), t('editProfile.photoUpdatedBody'));
     } catch (error: unknown) {
       console.error('Profile photo upload failed:', error);
-      const msg = error instanceof Error ? error.message : 'Could not update profile photo.';
-      Alert.alert('Photo upload failed', msg);
+      const msg = error instanceof Error ? error.message : t('editProfile.saveFailed');
+      Alert.alert(t('editProfile.photoFailedTitle'), msg);
     } finally {
       setUploadingPhoto(false);
     }
@@ -144,10 +149,10 @@ export const EditProfileScreen: React.FC = () => {
 
   const handleRemoveProfilePhoto = () => {
     if (!user?.email) return;
-    Alert.alert('Remove photo?', 'Your account will show initials instead.', [
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert(t('editProfile.removePhotoTitle'), t('editProfile.removePhotoBody'), [
+      { text: t('settings.cancel'), style: 'cancel' },
       {
-        text: 'Remove',
+        text: t('editProfile.removePhoto'),
         style: 'destructive',
         onPress: async () => {
           try {
@@ -156,9 +161,9 @@ export const EditProfileScreen: React.FC = () => {
             await client.updateUser(user.email, { user_image: '' });
             const refreshed = await client.getUserByEmail(user.email);
             if (refreshed) setUserDetails(refreshed);
-            Alert.alert('Photo removed', 'You can add a new picture anytime.');
-          } catch (e) {
-            Alert.alert('Error', 'Could not remove the photo.');
+            Alert.alert(t('editProfile.photoRemovedTitle'), t('editProfile.photoRemovedBody'));
+          } catch {
+            Alert.alert('Error', t('editProfile.removeFailed'));
           } finally {
             setUploadingPhoto(false);
           }
@@ -169,7 +174,7 @@ export const EditProfileScreen: React.FC = () => {
 
   const handleSave = async () => {
     if (!user?.email) {
-      Alert.alert('Error', 'User email not found');
+      Alert.alert('Error', t('editProfile.noEmail'));
       return;
     }
 
@@ -181,7 +186,7 @@ export const EditProfileScreen: React.FC = () => {
         location: location.trim(),
       });
 
-      Alert.alert('Success', 'Profile updated successfully', [
+      Alert.alert(t('editProfile.saveSuccessTitle'), t('editProfile.saveSuccessBody'), [
         {
           text: 'OK',
           onPress: () => {
@@ -191,17 +196,20 @@ export const EditProfileScreen: React.FC = () => {
       ]);
     } catch (error) {
       console.error('Error saving profile:', error);
-      Alert.alert('Error', 'Failed to update profile');
+      Alert.alert('Error', t('editProfile.saveFailed'));
     } finally {
       setSaving(false);
     }
   };
 
+  const nav = navigation as { navigate: (name: string) => void; goBack: () => void };
+
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
+        <Header showBackButton title={t('editProfile.title')} subtitle={t('editProfile.subtitle')} />
         <View style={styles.loaderContainer}>
-          <ActivityIndicator size="large" color={Colors.ROYAL_BLUE} />
+          <ActivityIndicator size="large" color={Colors.WINE} />
         </View>
       </SafeAreaView>
     );
@@ -210,27 +218,23 @@ export const EditProfileScreen: React.FC = () => {
   const avatarUri = profileImageUrl(userDetails);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
-      >
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => (navigation as any).goBack()} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color={Colors.BLACK} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Edit Profile</Text>
-          <View style={styles.placeholder} />
-        </View>
+    <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
+      <Header showBackButton title={t('editProfile.title')} subtitle={t('editProfile.subtitle')} />
 
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.keyboardView}
+        keyboardVerticalOffset={0}
+      >
         <ScrollView
-          style={styles.scrollView}
+          style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
         >
-          <View style={styles.avatarCard}>
-            <Text style={styles.sectionTitle}>Profile photo</Text>
-            <View style={styles.avatarRow}>
+          <Text style={styles.sectionLabel}>{t('editProfile.sectionPhoto')}</Text>
+          <View style={styles.group}>
+            <View style={styles.photoBlock}>
               <View style={styles.avatarWrap}>
                 {avatarUri ? (
                   <ErpAuthenticatedImage uri={avatarUri} style={styles.avatarImage} resizeMode="cover" />
@@ -245,113 +249,127 @@ export const EditProfileScreen: React.FC = () => {
                   </View>
                 )}
               </View>
-              <View style={styles.avatarActions}>
+              <View style={styles.photoActionsRow}>
                 <TouchableOpacity
-                  style={styles.photoBtn}
+                  style={[styles.photoBtnHalf, styles.photoBtnPrimary]}
                   onPress={handlePickProfilePhoto}
                   disabled={uploadingPhoto || saving}
+                  activeOpacity={0.85}
                 >
-                  <Ionicons name="image-outline" size={18} color={Colors.ROYAL_BLUE} />
-                  <Text style={styles.photoBtnText}>{avatarUri ? 'Change photo' : 'Add photo'}</Text>
+                  <Ionicons name="image-outline" size={18} color={Colors.WINE} />
+                  <Text style={styles.photoBtnText} numberOfLines={1}>
+                    {avatarUri ? t('editProfile.changePhoto') : t('editProfile.addPhoto')}
+                  </Text>
                 </TouchableOpacity>
-                {avatarUri ? (
-                  <TouchableOpacity
-                    style={styles.photoBtnSecondary}
-                    onPress={handleRemoveProfilePhoto}
-                    disabled={uploadingPhoto || saving}
-                  >
-                    <Text style={styles.photoBtnSecondaryText}>Remove photo</Text>
-                  </TouchableOpacity>
-                ) : null}
+                <TouchableOpacity
+                  style={[styles.photoBtnHalf, styles.photoBtnDanger]}
+                  onPress={() => {
+                    if (!avatarUri) {
+                      Alert.alert(t('editProfile.noPhotoTitle'), t('editProfile.noPhotoBody'));
+                      return;
+                    }
+                    handleRemoveProfilePhoto();
+                  }}
+                  disabled={uploadingPhoto || saving}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="trash-outline" size={18} color={Colors.ERROR} />
+                  <Text style={styles.photoBtnDangerText} numberOfLines={1}>
+                    {t('editProfile.removePhoto')}
+                  </Text>
+                </TouchableOpacity>
               </View>
-            </View>
-            <Text style={styles.avatarHint}>Square photos look best. Image is saved to your profile on the server.</Text>
-          </View>
-
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Personal Information</Text>
-
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>Name</Text>
-              <View style={[styles.input, styles.inputDisabled]}>
-                <Text style={styles.disabledText}>{getUserDisplayName()}</Text>
-                <Ionicons name="lock-closed" size={16} color={Colors.TEXT_SECONDARY} />
-              </View>
-            </View>
-
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>Email</Text>
-              <View style={[styles.input, styles.inputDisabled]}>
-                <Text style={styles.disabledText}>{user?.email || userDetails?.email || ''}</Text>
-                <Ionicons name="lock-closed" size={16} color={Colors.TEXT_SECONDARY} />
-              </View>
+              <Text style={styles.photoHint}>{t('editProfile.photoHint')}</Text>
             </View>
           </View>
 
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Contact Information</Text>
+          <Text style={styles.sectionLabel}>{t('editProfile.sectionPersonal')}</Text>
+          <View style={styles.group}>
+            <View style={styles.fieldPad}>
+              <Text style={styles.label}>{t('editProfile.name')}</Text>
+              <View style={[styles.readonlyBox, styles.readonlyRow]}>
+                <Text style={styles.readonlyText} numberOfLines={1}>
+                  {getUserDisplayName()}
+                </Text>
+                <Ionicons name="lock-closed-outline" size={16} color={Colors.TEXT_SECONDARY} />
+              </View>
+              <Text style={styles.fieldHint}>{t('editProfile.lockedHint')}</Text>
+            </View>
+            <View style={[styles.fieldPad, styles.fieldPadLast]}>
+              <Text style={styles.label}>{t('editProfile.email')}</Text>
+              <View style={[styles.readonlyBox, styles.readonlyRow]}>
+                <Text style={styles.readonlyText} numberOfLines={1}>
+                  {user?.email || userDetails?.email || ''}
+                </Text>
+                <Ionicons name="lock-closed-outline" size={16} color={Colors.TEXT_SECONDARY} />
+              </View>
+              <Text style={styles.fieldHint}>{t('editProfile.lockedHint')}</Text>
+            </View>
+          </View>
 
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>Phone</Text>
+          <Text style={styles.sectionLabel}>{t('editProfile.sectionContact')}</Text>
+          <View style={styles.group}>
+            <View style={styles.fieldPad}>
+              <Text style={styles.label}>{t('editProfile.phone')}</Text>
               <TextInput
                 style={styles.textInput}
-                placeholder="Enter phone number"
+                placeholder={t('editProfile.phonePlaceholder')}
                 placeholderTextColor={Colors.TEXT_SECONDARY}
                 value={phone}
                 onChangeText={setPhone}
                 keyboardType="phone-pad"
                 autoCapitalize="none"
                 autoCorrect={false}
+                editable={!saving && !uploadingPhoto}
               />
             </View>
-
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>Location</Text>
+            <View style={[styles.fieldPad, styles.fieldPadLast]}>
+              <Text style={styles.label}>{t('editProfile.location')}</Text>
               <TextInput
                 style={styles.textInput}
-                placeholder="Enter location"
+                placeholder={t('editProfile.locationPlaceholder')}
                 placeholderTextColor={Colors.TEXT_SECONDARY}
                 value={location}
                 onChangeText={setLocation}
                 autoCapitalize="words"
                 autoCorrect={false}
+                editable={!saving && !uploadingPhoto}
               />
             </View>
           </View>
 
-          <View style={styles.infoCard}>
-            <View style={styles.infoCardContent}>
-              <Ionicons name="information-circle" size={24} color={Colors.ROYAL_BLUE} />
-              <View style={styles.infoTextContainer}>
-                <Text style={styles.infoTitle}>Manage Your Addresses</Text>
-                <Text style={styles.infoSubtitle}>
-                  Go to Settings to add, edit, or delete your shipping addresses.
-                </Text>
+          <Text style={styles.sectionLabel}>{t('editProfile.sectionAddresses')}</Text>
+          <View style={styles.group}>
+            <TouchableOpacity
+              style={styles.rowNav}
+              onPress={() => nav.navigate('AddressBook')}
+              activeOpacity={0.75}
+            >
+              <Ionicons name="location-outline" size={22} color={Colors.WINE} style={styles.rowIcon} />
+              <View style={styles.rowMain}>
+                <Text style={styles.rowTitle}>{t('editProfile.addressesTitle')}</Text>
+                <Text style={styles.rowSubtitle}>{t('editProfile.addressesSub')}</Text>
               </View>
-              <TouchableOpacity
-                onPress={() => (navigation as any).navigate('Settings')}
-                style={styles.infoButton}
-              >
-                <Ionicons name="arrow-forward" size={18} color={Colors.WHITE} />
-              </TouchableOpacity>
-            </View>
+              <Ionicons name="chevron-forward" size={18} color={Colors.TEXT_SECONDARY} />
+            </TouchableOpacity>
           </View>
 
-          <View style={{ height: 20 }} />
+          <View style={{ height: 24 }} />
         </ScrollView>
 
-        <View style={styles.saveButtonContainer}>
+        <View style={styles.saveFooter}>
           <TouchableOpacity
-            style={[styles.saveButton, (saving || uploadingPhoto) && { opacity: 0.6 }]}
+            style={[styles.saveButton, (saving || uploadingPhoto) && styles.saveButtonDisabled]}
             onPress={handleSave}
             disabled={saving || uploadingPhoto}
+            activeOpacity={0.85}
           >
             {saving ? (
-              <ActivityIndicator size="small" color={Colors.WHITE} />
+              <ActivityIndicator color={Colors.WHITE} />
             ) : (
               <>
                 <Ionicons name="checkmark" size={20} color={Colors.WHITE} />
-                <Text style={styles.saveButtonText}>Save Changes</Text>
+                <Text style={styles.saveButtonText}>{t('editProfile.save')}</Text>
               </>
             )}
           </TouchableOpacity>
@@ -364,7 +382,7 @@ export const EditProfileScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.BACKGROUND,
+    backgroundColor: Colors.OFF_WHITE,
   },
   keyboardView: {
     flex: 1,
@@ -374,47 +392,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.BORDER,
-  },
-  backButton: {
-    padding: 8,
-    marginLeft: -8,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: Colors.BLACK,
-  },
-  placeholder: {
-    width: 32,
-  },
-  scrollView: {
-    flex: 1,
-  },
+  scroll: { flex: 1 },
   scrollContent: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 100,
+    paddingBottom: 8,
   },
-  avatarCard: {
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.TEXT_SECONDARY,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginTop: 22,
+    marginBottom: 8,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+  },
+  group: {
     backgroundColor: Colors.WHITE,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1,
+    borderTopWidth: hairline,
+    borderBottomWidth: hairline,
     borderColor: Colors.BORDER,
   },
-  avatarRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.MD,
+  photoBlock: {
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    paddingVertical: 16,
   },
   avatarWrap: {
     width: 88,
@@ -422,6 +422,7 @@ const styles = StyleSheet.create({
     borderRadius: 44,
     overflow: 'hidden',
     backgroundColor: Colors.LIGHT_GRAY,
+    alignSelf: 'center',
   },
   avatarImage: {
     width: 88,
@@ -432,14 +433,14 @@ const styles = StyleSheet.create({
     width: 88,
     height: 88,
     borderRadius: 44,
-    backgroundColor: Colors.ROYAL_BLUE + '22',
+    backgroundColor: 'rgba(230, 0, 18, 0.08)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarInitials: {
     fontSize: 28,
     fontWeight: '800',
-    color: Colors.ROYAL_BLUE,
+    color: Colors.WINE,
   },
   avatarLoading: {
     ...StyleSheet.absoluteFillObject,
@@ -447,57 +448,60 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarActions: {
-    flex: 1,
-    gap: 8,
+  photoActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 10,
+    marginTop: 14,
+    width: '100%',
   },
-  photoBtn: {
+  photoBtnHalf: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
     borderRadius: 10,
-    borderWidth: 1,
-    borderColor: Colors.ROYAL_BLUE,
-    alignSelf: 'flex-start',
+    borderWidth: hairline,
+    minHeight: 48,
+  },
+  photoBtnPrimary: {
+    borderColor: Colors.WINE,
+    backgroundColor: Colors.WHITE,
+  },
+  photoBtnDanger: {
+    borderColor: 'rgba(255, 59, 48, 0.45)',
+    backgroundColor: Colors.WHITE,
   },
   photoBtnText: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
-    color: Colors.ROYAL_BLUE,
+    color: Colors.WINE,
+    flexShrink: 1,
   },
-  photoBtnSecondary: {
-    alignSelf: 'flex-start',
-    paddingVertical: 6,
-  },
-  photoBtnSecondaryText: {
+  photoBtnDangerText: {
     fontSize: 14,
     fontWeight: '600',
     color: Colors.ERROR,
+    flexShrink: 1,
   },
-  avatarHint: {
+  photoHint: {
     marginTop: 12,
     fontSize: 12,
     color: Colors.TEXT_SECONDARY,
-    lineHeight: 16,
+    lineHeight: 17,
+    textAlign: 'center',
   },
-  card: {
-    backgroundColor: Colors.WHITE,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: Colors.BORDER,
+  fieldPad: {
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    paddingVertical: 14,
+    borderBottomWidth: hairline,
+    borderBottomColor: Colors.BORDER,
   },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.BLACK,
-    marginBottom: 16,
-  },
-  inputContainer: {
-    marginBottom: 16,
+  fieldPadLast: {
+    borderBottomWidth: 0,
   },
   label: {
     fontSize: 13,
@@ -505,16 +509,30 @@ const styles = StyleSheet.create({
     color: Colors.BLACK,
     marginBottom: 8,
   },
-  input: {
+  fieldHint: {
+    fontSize: 11,
+    color: Colors.TEXT_SECONDARY,
+    marginTop: 6,
+  },
+  readonlyBox: {
     borderWidth: 1,
     borderColor: Colors.BORDER,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    fontSize: 14,
-    color: Colors.BLACK,
+    backgroundColor: Colors.OFF_WHITE,
+  },
+  readonlyRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  readonlyText: {
+    flex: 1,
+    fontSize: 14,
+    color: Colors.TEXT_SECONDARY,
+    minWidth: 0,
   },
   textInput: {
     borderWidth: 1,
@@ -524,53 +542,39 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     fontSize: 14,
     color: Colors.BLACK,
+    backgroundColor: Colors.OFF_WHITE,
   },
-  inputDisabled: {
-    backgroundColor: Colors.LIGHT_GRAY,
-    justifyContent: 'space-between',
-  },
-  disabledText: {
-    color: Colors.TEXT_SECONDARY,
-    fontSize: 14,
-  },
-  infoCard: {
-    backgroundColor: '#F5F8FF',
-    borderRadius: 12,
-    padding: 16,
-    borderLeftWidth: 4,
-    borderLeftColor: Colors.ROYAL_BLUE,
-  },
-  infoCardContent: {
+  rowNav: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    paddingVertical: 14,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
   },
-  infoTextContainer: {
+  rowIcon: {
+    marginRight: 12,
+  },
+  rowMain: {
     flex: 1,
+    minWidth: 0,
   },
-  infoTitle: {
-    fontSize: 14,
+  rowTitle: {
+    fontSize: 16,
     fontWeight: '600',
     color: Colors.BLACK,
-    marginBottom: 4,
+    letterSpacing: -0.2,
   },
-  infoSubtitle: {
-    fontSize: 12,
+  rowSubtitle: {
+    fontSize: 13,
     color: Colors.TEXT_SECONDARY,
+    marginTop: 3,
+    fontWeight: '500',
   },
-  infoButton: {
-    backgroundColor: Colors.ROYAL_BLUE,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  saveButtonContainer: {
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-    backgroundColor: Colors.BACKGROUND,
-    borderTopWidth: 1,
+  saveFooter: {
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    paddingTop: 12,
+    paddingBottom: 12,
+    backgroundColor: Colors.WHITE,
+    borderTopWidth: hairline,
     borderTopColor: Colors.BORDER,
   },
   saveButton: {
@@ -581,6 +585,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
+  },
+  saveButtonDisabled: {
+    opacity: 0.65,
   },
   saveButtonText: {
     color: Colors.WHITE,

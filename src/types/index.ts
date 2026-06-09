@@ -30,6 +30,25 @@ export interface UserAddress {
   isDefault: boolean;
 }
 
+/** Customer Address row from ERPNext (used by Address book / editor navigation). */
+export interface ErpCustomerAddressRow {
+  name?: string;
+  address_title: string;
+  address_type?: string;
+  address_line1: string;
+  address_line2?: string;
+  city: string;
+  county?: string;
+  state?: string;
+  country?: string;
+  pincode?: string;
+  email_id?: string;
+  phone?: string;
+  is_primary_address?: boolean | number;
+  is_shipping_address?: boolean | number;
+  disabled?: boolean | number;
+}
+
 // Product Types
 export interface ProductSpecification {
   label: string;
@@ -251,9 +270,11 @@ export type MainTabParamList = {
 
 export type RootStackParamList = {
   Splash: undefined;
-  LanguageSelect: undefined;
+  LanguageSelect: { fromSettings?: boolean } | undefined;
   Onboarding: undefined;
   Auth: undefined;
+  /** Opened from ERP email link `https://{site}/update-password?key=…` (App / Universal Links). */
+  PasswordReset: { key?: string } | undefined;
   Main: NavigatorScreenParams<MainTabParamList> | undefined;
   SourcingRequest: {
     parentCategory?: string;
@@ -261,16 +282,7 @@ export type RootStackParamList = {
     subCategory?: string;
     subCategoryId?: string;
   } | undefined;
-  ProductDetails: { productId: string };
-  CategoryProducts: { categoryName: string; parentName: string };
-  AllDeals: { deals: Product[] };
-  PricingRules: undefined;
-  ProductBundles: undefined;
   Search: { query?: string };
-  Wishlist: undefined;
-  Cart: undefined;
-  Checkout: undefined;
-  OrderSuccess: { orderId?: string };
   OrderHistory: undefined;
   /** Buyer: sales invoices & payment entries for the logged-in customer. */
   InvoicesPayments: undefined;
@@ -279,10 +291,8 @@ export type RootStackParamList = {
   PaymentEntryDetail: { name: string };
   EditProfile: undefined;
   Settings: undefined;
-  CreateBundle: undefined;
-  ViewBundle: { bundle: any };
   AddressBook: undefined;
-  EditAddress: { address?: UserAddress; returnTo?: string } | undefined;
+  EditAddress: { address?: ErpCustomerAddressRow; returnTo?: string } | undefined;
   Suppliers: undefined;
   SupplierDetail: { supplierId: string };
   AgentSupplierChat: { supplierId: string };
@@ -300,6 +310,10 @@ export type RootStackParamList = {
     ravenWorkspaceId?: string;
   };
   Subscription: undefined;
+  /** Contact form → ERPNext Issue (Support). */
+  ContactUs: undefined;
+  /** Screen-by-screen help; `scope` selects buyer vs supplier copy. */
+  Faq: { scope?: 'buyer' | 'supplier' } | undefined;
 };
 
 export type AuthStackParamList = {

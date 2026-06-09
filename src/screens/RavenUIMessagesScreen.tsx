@@ -7,7 +7,6 @@ import {
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
-  KeyboardAvoidingView,
   Platform,
   Modal,
   Pressable,
@@ -22,12 +21,12 @@ import {
   I18nManager,
   type NativeSyntheticEvent,
   type NativeScrollEvent,
-  StatusBar as RNStatusBar,
 } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
 import { useFocusEffect, useNavigation, useRoute, usePreventRemove } from '@react-navigation/native';
-import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import { useOptionalBottomTabBarHeight } from '../hooks/useOptionalBottomTabBarHeight';
+import { useKeyboardInsets } from '../hooks/useKeyboardOpen';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import * as ImagePicker from 'expo-image-picker';
@@ -36,7 +35,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { RavenLight } from '../constants/ravenLightTheme';
 import { Spacing } from '../constants/spacing';
 import { useUserSession } from '../context/UserContext';
+import { useSubscription } from '../context/SubscriptionContext';
 import { useRavenUnread } from '../context/RavenUnreadContext';
+import { useTranslation } from 'react-i18next';
 import { RavenMessageAttachmentBody } from '../components/RavenMessageAttachmentBody';
 import { RavenInlineReplyQuote } from '../components/RavenInlineReplyQuote';
 import { RavenChannelPeerAvatar } from '../components/RavenChannelPeerAvatar';
@@ -112,6 +113,8 @@ import { resolveRavenErpAttachImageUri } from '../utils/ravenFileUrl';
 import { tryParseQuotationDraftFromMessage } from '../utils/chatQuotationDraftMessage';
 import { mergeRavenMessagesWithPendingDocInsert } from '../utils/ravenDocLinkMessageMergeBridge';
 import { getERPNextClient } from '../services/erpnext';
+import { SuppliersPremiumGateContent } from '../components/SuppliersPremiumGateContent';
+import { buyerRavenRouteNeedsSubscription } from '../utils/buyerSuppliersPremium';
 
 const POLL_MS = 3000;
 
@@ -231,8 +234,13 @@ export const RavenUIMessagesScreen: React.FC = () => {
   /** Header stack Chats + supplier portal Chat tab: inbox of all channels first (no workspace picker). */
   const isHeaderChatInbox = route.name === 'RavenChatInbox' || route.name === 'SupplierMessages';
   const insets = useSafeAreaInsets();
-  const tabBarHeight = useBottomTabBarHeight();
+  const tabBarHeight = useOptionalBottomTabBarHeight();
+  const { open: keyboardOpen, height: keyboardHeight } = useKeyboardInsets();
   const { user } = useUserSession();
+  const { t } = useTranslation();
+  const { isActive: subscriptionActive, isLoading: subscriptionLoading, refresh: refreshSubscription } =
+    useSubscription();
+  const buyerPremiumGate = buyerRavenRouteNeedsSubscription(String(route.name));
   const { setActiveChannelId, refreshUnreadCounts, unreadByChannelId } = useRavenUnread();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -311,6 +319,12 @@ export const RavenUIMessagesScreen: React.FC = () => {
       workspace,
     };
   }, [hubInfoModal, searchOpen, drawerOpen, channel, workspace]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (buyerPremiumGate) void refreshSubscription();
+    }, [buyerPremiumGate, refreshSubscription])
+  );
 
   useEffect(() => {
     selectedWorkspaceRef.current = workspace?.trim() || null;
@@ -714,6 +728,21 @@ export const RavenUIMessagesScreen: React.FC = () => {
   }, [workspace, loadPresence]);
 
   useEffect(() => {
+    if (buyerPremiumGate) {
+      if (!user?.email) {
+        setLoadingBoot(false);
+        setWorkspaceRows([]);
+        return;
+      }
+      if (subscriptionLoading) {
+        return;
+      }
+      if (!subscriptionActive) {
+        setLoadingBoot(false);
+        setWorkspaceRows([]);
+        return;
+      }
+    }
     let cancelled = false;
     (async () => {
       setLoadingBoot(true);
@@ -748,7 +777,13 @@ export const RavenUIMessagesScreen: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [user?.email, isHeaderChatInbox]);
+  }, [
+    user?.email,
+    isHeaderChatInbox,
+    buyerPremiumGate,
+    subscriptionLoading,
+    subscriptionActive,
+  ]);
 
   useEffect(() => {
     if (!workspace?.trim()) {
@@ -905,6 +940,25 @@ export const RavenUIMessagesScreen: React.FC = () => {
 
       if (!isHeaderChatInbox || workspace != null) return;
 
+      if (buyerPremiumGate) {
+        const viewer = (user?.user || user?.email || '').trim();
+        if (!viewer) {
+          if (!silent) setLoadingGlobalInbox(false);
+          return;
+        }
+        if (subscriptionLoading) {
+          if (!silent) setLoadingGlobalInbox(true);
+          return;
+        }
+        if (!subscriptionActive) {
+          if (!silent) {
+            setGlobalInboxRows([]);
+            setLoadingGlobalInbox(false);
+          }
+          return;
+        }
+      }
+
       const myGen = ++globalInboxLoadGenerationRef.current;
       const isCancelled = opts?.isCancelled;
       const stale = () =>
@@ -1036,7 +1090,16 @@ export const RavenUIMessagesScreen: React.FC = () => {
         }
       }
     },
-    [isHeaderChatInbox, workspace, workspaceRows, user?.email, user?.user]
+    [
+      isHeaderChatInbox,
+      workspace,
+      workspaceRows,
+      user?.email,
+      user?.user,
+      buyerPremiumGate,
+      subscriptionLoading,
+      subscriptionActive,
+    ]
   );
 
   /** Persist global inbox to disk (debounced) for next cold open. */
@@ -1098,13 +1161,28 @@ export const RavenUIMessagesScreen: React.FC = () => {
   /** Initial + dependency-driven reload of the header Chats list (runs in parallel with workspace boot when hub is visible). */
   useEffect(() => {
     if (!isHeaderChatInbox || workspace != null) return;
+    if (buyerPremiumGate) {
+      if (!(user?.user || user?.email)?.trim()) return;
+      if (subscriptionLoading) return;
+      if (!subscriptionActive) return;
+    }
     let cancelled = false;
     void loadGlobalInbox({ silent: false, isCancelled: () => cancelled });
     return () => {
       cancelled = true;
       globalInboxLoadGenerationRef.current++;
     };
-  }, [isHeaderChatInbox, workspace, workspaceRows, user?.email, user?.user, loadGlobalInbox]);
+  }, [
+    isHeaderChatInbox,
+    workspace,
+    workspaceRows,
+    user?.email,
+    user?.user,
+    loadGlobalInbox,
+    buyerPremiumGate,
+    subscriptionLoading,
+    subscriptionActive,
+  ]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1804,7 +1882,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
       const isSupplierPortalUser = user?.appMode === 'supplier' || !!user?.supplierId?.trim();
       const showBuyerQuotationActions =
         (!!qDraft || !!sqLink) && !mine && !isSupplierPortalUser && !isSupplierRoute;
-      /** Any linked SQ in supplier inbox: Pay/Reply long-press applies to admin or self-posted links once ERP supplier matches session. */
+      /** Any linked SQ in supplier inbox: Approve payment / Reply long-press applies to admin or self-posted links once ERP supplier matches session. */
       const supplierSqSelfServeUx = isSupplierRoute && !!sqLink;
 
       const older = index < messages.length - 1 ? messages[index + 1] : null;
@@ -1981,6 +2059,58 @@ export const RavenUIMessagesScreen: React.FC = () => {
     ]
   );
 
+  if (buyerPremiumGate) {
+    if (!user?.email) {
+      return (
+        <View style={s.safe}>
+          <StatusBar style="dark" backgroundColor={RavenLight.panel} translucent />
+          <View style={[s.bootCenter, { paddingTop: insets.top, paddingHorizontal: 20 }]}>
+            <Text style={[s.bootHint, { fontSize: 17, fontWeight: '700', color: RavenLight.text }]}>
+              {t('suppliersPremium.signInTitle')}
+            </Text>
+            <Text style={[s.bootHint, { marginTop: 10 }]}>{t('suppliersPremium.signInBody')}</Text>
+            <TouchableOpacity
+              onPress={() => (navigation as { navigate: (n: string) => void }).navigate('Auth')}
+              style={{
+                marginTop: 22,
+                backgroundColor: RavenLight.accent,
+                paddingVertical: 12,
+                paddingHorizontal: 24,
+                borderRadius: 10,
+              }}
+              activeOpacity={0.85}
+            >
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>{t('suppliersPremium.signInCta')}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      );
+    }
+    if (subscriptionLoading) {
+      return (
+        <View style={s.safe}>
+          <StatusBar style="dark" backgroundColor={RavenLight.panel} translucent />
+          <View style={[s.bootCenter, { paddingTop: insets.top }]}>
+            <ActivityIndicator size="large" color={RavenLight.accent} />
+            <Text style={s.bootHint}>{t('subscriptionPage.loading')}</Text>
+          </View>
+        </View>
+      );
+    }
+    if (!subscriptionActive) {
+      return (
+        <View style={s.safe}>
+          <StatusBar style="dark" backgroundColor={RavenLight.panel} translucent />
+          <View style={{ flex: 1, paddingTop: insets.top, width: '100%' }}>
+            <SuppliersPremiumGateContent
+              onSubscribe={() => (navigation as { navigate: (n: string) => void }).navigate('Subscription')}
+            />
+          </View>
+        </View>
+      );
+    }
+  }
+
   if (loadingBoot && !(isHeaderChatInbox && workspace == null)) {
     return (
       <View style={s.safe}>
@@ -2001,15 +2131,20 @@ export const RavenUIMessagesScreen: React.FC = () => {
 
   const showListSearchBar = !channel;
 
+  /** Lift layout by measured keyboard height (iOS + Android). Avoids iOS KeyboardAvoidingView `padding` stacking extra empty space above the keyboard. */
+  const composerBottomPad =
+    keyboardOpen && channel
+      ? 0
+      : Math.max(insets.bottom, Platform.OS === 'ios' ? 10 : 8) + tabBarHeight;
+
   return (
     <View style={s.safe}>
       <StatusBar style="dark" backgroundColor={RavenLight.panel} translucent />
-      <KeyboardAvoidingView
-        style={s.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={
-          Platform.OS === 'ios' ? insets.top + 6 : (RNStatusBar.currentHeight ?? 0)
-        }
+      <View
+        style={[
+          s.flex,
+          keyboardHeight > 0 ? { paddingBottom: keyboardHeight } : null,
+        ]}
       >
         {/* Top bar — paddingTop pulls content below status bar; panel fills notch (see StatusBar). */}
         <View style={[s.header, { paddingTop: insets.top + 10 }]}>
@@ -2338,7 +2473,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
         </View>
 
         {channel ? (
-        <View style={[s.composerBar, { paddingBottom: Math.max(insets.bottom, Platform.OS === 'ios' ? 10 : 8) + tabBarHeight }]}>
+        <View style={[s.composerBar, { paddingBottom: composerBottomPad }]}>
           {replyTo ? (
             <View style={s.replyStrip}>
               <Pressable
@@ -2441,7 +2576,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
           </View>
         </View>
         ) : null}
-      </KeyboardAvoidingView>
+      </View>
 
       {/* Supplier group menu — full screen when opened (default after entering a supplier group). */}
       <Modal

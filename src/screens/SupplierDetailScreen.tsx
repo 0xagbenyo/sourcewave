@@ -6,9 +6,12 @@ import { useNavigation, useRoute, RouteProp, useFocusEffect } from '@react-navig
 import type { NavigationProp } from '@react-navigation/native';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
+import { useTranslation } from 'react-i18next';
 import { getSupplierById, resolveSupplier, type Supplier } from '../data/suppliers';
 import { useSubscription } from '../context/SubscriptionContext';
+import { useUserSession } from '../context/UserContext';
 import { SourceWaveStackHeader } from '../components/SourceWaveStackHeader';
+import { SuppliersPremiumGateContent } from '../components/SuppliersPremiumGateContent';
 import type { RootStackParamList } from '../types';
 
 function dash(v: string | null | undefined): string {
@@ -26,9 +29,11 @@ function FieldRow({ label, value }: { label: string; value: string }) {
 }
 
 export const SupplierDetailScreen: React.FC = () => {
+  const { t } = useTranslation();
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'SupplierDetail'>>();
-  const { refresh, isLoading } = useSubscription();
+  const { user } = useUserSession();
+  const { refresh, isLoading: subscriptionLoading, isActive } = useSubscription();
   const supplierId = route.params.supplierId;
   const [supplier, setSupplier] = useState<Supplier | null>(() => getSupplierById(supplierId) ?? null);
   const [loadingDoc, setLoadingDoc] = useState(() => !getSupplierById(supplierId));
@@ -80,6 +85,45 @@ export const SupplierDetailScreen: React.FC = () => {
         <SourceWaveStackHeader title="Supplier" onBack={() => navigation.goBack()} />
         <SafeAreaView style={styles.safe} edges={['bottom']}>
           <Text style={styles.missing}>This supplier was not found in the catalog.</Text>
+        </SafeAreaView>
+      </View>
+    );
+  }
+
+  if (!user?.email) {
+    return (
+      <View style={styles.root}>
+        <SourceWaveStackHeader title="Supplier" onBack={() => navigation.goBack()} />
+        <SafeAreaView style={[styles.safe, styles.gatePad]} edges={['bottom']}>
+          <Text style={styles.gateTitle}>{t('suppliersPremium.signInTitle')}</Text>
+          <Text style={styles.gateBody}>{t('suppliersPremium.signInBody')}</Text>
+          <TouchableOpacity style={styles.gateCta} onPress={() => navigation.navigate('Auth')} activeOpacity={0.85}>
+            <Text style={styles.gateCtaText}>{t('suppliersPremium.signInCta')}</Text>
+          </TouchableOpacity>
+        </SafeAreaView>
+      </View>
+    );
+  }
+
+  if (subscriptionLoading) {
+    return (
+      <View style={styles.root}>
+        <SourceWaveStackHeader title="Supplier" subtitle={t('subscriptionPage.loading')} onBack={() => navigation.goBack()} />
+        <SafeAreaView style={styles.safe} edges={['bottom']}>
+          <View style={styles.loadingWrap}>
+            <ActivityIndicator size="large" color={Colors.WINE} />
+          </View>
+        </SafeAreaView>
+      </View>
+    );
+  }
+
+  if (!isActive) {
+    return (
+      <View style={styles.root}>
+        <SourceWaveStackHeader title="Supplier" subtitle={t('suppliersPremium.subtitle')} onBack={() => navigation.goBack()} />
+        <SafeAreaView style={styles.safe} edges={['bottom']}>
+          <SuppliersPremiumGateContent onSubscribe={() => navigation.navigate('Subscription')} />
         </SafeAreaView>
       </View>
     );
@@ -229,12 +273,12 @@ export const SupplierDetailScreen: React.FC = () => {
 
         <View style={styles.footer}>
           <TouchableOpacity
-            style={[styles.cta, (openingChat || isLoading) && styles.ctaDisabled]}
+            style={[styles.cta, (openingChat || subscriptionLoading) && styles.ctaDisabled]}
             activeOpacity={0.9}
             onPress={openChat}
-            disabled={openingChat || isLoading}
+            disabled={openingChat || subscriptionLoading}
           >
-            {openingChat || isLoading ? (
+            {openingChat || subscriptionLoading ? (
               <ActivityIndicator color={Colors.WHITE} />
             ) : (
               <>
@@ -243,7 +287,7 @@ export const SupplierDetailScreen: React.FC = () => {
               </>
             )}
           </TouchableOpacity>
-          {isLoading ? <Text style={styles.footerHint}>Checking subscription status…</Text> : null}
+          {subscriptionLoading ? <Text style={styles.footerHint}>Checking subscription status…</Text> : null}
         </View>
       </SafeAreaView>
     </View>
@@ -254,6 +298,23 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.BACKGROUND },
   safe: { flex: 1, backgroundColor: Colors.BACKGROUND },
   missing: { padding: Spacing.MD, color: Colors.TEXT_SECONDARY },
+  gatePad: { flex: 1, justifyContent: 'center', paddingHorizontal: Spacing.LG },
+  gateTitle: { fontSize: 20, fontWeight: '800', color: Colors.BLACK, textAlign: 'center' },
+  gateBody: {
+    marginTop: Spacing.SM,
+    fontSize: 15,
+    color: Colors.TEXT_SECONDARY,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  gateCta: {
+    marginTop: Spacing.XL,
+    backgroundColor: Colors.WINE,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  gateCtaText: { color: Colors.WHITE, fontWeight: '700', fontSize: 16 },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 48 },
   scroll: { paddingHorizontal: Spacing.MD, paddingBottom: 120 },
   hero: { alignItems: 'center', paddingVertical: Spacing.LG },

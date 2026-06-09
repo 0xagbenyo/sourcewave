@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -10,403 +10,331 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Modal,
+  FlatList,
+  Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import type { NavigationProp } from '@react-navigation/native';
 import { Colors } from '../constants/colors';
+import { Spacing } from '../constants/spacing';
+import { Header } from '../components/Header';
+import { GHANA_REGIONS } from '../constants/ghanaRegions';
 import { useUserSession } from '../context/UserContext';
 import { getERPNextClient } from '../services/erpnext';
+import type { RootStackParamList, ErpCustomerAddressRow } from '../types';
 
-interface Address {
-  name?: string;
-  address_title: string;
-  address_type: 'Billing' | 'Shipping';
-  address_line1: string;
-  address_line2?: string;
-  city: string;
-  county?: string;
-  state?: string;
-  country: string;
-  pincode: string;
-  email_id?: string;
-  phone: string;
-  fax?: string;
-  tax_category?: string;
-  is_primary_address?: boolean;
-  is_shipping_address?: boolean;
-  disabled?: boolean;
-  is_your_company_address?: boolean;
+const hairline = StyleSheet.hairlineWidth;
+
+function normalizeRegion(state: string | undefined): string {
+  const s = String(state || '').trim();
+  if (!s) return '';
+  const found = GHANA_REGIONS.find((r) => r.toLowerCase() === s.toLowerCase());
+  return found || s;
+}
+
+function isValidEmail(email: string): boolean {
+  const t = email.trim();
+  if (!t) return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t);
 }
 
 export const EditAddressScreen: React.FC = () => {
-  const navigation = useNavigation();
-  const route = useRoute();
+  const navigation = useNavigation<NavigationProp<RootStackParamList>>();
+  const route = useRoute<RouteProp<RootStackParamList, 'EditAddress'>>();
   const { user } = useUserSession();
   const [saving, setSaving] = useState(false);
+  const [regionPickerOpen, setRegionPickerOpen] = useState(false);
 
-  const params = (route.params as any) || {};
-  const isEditing = params.address !== undefined;
-  const initialAddress = params.address || {
-    address_title: '',
-    address_type: 'Billing',
-    address_line1: '',
-    address_line2: '',
-    city: '',
-    county: '',
-    state: '',
-    country: 'Ghana',
-    pincode: '',
-    email_id: user?.email || '',
-    phone: '',
-    fax: '',
-    tax_category: '',
-    is_primary_address: false,
-    is_shipping_address: false,
-    disabled: false,
-    is_your_company_address: false,
-  };
+  const params = route.params || {};
+  const existing = params.address as ErpCustomerAddressRow | undefined;
+  const isEditing = Boolean(existing?.name);
 
-  const [address, setAddress] = useState<Address>(initialAddress);
+  const initial = useMemo(() => {
+    if (existing) {
+      return {
+        address_title: (existing.address_title || '').trim(),
+        address_line1: (existing.address_line1 || '').trim(),
+        city: (existing.city || '').trim(),
+        state: normalizeRegion(existing.state),
+        country: (existing.country || 'Ghana').trim() || 'Ghana',
+        pincode: (existing.pincode || '').trim(),
+        email_id: (existing.email_id || user?.email || '').trim(),
+        phone: (existing.phone || '').trim(),
+        is_primary_address:
+          existing.is_primary_address === true || existing.is_primary_address === 1,
+      };
+    }
+    return {
+      address_title: '',
+      address_line1: '',
+      city: '',
+      state: '',
+      country: 'Ghana',
+      pincode: '',
+      email_id: (user?.email || '').trim(),
+      phone: '',
+      is_primary_address: false,
+    };
+  }, [existing, user?.email]);
+
+  const [addressTitle, setAddressTitle] = useState(initial.address_title);
+  const [addressLine1, setAddressLine1] = useState(initial.address_line1);
+  const [city, setCity] = useState(initial.city);
+  const [region, setRegion] = useState(initial.state);
+  const [emailId, setEmailId] = useState(initial.email_id);
+  const [phone, setPhone] = useState(initial.phone);
+  const [isPrimary, setIsPrimary] = useState(initial.is_primary_address);
 
   const handleSave = async () => {
-    // Validate required fields
-    if (
-      !address.address_title?.trim() ||
-      !address.address_line1?.trim() ||
-      !address.city?.trim() ||
-      !address.country?.trim()
-    ) {
-      Alert.alert('Validation Error', 'Please fill in all required fields');
+    const title = addressTitle.trim();
+    const line1 = addressLine1.trim();
+    const cityT = city.trim();
+    const regionNorm = normalizeRegion(region.trim());
+    const email = emailId.trim();
+    const phoneT = phone.trim();
+
+    if (!title) {
+      Alert.alert('Required', 'Please enter an address title.');
+      return;
+    }
+    if (!line1) {
+      Alert.alert('Required', 'Please enter your residential address details.');
+      return;
+    }
+    if (!cityT) {
+      Alert.alert('Required', 'Please enter city or town.');
+      return;
+    }
+    if (!regionNorm || !GHANA_REGIONS.some((r) => r === regionNorm)) {
+      Alert.alert('Required', 'Please select a region in Ghana.');
+      return;
+    }
+    if (!phoneT) {
+      Alert.alert('Required', 'Please enter a phone number.');
+      return;
+    }
+    if (!isValidEmail(email)) {
+      Alert.alert('Required', 'Please enter a valid email address.');
       return;
     }
 
     try {
       setSaving(true);
       const client = getERPNextClient();
-      const customer = await client.getOrCreateCustomer(
-        user?.email || '',
-        user?.email || ''
-      );
-
+      const customer = await client.getOrCreateCustomer(user?.email || '', user?.email || '');
       if (!customer?.name) {
         throw new Error('Customer not found for this user');
       }
 
-      const addressTitle = `${address.address_title}-${user?.email || ''}`;
+      const pincode = (initial.pincode || '-').trim() || '-';
 
       const addressPayload = {
-        address_title: addressTitle,
-        address_type: address.address_type,
-        address_line1: address.address_line1,
-        address_line2: address.address_line2,
-        city: address.city,
-        county: address.county,
-        state: address.state,
-        country: address.country,
-        pincode: address.pincode,
-        email_id: user?.email || '',
-        phone: address.phone,
-        fax: address.fax,
-        tax_category: address.tax_category,
-        is_primary_address: address.is_primary_address ? 1 : 0,
-        is_shipping_address: address.is_shipping_address ? 1 : 0,
-        disabled: address.disabled ? 1 : 0,
+        address_title: title,
+        address_type: 'Shipping',
+        address_line1: line1,
+        city: cityT,
+        state: regionNorm,
+        country: 'Ghana',
+        pincode,
+        email_id: email,
+        phone: phoneT,
+        is_primary_address: isPrimary ? 1 : 0,
+        is_shipping_address: 1,
+        disabled: 0,
         links: [{ link_doctype: 'Customer', link_name: customer.name }],
       };
 
-      if (isEditing && address.name) {
-        await client.updateAddress(address.name, addressPayload);
-        Alert.alert('Success', 'Address updated successfully', [
-          {
-            text: 'OK',
-            onPress: () => (navigation as any).goBack(),
-          },
-        ]);
+      if (isEditing && existing?.name) {
+        await client.updateAddress(existing.name, addressPayload);
+        Alert.alert('Saved', 'Address updated.', [{ text: 'OK', onPress: () => navigation.goBack() }]);
       } else {
         await client.createAddress(addressPayload);
-        Alert.alert('Success', 'Address created successfully', [
-          {
-            text: 'OK',
-            onPress: () => (navigation as any).goBack(),
-          },
-        ]);
+        Alert.alert('Saved', 'Address added.', [{ text: 'OK', onPress: () => navigation.goBack() }]);
       }
-    } catch (error: any) {
-      console.error('Error saving address:', error);
-      Alert.alert('Error', error?.message || 'Failed to save address');
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : 'Failed to save address';
+      Alert.alert('Error', msg);
     } finally {
       setSaving(false);
     }
   };
 
+  const headerTitle = isEditing ? 'Edit address' : 'Add address';
+
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
+      <Header showBackButton title={headerTitle} subtitle="Shipping details" />
+
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.kav}
+        keyboardVerticalOffset={0}
       >
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => (navigation as any).goBack()}>
-            <Ionicons name="arrow-back" size={24} color={Colors.BLACK} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>
-            {isEditing ? 'Edit Address' : 'Add New Address'}
-          </Text>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.sectionLabel}>Address</Text>
+          <View style={styles.group}>
+            <View style={styles.fieldPad}>
+              <Text style={styles.label}>Address title</Text>
+              <TextInput
+                style={styles.textInput}
+                placeholder="e.g. Home, Office"
+                placeholderTextColor={Colors.TEXT_SECONDARY}
+                value={addressTitle}
+                onChangeText={setAddressTitle}
+                editable={!saving}
+              />
+            </View>
+            <View style={styles.fieldPad}>
+              <Text style={styles.label}>Residential address details</Text>
+              <Text style={styles.hint}>e.g. EW-0000-0000 — street, house number, area</Text>
+              <TextInput
+                style={[styles.textInput, styles.textInputTall]}
+                placeholder="Enter full residential details"
+                placeholderTextColor={Colors.TEXT_SECONDARY}
+                value={addressLine1}
+                onChangeText={setAddressLine1}
+                multiline
+                textAlignVertical="top"
+                editable={!saving}
+              />
+            </View>
+            <View style={[styles.fieldPad, styles.fieldPadLast]}>
+              <Text style={styles.label}>City / town</Text>
+              <TextInput
+                style={styles.textInput}
+                placeholder="City or town"
+                placeholderTextColor={Colors.TEXT_SECONDARY}
+                value={city}
+                onChangeText={setCity}
+                editable={!saving}
+              />
+            </View>
+          </View>
+
+          <Text style={styles.sectionLabel}>Region</Text>
+          <View style={styles.group}>
+            <TouchableOpacity
+              style={styles.selectRow}
+              onPress={() => !saving && setRegionPickerOpen(true)}
+              activeOpacity={0.75}
+            >
+              <View style={styles.selectMain}>
+                <Text style={region ? styles.selectValue : styles.selectPlaceholder}>
+                  {region || 'Select region in Ghana'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={Colors.TEXT_SECONDARY} />
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.sectionLabel}>Contact</Text>
+          <View style={styles.group}>
+            <View style={styles.fieldPad}>
+              <Text style={styles.label}>Phone</Text>
+              <TextInput
+                style={styles.textInput}
+                placeholder="Mobile number"
+                placeholderTextColor={Colors.TEXT_SECONDARY}
+                value={phone}
+                onChangeText={setPhone}
+                keyboardType="phone-pad"
+                editable={!saving}
+              />
+            </View>
+            <View style={[styles.fieldPad, styles.fieldPadLast]}>
+              <Text style={styles.label}>Email address</Text>
+              <TextInput
+                style={styles.textInput}
+                placeholder="you@example.com"
+                placeholderTextColor={Colors.TEXT_SECONDARY}
+                value={emailId}
+                onChangeText={setEmailId}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!saving}
+              />
+            </View>
+          </View>
+
+          <Text style={styles.sectionLabel}>Options</Text>
+          <View style={styles.group}>
+            <TouchableOpacity
+              style={styles.toggleRow}
+              onPress={() => setIsPrimary((v) => !v)}
+              activeOpacity={0.75}
+            >
+              <Ionicons name="star-outline" size={22} color={Colors.WINE} style={styles.rowIcon} />
+              <View style={styles.rowMain}>
+                <Text style={styles.rowTitle}>Primary shipping address</Text>
+                <Text style={styles.rowSubtitle}>Use as default when placing orders</Text>
+              </View>
+              <View style={[styles.switchBox, isPrimary && styles.switchBoxOn]}>
+                {isPrimary ? <Ionicons name="checkmark" size={16} color={Colors.WHITE} /> : null}
+              </View>
+            </TouchableOpacity>
+          </View>
+
+          <View style={{ height: 24 }} />
+        </ScrollView>
+
+        <View style={styles.saveFooter}>
           <TouchableOpacity
+            style={[styles.saveButton, saving && styles.saveButtonDisabled]}
             onPress={handleSave}
             disabled={saving}
-            style={[styles.saveIconButton, saving && { opacity: 0.5 }]}
+            activeOpacity={0.85}
           >
             {saving ? (
-              <ActivityIndicator size="small" color={Colors.ROYAL_BLUE} />
+              <ActivityIndicator color={Colors.WHITE} />
             ) : (
-              <Ionicons name="checkmark" size={24} color={Colors.ROYAL_BLUE} />
+              <>
+                <Ionicons name="checkmark" size={20} color={Colors.WHITE} />
+                <Text style={styles.saveButtonText}>{isEditing ? 'Save changes' : 'Save address'}</Text>
+              </>
             )}
           </TouchableOpacity>
         </View>
-
-        <ScrollView style={styles.formScroll} showsVerticalScrollIndicator={false}>
-          {/* Basic Information Section */}
-          <View style={styles.formSection}>
-            <Text style={styles.sectionTitle}>Basic Information</Text>
-            <View style={styles.twoColumnLayout}>
-              <View style={styles.columnContainer}>
-                <Text style={styles.inputLabel}>Address Title</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="e.g., Home, Office"
-                  placeholderTextColor={Colors.TEXT_SECONDARY}
-                  value={address.address_title}
-                  onChangeText={(text) =>
-                    setAddress({ ...address, address_title: text })
-                  }
-                />
-              </View>
-              <View style={styles.columnContainer}>
-                <Text style={styles.inputLabel}>Address Type</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Residential/Commercial"
-                  placeholderTextColor={Colors.TEXT_SECONDARY}
-                  value={address.address_type}
-                  onChangeText={(text) =>
-                    setAddress({ ...address, address_type: text as 'Billing' | 'Shipping' })
-                  }
-                />
-              </View>
-            </View>
-          </View>
-
-          {/* Street Address Section */}
-          <View style={styles.formSection}>
-            <Text style={styles.sectionTitle}>Street Address</Text>
-            <Text style={styles.inputLabel}>Address Line 1</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Street address"
-              placeholderTextColor={Colors.TEXT_SECONDARY}
-              value={address.address_line1}
-              onChangeText={(text) =>
-                setAddress({ ...address, address_line1: text })
-              }
-            />
-            <Text style={styles.inputLabel}>Address Line 2</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Apt, suite, building (optional)"
-              placeholderTextColor={Colors.TEXT_SECONDARY}
-              value={address.address_line2}
-              onChangeText={(text) =>
-                setAddress({ ...address, address_line2: text })
-              }
-            />
-          </View>
-
-          {/* Location Section */}
-          <View style={styles.formSection}>
-            <Text style={styles.sectionTitle}>Location Details</Text>
-            <View style={styles.twoColumnLayout}>
-              <View style={styles.columnContainer}>
-                <Text style={styles.inputLabel}>City</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="City"
-                  placeholderTextColor={Colors.TEXT_SECONDARY}
-                  value={address.city}
-                  onChangeText={(text) =>
-                    setAddress({ ...address, city: text })
-                  }
-                />
-              </View>
-              <View style={styles.columnContainer}>
-                <Text style={styles.inputLabel}>State/Region</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="State"
-                  placeholderTextColor={Colors.TEXT_SECONDARY}
-                  value={address.state}
-                  onChangeText={(text) =>
-                    setAddress({ ...address, state: text })
-                  }
-                />
-              </View>
-            </View>
-
-            <View style={styles.twoColumnLayout}>
-              <View style={styles.columnContainer}>
-                <Text style={styles.inputLabel}>Country</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Country"
-                  placeholderTextColor={Colors.TEXT_SECONDARY}
-                  value={address.country}
-                  onChangeText={(text) =>
-                    setAddress({ ...address, country: text })
-                  }
-                />
-              </View>
-              <View style={styles.columnContainer}>
-                <Text style={styles.inputLabel}>Postal Code</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Postal code"
-                  placeholderTextColor={Colors.TEXT_SECONDARY}
-                  value={address.pincode}
-                  onChangeText={(text) =>
-                    setAddress({ ...address, pincode: text })
-                  }
-                />
-              </View>
-            </View>
-
-            <Text style={styles.inputLabel}>County</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="County (optional)"
-              placeholderTextColor={Colors.TEXT_SECONDARY}
-              value={address.county}
-              onChangeText={(text) =>
-                setAddress({ ...address, county: text })
-              }
-            />
-          </View>
-
-          {/* Contact Details Section */}
-          <View style={styles.formSection}>
-            <Text style={styles.sectionTitle}>Contact Details</Text>
-            <Text style={styles.inputLabel}>Email</Text>
-            <TextInput
-              style={[styles.input, styles.disabledInput]}
-              placeholder="Email"
-              placeholderTextColor={Colors.TEXT_SECONDARY}
-              value={address.email_id}
-              editable={false}
-            />
-            <View style={styles.twoColumnLayout}>
-              <View style={styles.columnContainer}>
-                <Text style={styles.inputLabel}>Phone</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Phone number"
-                  placeholderTextColor={Colors.TEXT_SECONDARY}
-                  value={address.phone}
-                  onChangeText={(text) =>
-                    setAddress({ ...address, phone: text })
-                  }
-                />
-              </View>
-              <View style={styles.columnContainer}>
-                <Text style={styles.inputLabel}>Fax</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Fax (optional)"
-                  placeholderTextColor={Colors.TEXT_SECONDARY}
-                  value={address.fax}
-                  onChangeText={(text) =>
-                    setAddress({ ...address, fax: text })
-                  }
-                />
-              </View>
-            </View>
-          </View>
-
-          {/* Address Preferences Section */}
-          <View style={styles.formSection}>
-            <Text style={styles.sectionTitle}>Address Preferences</Text>
-            <View style={styles.preferencesContainer}>
-              <TouchableOpacity
-                style={styles.preferenceRow}
-                onPress={() =>
-                  setAddress({
-                    ...address,
-                    is_primary_address: !address.is_primary_address,
-                  })
-                }
-              >
-                <View
-                  style={[
-                    styles.checkbox,
-                    address.is_primary_address && styles.checkboxChecked,
-                  ]}
-                >
-                  {address.is_primary_address && (
-                    <Ionicons name="checkmark" size={14} color={Colors.WHITE} />
-                  )}
-                </View>
-                <Text style={styles.preferenceText}>Set as primary address</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.preferenceRow}
-                onPress={() =>
-                  setAddress({
-                    ...address,
-                    is_shipping_address: !address.is_shipping_address,
-                  })
-                }
-              >
-                <View
-                  style={[
-                    styles.checkbox,
-                    address.is_shipping_address && styles.checkboxChecked,
-                  ]}
-                >
-                  {address.is_shipping_address && (
-                    <Ionicons name="checkmark" size={14} color={Colors.WHITE} />
-                  )}
-                </View>
-                <Text style={styles.preferenceText}>Use for shipping</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.preferenceRow}
-                onPress={() =>
-                  setAddress({
-                    ...address,
-                    disabled: !address.disabled,
-                  })
-                }
-              >
-                <View
-                  style={[
-                    styles.checkbox,
-                    address.disabled && styles.checkboxChecked,
-                  ]}
-                >
-                  {address.disabled && (
-                    <Ionicons name="checkmark" size={14} color={Colors.WHITE} />
-                  )}
-                </View>
-                <Text style={styles.preferenceText}>Disable this address</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <View style={{ height: 40 }} />
-        </ScrollView>
       </KeyboardAvoidingView>
+
+      <Modal visible={regionPickerOpen} animationType="slide" transparent>
+        <Pressable style={styles.modalBackdrop} onPress={() => setRegionPickerOpen(false)}>
+          <Pressable style={styles.modalSheet} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalGrab}>
+              <View style={styles.modalHandle} />
+            </View>
+            <Text style={styles.modalTitle}>Region</Text>
+            <FlatList
+              data={[...GHANA_REGIONS]}
+              keyExtractor={(item) => item}
+              style={styles.modalList}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.modalRow}
+                  onPress={() => {
+                    setRegion(item);
+                    setRegionPickerOpen(false);
+                  }}
+                >
+                  <Text style={styles.modalRowText}>{item}</Text>
+                  {item === region ? (
+                    <Ionicons name="checkmark-circle" size={22} color={Colors.WINE} />
+                  ) : null}
+                </TouchableOpacity>
+              )}
+            />
+            <SafeAreaView edges={['bottom']} />
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -414,53 +342,53 @@ export const EditAddressScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.BACKGROUND,
+    backgroundColor: Colors.OFF_WHITE,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
+  kav: {
+    flex: 1,
+  },
+  scroll: { flex: 1 },
+  scrollContent: {
+    paddingBottom: 8,
+  },
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.TEXT_SECONDARY,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginTop: 22,
+    marginBottom: 8,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+  },
+  group: {
+    backgroundColor: Colors.WHITE,
+    borderTopWidth: hairline,
+    borderBottomWidth: hairline,
+    borderColor: Colors.BORDER,
+  },
+  fieldPad: {
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    paddingVertical: 14,
+    borderBottomWidth: hairline,
     borderBottomColor: Colors.BORDER,
   },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: Colors.BLACK,
-    flex: 1,
-    textAlign: 'center',
+  fieldPadLast: {
+    borderBottomWidth: 0,
   },
-  saveIconButton: {
-    padding: 8,
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  formScroll: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-  },
-  formSection: {
-    marginBottom: 24,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.ROYAL_BLUE,
-    marginBottom: 12,
-  },
-  inputLabel: {
+  label: {
     fontSize: 13,
     fontWeight: '500',
     color: Colors.BLACK,
     marginBottom: 8,
   },
-  input: {
-    backgroundColor: Colors.WHITE,
+  hint: {
+    fontSize: 12,
+    color: Colors.TEXT_SECONDARY,
+    marginBottom: 8,
+    lineHeight: 17,
+  },
+  textInput: {
     borderWidth: 1,
     borderColor: Colors.BORDER,
     borderRadius: 8,
@@ -468,50 +396,141 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     fontSize: 14,
     color: Colors.BLACK,
-    marginBottom: 12,
+    backgroundColor: Colors.OFF_WHITE,
   },
-  disabledInput: {
-    backgroundColor: Colors.LIGHT_GRAY,
-    color: Colors.TEXT_SECONDARY,
+  textInputTall: {
+    minHeight: 88,
+    paddingTop: 10,
   },
-  twoColumnLayout: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  columnContainer: {
-    flex: 1,
-  },
-  preferencesContainer: {
-    backgroundColor: Colors.WHITE,
-    borderRadius: 8,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: Colors.BORDER,
-  },
-  preferenceRow: {
+  selectRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
+    paddingVertical: 14,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+  },
+  selectMain: {
+    flex: 1,
+    minWidth: 0,
+  },
+  selectValue: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: Colors.BLACK,
+    letterSpacing: -0.2,
+  },
+  selectPlaceholder: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: Colors.TEXT_SECONDARY,
+    letterSpacing: -0.2,
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+  },
+  rowIcon: {
+    marginRight: 12,
+  },
+  rowMain: {
+    flex: 1,
+    minWidth: 0,
+  },
+  rowTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: Colors.BLACK,
+    letterSpacing: -0.2,
+  },
+  rowSubtitle: {
+    fontSize: 13,
+    color: Colors.TEXT_SECONDARY,
+    marginTop: 3,
+    fontWeight: '500',
+  },
+  switchBox: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: Colors.WINE,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  switchBoxOn: {
+    backgroundColor: Colors.WINE,
+  },
+  saveFooter: {
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    paddingTop: 12,
+    paddingBottom: 12,
+    backgroundColor: Colors.WHITE,
+    borderTopWidth: hairline,
+    borderTopColor: Colors.BORDER,
+  },
+  saveButton: {
+    backgroundColor: Colors.SUCCESS,
+    borderRadius: 12,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  saveButtonDisabled: {
+    opacity: 0.65,
+  },
+  saveButtonText: {
+    color: Colors.WHITE,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: Colors.WHITE,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    maxHeight: '72%',
+    paddingBottom: Spacing.SM,
+  },
+  modalGrab: {
+    alignItems: 'center',
+    paddingTop: 10,
+    paddingBottom: 6,
+  },
+  modalHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: Colors.MEDIUM_GRAY,
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: Colors.BLACK,
+    paddingHorizontal: Spacing.MD,
+    marginBottom: Spacing.SM,
+  },
+  modalList: {
+    paddingHorizontal: Spacing.SM,
+  },
+  modalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: Spacing.SM,
+    borderBottomWidth: hairline,
     borderBottomColor: Colors.BORDER,
   },
-  checkbox: {
-    width: 20,
-    height: 20,
-    borderRadius: 4,
-    borderWidth: 2,
-    borderColor: Colors.ROYAL_BLUE,
-    marginRight: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  checkboxChecked: {
-    backgroundColor: Colors.ROYAL_BLUE,
-    borderColor: Colors.ROYAL_BLUE,
-  },
-  preferenceText: {
-    fontSize: 14,
+  modalRowText: {
+    fontSize: 16,
     color: Colors.BLACK,
+    flex: 1,
   },
 });
