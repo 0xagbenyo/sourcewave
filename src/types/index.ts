@@ -273,8 +273,6 @@ export type RootStackParamList = {
   LanguageSelect: { fromSettings?: boolean } | undefined;
   Onboarding: undefined;
   Auth: undefined;
-  /** Opened from ERP email link `https://{site}/update-password?key=…` (App / Universal Links). */
-  PasswordReset: { key?: string } | undefined;
   Main: NavigatorScreenParams<MainTabParamList> | undefined;
   SourcingRequest: {
     parentCategory?: string;

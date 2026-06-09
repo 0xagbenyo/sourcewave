@@ -1,8 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
-import * as ExpoLinking from 'expo-linking';
 import { NavigationContainer } from '@react-navigation/native';
-import type { InitialState } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 
 // Screens
@@ -12,7 +10,6 @@ import { OnboardingScreen } from '../screens/OnboardingScreen';
 import { LoginScreen } from '../screens/LoginScreen';
 import { RegisterScreen } from '../screens/RegisterScreen';
 import { ForgotPasswordScreen } from '../screens/ForgotPasswordScreen';
-import { PasswordResetScreen } from '../screens/PasswordResetScreen';
 import { SearchScreen } from '../screens/SearchScreen';
 import { OrderHistoryScreen } from '../screens/OrderHistoryScreen';
 import { OrderDetailsScreen } from '../screens/OrderDetailsScreen';
@@ -45,8 +42,6 @@ import {
 } from '../constants/appPreferencesKeys';
 import { ensureChineseMachineLocale, applyEnglishLocale } from '../i18n/machineChineseLocale';
 import { RootMainNavigator } from './RootMainNavigator';
-import { parsePasswordResetKeyFromUrl } from './passwordResetUrl';
-import { createRootLinking } from './rootLinking';
 
 const Stack = createStackNavigator<RootStackParamList>();
 const AuthStack = createStackNavigator<AuthStackParamList>();
@@ -72,35 +67,15 @@ type InitialRouteName = 'LanguageSelect' | 'Onboarding' | 'Auth';
 export const AppNavigator = () => {
   const [navReady, setNavReady] = useState(false);
   const [initialRouteName, setInitialRouteName] = useState<InitialRouteName>('LanguageSelect');
-  const [initialNavState, setInitialNavState] = useState<InitialState | undefined>(undefined);
-  const linking = useMemo(() => createRootLinking(), []);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const initialUrl = await ExpoLinking.getInitialURL();
-        const resetKey = initialUrl ? parsePasswordResetKeyFromUrl(initialUrl) : null;
-
         const lang = await appStorage.getItem(STORAGE_APP_LANGUAGE);
         const onboardingDone = await appStorage.getItem(STORAGE_ONBOARDING_COMPLETE);
 
         if (cancelled) return;
-
-        if (lang === 'zh') {
-          await ensureChineseMachineLocale();
-        } else {
-          await applyEnglishLocale();
-        }
-
-        if (resetKey) {
-          setInitialNavState({
-            routes: [{ name: 'PasswordReset' as const, params: { key: resetKey } }],
-            index: 0,
-          });
-          setNavReady(true);
-          return;
-        }
 
         if (!lang) {
           setInitialRouteName('LanguageSelect');
@@ -109,12 +84,15 @@ export const AppNavigator = () => {
         } else {
           setInitialRouteName('Auth');
         }
-        setInitialNavState(undefined);
+
+        if (lang === 'zh') {
+          await ensureChineseMachineLocale();
+        } else {
+          await applyEnglishLocale();
+        }
       } catch (e) {
-        console.warn('[AppNavigator] bootstrap failed:', e);
+        console.warn('[AppNavigator] bootstrap locale failed:', e);
         await applyEnglishLocale();
-        setInitialNavState(undefined);
-        setInitialRouteName('LanguageSelect');
       } finally {
         if (!cancelled) setNavReady(true);
       }
@@ -133,9 +111,9 @@ export const AppNavigator = () => {
   }
 
   return (
-    <NavigationContainer linking={linking} initialState={initialNavState}>
+    <NavigationContainer>
       <Stack.Navigator
-        {...(!initialNavState ? { initialRouteName } : {})}
+        initialRouteName={initialRouteName}
         screenOptions={{
           headerShown: false,
         }}
@@ -143,7 +121,6 @@ export const AppNavigator = () => {
         <Stack.Screen name="LanguageSelect" component={LanguageSelectScreen} />
         <Stack.Screen name="Onboarding" component={OnboardingScreen} />
         <Stack.Screen name="Auth" component={AuthNavigator} />
-        <Stack.Screen name="PasswordReset" component={PasswordResetScreen} />
         <Stack.Screen name="Main" component={RootMainNavigator} />
         <Stack.Screen name="SourcingRequest" component={SourcingRequestMultiScreen} options={{ presentation: 'card' }} />
         <Stack.Screen

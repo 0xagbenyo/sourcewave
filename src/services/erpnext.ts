@@ -10,6 +10,7 @@
 
 import axios, { AxiosHeaders, AxiosInstance, AxiosError, AxiosResponse } from 'axios';
 import { Platform } from 'react-native';
+import { OTP_PURPOSE_RESET_PASSWORD } from '../constants/otpPurposes';
 
 // Configuration
 const ERPNEXT_BASE_URL = process.env.EXPO_PUBLIC_ERPNEXT_URL || 'http://localhost:8000';
@@ -483,6 +484,11 @@ function isFrappeTimestampMismatchMessage(message: string): boolean {
 class ERPNextClient {
   private client: AxiosInstance;
   private config: ERPNextConfig;
+  /**
+   * After a **Portal User** list returns “insufficient permission”, skip further list calls on that
+   * child DocType for this client lifetime (same API key / site policy).
+   */
+  private skipPortalUserListQueries = false;
 
   constructor(config: ERPNextConfig) {
     this.config = config;
@@ -619,6 +625,7 @@ class ERPNextClient {
               (serverMessages as string).includes('not found'));
 
           const excStr = String(errorData?.exception || errorData?.exc_type || '');
+          const smStr = typeof serverMessages === 'string' ? serverMessages : '';
           const isTimestampMismatch =
             errorData?.exc_type === 'TimestampMismatchError' ||
             excStr.includes('TimestampMismatchError') ||
@@ -626,7 +633,14 @@ class ERPNextClient {
               (serverMessages.includes('modified after you have opened') ||
                 serverMessages.includes('TimestampMismatchError')));
 
-          if (!isNotFoundError && !isTimestampMismatch) {
+          const blob = `${excStr} ${smStr}`.toLowerCase();
+          const errMsg = String(errorData?._error_message || '').toLowerCase();
+          const suppressExpectedProbeNoise =
+            (blob.includes('validate_otp') && blob.includes('not whitelisted')) ||
+            (blob.includes('insufficient permission') && blob.includes('portal user')) ||
+            (errMsg.includes('write') && errMsg.includes('permission') && errMsg.includes('raven user'));
+
+          if (!isNotFoundError && !isTimestampMismatch && !suppressExpectedProbeNoise) {
             console.error('ERPNext API Error:', errorData);
           }
         } else {
@@ -660,6 +674,215 @@ class ERPNextClient {
     } catch (error) {
       throw this.handleError(error);
     }
+  }
+
+  /**
+   * ERPNext **OTP Generation** app (`otp_generation`): sends a one-time code by email/SMS per site settings.
+   * POST `/api/method/otp_generation.api.send_otp` — guest-whitelisted on standard installs.
+   */
+  async sendOtp(params: {
+    purpose: string;
+    email?: string;
+    phone?: string;
+    user?: string;
+  }): Promise<{ status?: string; message?: string }> {
+    const body: Record<string, string> = { purpose: params.purpose };
+    if (params.email?.trim()) body.email = params.email.trim();
+    if (params.phone?.trim()) body.phone = params.phone.trim();
+    if (params.user?.trim()) body.user = params.user.trim();
+    try {
+      const response = await this.client.post('/api/method/otp_generation.api.send_otp', body);
+      const msg = response.data?.message;
+      if (msg && typeof msg === 'object' && (msg as { status?: string }).status === 'error') {
+        throw new Error(String((msg as { message?: string }).message || 'Failed to send OTP'));
+      }
+      return typeof msg === 'object' && msg !== null ? (msg as { status?: string; message?: string }) : {};
+    } catch (error) {
+      throw this.handleError(error);
+    }
+  }
+
+  /**
+   * Verifies an OTP for the given email/phone and purpose.
+   * 1) Tries RPC `validate_otp` (and `EXPO_PUBLIC_OTP_VALIDATE_METHOD` if set).
+   * 2) If the server returns **403/417** or “not whitelisted”, falls back to the **Resource API**: list `OTP`
+   *    rows with the integration key, check `expiry`, then set `status` to **Expired** (requires read/write
+   *    on the OTP DocType for your API user).
+   */
+  async validateOtp(params: {
+    purpose: string;
+    otpCode: string;
+    email?: string;
+    phone?: string;
+  }): Promise<{ status?: string; message?: string }> {
+    const body: Record<string, string> = {
+      purpose: params.purpose,
+      otp_code: params.otpCode.trim(),
+    };
+    if (params.email?.trim()) body.email = params.email.trim();
+    if (params.phone?.trim()) body.phone = params.phone.trim();
+
+    const custom = (process.env.EXPO_PUBLIC_OTP_VALIDATE_METHOD || '').trim();
+    const candidates = [
+      ...new Set([
+        ...(custom ? [custom] : []),
+        'otp_generation.api.validate_otp',
+        'otp_generation.api.otp.validate_otp',
+      ]),
+    ];
+
+    let lastError: unknown;
+    let sawPermissionDenied = false;
+    for (const method of candidates) {
+      try {
+        const response = await this.client.post(`/api/method/${method}`, body);
+        const msg = response.data?.message;
+        if (msg && typeof msg === 'object' && (msg as { status?: string }).status === 'error') {
+          throw new Error(String((msg as { message?: string }).message || 'Invalid or expired OTP'));
+        }
+        return typeof msg === 'object' && msg !== null ? (msg as { status?: string; message?: string }) : {};
+      } catch (error) {
+        lastError = error;
+        const ax = error as AxiosError<{ exc_type?: string; exception?: string }>;
+        const status = ax.response?.status;
+        const excType = ax.response?.data?.exc_type;
+        const exceptionStr = String(ax.response?.data?.exception || '');
+        const isPermission =
+          status === 403 ||
+          status === 417 ||
+          excType === 'PermissionError' ||
+          exceptionStr.includes('not whitelisted');
+        if (status === 404 || isPermission) {
+          if (isPermission) sawPermissionDenied = true;
+          continue;
+        }
+        throw this.handleError(error);
+      }
+    }
+
+    if (sawPermissionDenied) {
+      try {
+        await this.validateOtpViaOtpResource(params);
+        return { status: 'success', message: 'OTP verified successfully' };
+      } catch (resourceErr) {
+        const doctype = (process.env.EXPO_PUBLIC_OTP_DOCTYPE || 'OTP').trim();
+        const base = resourceErr instanceof Error ? resourceErr.message : String(resourceErr);
+        throw new Error(
+          `${base} If RPC is blocked, whitelist guest access to validate_otp on ERPNext, or grant the integration user read/write on DocType ${doctype}.`
+        );
+      }
+    }
+
+    if (lastError) {
+      throw this.handleError(lastError);
+    }
+    throw new Error(
+      'OTP verification is not available from this app. On ERPNext, whitelist `validate_otp` in the OTP Generation app, set EXPO_PUBLIC_OTP_VALIDATE_METHOD, or grant the API user access to the OTP DocType for resource verification.'
+    );
+  }
+
+  /**
+   * Fallback when `validate_otp` RPC is not whitelisted: match a **Valid** OTP row and expire it.
+   * DocType name: `EXPO_PUBLIC_OTP_DOCTYPE` (default `OTP`).
+   */
+  async validateOtpViaOtpResource(params: {
+    purpose: string;
+    otpCode: string;
+    email?: string;
+    phone?: string;
+  }): Promise<void> {
+    const doctype = (process.env.EXPO_PUBLIC_OTP_DOCTYPE || 'OTP').trim();
+    const purpose = params.purpose;
+    const code = params.otpCode.trim();
+    const email = params.email?.trim();
+    const phone = params.phone?.trim();
+    if (!email && !phone) {
+      throw new Error('Email or phone is required to verify the OTP.');
+    }
+
+    const filters: unknown[][] = [
+      ['otp_code', '=', code],
+      ['purpose', '=', purpose],
+      ['status', '=', 'Valid'],
+    ];
+    if (email) {
+      filters.push(['email', '=', email]);
+    } else if (phone) {
+      filters.push(['phone', '=', phone]);
+    }
+
+    let rows: Array<Record<string, unknown>> = [];
+    try {
+      const response = await this.client.get(`${API_VERSION}/${encodeURIComponent(doctype)}`, {
+        params: {
+          fields: JSON.stringify(['name', 'otp_code', 'status', 'expiry', 'purpose', 'email', 'phone']),
+          filters: JSON.stringify(filters),
+          limit_page_length: 5,
+        },
+      });
+      rows = Array.isArray(response.data?.data) ? response.data.data : [];
+    } catch {
+      throw new Error(
+        `Could not read OTP documents (${doctype}). Check EXPO_PUBLIC_OTP_DOCTYPE and API permissions.`
+      );
+    }
+
+    const now = Date.now();
+    const validRows = rows.filter((row) => {
+      const expRaw = row.expiry;
+      if (expRaw == null || expRaw === '') return true;
+      const exp = new Date(typeof expRaw === 'string' ? expRaw : String(expRaw));
+      if (Number.isNaN(exp.getTime())) return true;
+      return exp.getTime() >= now;
+    });
+
+    if (validRows.length === 0) {
+      throw new Error('Invalid or expired verification code.');
+    }
+
+    const row = validRows[0];
+    const name = row.name != null ? String(row.name).trim() : '';
+    if (!name) {
+      throw new Error('Invalid or expired verification code.');
+    }
+
+    try {
+      await this.client.put(
+        `${API_VERSION}/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`,
+        { status: 'Expired' }
+      );
+    } catch {
+      // Matched row; consuming is best-effort (permissions / concurrency).
+    }
+  }
+
+  /**
+   * Sets **new_password** on the Frappe User for this email (integration user must be allowed to write User).
+   * Used after OTP verification for in-app password reset.
+   */
+  async setUserPasswordByEmail(email: string, newPassword: string): Promise<void> {
+    const trimmed = email.trim();
+    const user = await this.getUserByEmail(trimmed);
+    if (!user?.name) {
+      throw new Error('No account exists for this email address.');
+    }
+    try {
+      await this.client.put(`${API_VERSION}/User/${encodeURIComponent(String(user.name))}`, {
+        new_password: newPassword,
+      });
+    } catch (error) {
+      throw this.handleError(error);
+    }
+  }
+
+  /** Verify OTP then set password (no reset email link). */
+  async resetPasswordWithOtp(email: string, otpCode: string, newPassword: string): Promise<void> {
+    await this.validateOtp({
+      email,
+      purpose: OTP_PURPOSE_RESET_PASSWORD,
+      otpCode,
+    });
+    await this.setUserPasswordByEmail(email, newPassword);
   }
 
   async getTopCustomers(year?: number, month?: number): Promise<{
@@ -1010,6 +1233,8 @@ class ERPNextClient {
     last_name: string;
     middle_name?: string;
     phone?: string;
+    /** When set, stored as Frappe `new_password` (user can sign in immediately). */
+    password?: string;
     send_welcome_email?: boolean;
     /**
      * When false (default), assigns **Raven User** alongside **Customer** so Raven’s `User` hooks
@@ -1019,13 +1244,30 @@ class ERPNextClient {
      * portal-linked Customer (retries briefly while hooks create the Raven User row).
      */
     skipRavenMessagingRole?: boolean;
+    /**
+     * When true, skips **`ensureRavenUserCustomCustomerForUser`** inside create (call it yourself after
+     * **Customer** exists). Avoids many slow permission probes during signup when the Customer row is
+     * created only after the User.
+     */
+    deferRavenCustomerLink?: boolean;
   }): Promise<any> {
     const userPayload: any = {
       email: userData.email.trim(),
       first_name: userData.first_name.trim(),
       last_name: userData.last_name.trim(),
-      send_welcome_email: userData.send_welcome_email !== false ? 1 : 0, // 1 = true, 0 = false
+      send_welcome_email:
+        userData.send_welcome_email !== undefined
+          ? userData.send_welcome_email !== false
+            ? 1
+            : 0
+          : userData.password?.trim()
+            ? 0
+            : 1,
     };
+
+    if (userData.password?.trim()) {
+      userPayload.new_password = userData.password.trim();
+    }
 
     if (userData.middle_name?.trim()) {
       userPayload.middle_name = userData.middle_name.trim();
@@ -1055,10 +1297,12 @@ class ERPNextClient {
           } catch (e) {
             console.warn('[ERPNext] createUser: add to Raven workspaces failed', e);
           }
-          try {
-            await this.ensureRavenUserCustomCustomerForUser(frappeUserName);
-          } catch (e) {
-            console.warn('[ERPNext] createUser: ensureRavenUserCustomCustomerForUser failed', e);
+          if (!userData.deferRavenCustomerLink) {
+            try {
+              await this.ensureRavenUserCustomCustomerForUser(frappeUserName);
+            } catch (e) {
+              console.warn('[ERPNext] createUser: ensureRavenUserCustomCustomerForUser failed', e);
+            }
           }
         }
         return data;
@@ -1139,24 +1383,97 @@ class ERPNextClient {
   }
 
   /**
-   * After signup, **Raven User** is created by server hooks. Set **`custom_customer`** to the same **Customer**
-   * resolved from portal / User so billing and lookups can read it from **Raven User** alone.
+   * Set **Raven User.custom_customer** (Link → Customer). Order:
+   * 1. **`EXPO_PUBLIC_RAVEN_USER_SET_CUSTOMER_METHOD`** — your whitelisted server method (e.g. uses
+   *    `ignore_permissions` or runs as Administrator) when the integration user cannot **Write** Raven User.
+   * 2. **`frappe.client.set_value`**
+   * 3. **REST PUT** `/api/resource/Raven User/{name}`
+   *
+   * @returns true if an update succeeded
+   */
+  private async setRavenUserCustomCustomerOnServer(ravenUserDocName: string, customerName: string): Promise<boolean> {
+    const ru = String(ravenUserDocName || '').trim();
+    const cust = String(customerName || '').trim();
+    if (!ru || !cust) return false;
+
+    const customMethod = (process.env.EXPO_PUBLIC_RAVEN_USER_SET_CUSTOMER_METHOD || '').trim();
+    if (customMethod) {
+      const kwargAttempts: Record<string, string>[] = [
+        { raven_user: ru, customer: cust },
+        { raven_user_name: ru, customer: cust },
+        { name: ru, customer: cust },
+      ];
+      for (const kwargs of kwargAttempts) {
+        try {
+          await this.callFrappeMethod(customMethod, kwargs);
+          return true;
+        } catch {
+          /* try next shape or fall through */
+        }
+      }
+    }
+
+    try {
+      await this.callFrappeMethod('frappe.client.set_value', {
+        doctype: 'Raven User',
+        name: ru,
+        fieldname: 'custom_customer',
+        value: cust,
+      });
+      return true;
+    } catch {
+      /* continue */
+    }
+
+    try {
+      await this.client.put(
+        `${API_VERSION}/${encodeURIComponent('Raven User')}/${encodeURIComponent(ru)}`,
+        { custom_customer: cust }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * After signup, **Raven User** is created by server hooks. Set **`custom_customer`** to the **Customer**
+   * resolved from portal / User (or pass **`customerId`** when the app already created the Customer).
    */
   async ensureRavenUserCustomCustomerForUser(
     frappeUserName: string,
-    opts?: { maxAttempts?: number; delayMs?: number }
+    opts?: {
+      maxAttempts?: number;
+      delayMs?: number;
+      /** ERPNext **Customer** `name` when already known (e.g. right after **createCustomer**). */
+      customerId?: string | null;
+      /** Extra values to match **Raven User.user** (e.g. login email if it differs from **User.name**). */
+      ravenUserMatchKeys?: string[];
+    }
   ): Promise<void> {
     const u = String(frappeUserName || '').trim();
     if (!u) return;
     const maxAttempts = opts?.maxAttempts ?? 8;
     const delayMs = opts?.delayMs ?? 450;
 
+    const explicit = opts?.customerId != null ? String(opts.customerId).trim() : '';
+    let cachedCustomerId: string | null = explicit || null;
+
+    const matchKeys = [
+      ...new Set(
+        [u, ...(opts?.ravenUserMatchKeys ?? []).map((x) => String(x || '').trim())].filter(Boolean)
+      ),
+    ];
+
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      let customerId: string | null = null;
-      try {
-        customerId = await this.getCustomerIdForFrappeUserName(u);
-      } catch {
-        customerId = null;
+      let customerId: string | null = cachedCustomerId;
+      if (!customerId) {
+        try {
+          customerId = await this.getCustomerIdForFrappeUserName(u);
+          if (customerId) cachedCustomerId = customerId;
+        } catch {
+          customerId = null;
+        }
       }
       if (!customerId && attempt === maxAttempts - 1) {
         console.warn('[ERPNext] ensureRavenUserCustomCustomerForUser: no Customer resolved for user', u);
@@ -1168,31 +1485,39 @@ class ERPNextClient {
       }
 
       let rows: any[] = [];
-      try {
-        rows = await this.listResourceRows('Raven User', {
-          filters: [['user', '=', u]],
-          fields: ['name', 'custom_customer'],
-          limit_page_length: 20,
-        });
-      } catch {
-        rows = [];
+      for (const key of matchKeys) {
+        try {
+          const found = await this.listResourceRows('Raven User', {
+            filters: [['user', '=', key]],
+            fields: ['name', 'custom_customer'],
+            limit_page_length: 20,
+          });
+          if (Array.isArray(found) && found.length > 0) {
+            rows = found;
+            break;
+          }
+        } catch {
+          /* try next key */
+        }
       }
       if (Array.isArray(rows) && rows.length > 0) {
+        let anyNeededUpdate = false;
+        let anyFailed = false;
         for (const row of rows) {
           const ruName = String(row?.name || '').trim();
           if (!ruName) continue;
           const existing = String(row?.custom_customer || '').trim();
           if (existing === customerId) continue;
-          try {
-            await this.callFrappeMethod('frappe.client.set_value', {
-              doctype: 'Raven User',
-              name: ruName,
-              fieldname: 'custom_customer',
-              value: customerId,
-            });
-          } catch (e) {
-            console.warn(`[ERPNext] set_value Raven User.custom_customer name=${ruName}`, e);
-          }
+          anyNeededUpdate = true;
+          const ok = await this.setRavenUserCustomCustomerOnServer(ruName, customerId);
+          if (!ok) anyFailed = true;
+        }
+        if (anyNeededUpdate && anyFailed) {
+          console.warn(
+            '[ERPNext] Raven User.custom_customer was not updated. Grant the integration user **Write** on DocType **Raven User**, ' +
+              'or set **EXPO_PUBLIC_RAVEN_USER_SET_CUSTOMER_METHOD** to a whitelisted server method that sets the field (see .env.example).',
+            { user: u, customerId, ravenRows: rows.map((r: { name?: string }) => r?.name) }
+          );
         }
         return;
       }
@@ -1384,6 +1709,11 @@ class ERPNextClient {
     phone?: string;
     mobile_no?: string;
     customer_type: 'Company' | 'Individual';
+    /**
+     * Frappe **User.name** for **Customer → Portal Users → User** (defaults to **email**).
+     * Use the value returned from **createUser** so the portal row matches Raven’s **User** link.
+     */
+    portal_user_name?: string;
   }): Promise<any> {
     try {
       const payload: any = {
@@ -1394,11 +1724,10 @@ class ERPNextClient {
         mobile_no: customerData.mobile_no,
       };
 
-      // Ensure the signup email is linked in Customer > Portal Users child table
-      if (customerData.email?.trim()) {
-        payload.portal_users = [
-          { user: customerData.email.trim() },
-        ];
+      // Ensure the signup user is linked in Customer > Portal Users child table
+      const linkUser = (customerData.portal_user_name || customerData.email || '').trim();
+      if (linkUser) {
+        payload.portal_users = [{ user: linkUser }];
       }
 
       const response = await this.client.post(`${API_VERSION}/Customer`, payload);
@@ -2283,66 +2612,17 @@ class ERPNextClient {
     }
   }
 
-  async getCustomerByEmail(email: string): Promise<any | null> {
+  async getCustomerByEmail(
+    email: string,
+    options?: { includePortalUsersChildScan?: boolean }
+  ): Promise<any | null> {
     try {
       const emailNorm = (email || '').trim().toLowerCase();
       if (!emailNorm) return null;
 
-      // Note: We do not GET /api/resource/Portal User here — many API keys lack Select on that child
-      // doctype and Frappe returns 403, which our axios interceptor logs as ERROR. Resolution uses
-      // Customer + portal_users below (and email_id fallbacks).
+      const doPortalChildScan = options?.includePortalUsersChildScan !== false;
 
-      // Customer doctype has a child table 'portal_users' with field 'user' containing the email
-      // Use API key/secret client for admin-level access to query Customer doctype
-      
-      // Approach 1: Fetch customers using REST API with API key and check portal_users child table
-      // This is the most reliable approach since child table filters don't work well in REST API
-      try {
-        const response = await this.client.get(`${API_VERSION}/Customer`, {
-          params: {
-            fields: JSON.stringify(['name', 'customer_name', 'email_id']),
-            limit_page_length: 500,
-          },
-        });
-        
-        if (response.data && response.data.data) {
-          // For each customer, fetch full details with portal_users child table
-          for (const cust of response.data.data) {
-            try {
-              const fullCustomer = await this.client.get(`${API_VERSION}/Customer/${cust.name}`, {
-                params: {
-                  fields: JSON.stringify(['name', 'customer_name', 'email_id', 'portal_users']),
-                },
-              });
-              
-              if (fullCustomer.data && fullCustomer.data.data) {
-                const customerData = fullCustomer.data.data;
-                // Check if portal_users child table contains the matching email
-                if (customerData.portal_users && Array.isArray(customerData.portal_users)) {
-                  const hasMatch = customerData.portal_users.some(
-                    (pu: any) => String(pu?.user || '').trim().toLowerCase() === emailNorm
-                  );
-                  if (hasMatch) {
-                    console.log('Customer found via portal_users (API key):', customerData.name);
-                    return {
-                      name: customerData.name, // Customer ID
-                      customer_name: customerData.customer_name, // Display name
-                      email_id: customerData.email_id,
-                    };
-                  }
-                }
-              }
-            } catch (fetchError) {
-              // Skip this customer and continue
-              continue;
-            }
-          }
-        }
-      } catch (fetchError: any) {
-        console.warn('Fetch customers approach failed:', fetchError?.response?.status || fetchError.message);
-      }
-      
-      // Approach 2: Try email_id as fallback (if customer has email_id field set)
+      /** Fast paths: **email_id** exact match, then case-insensitive pass on one list (no per-doc GET). */
       for (const tryEmail of [...new Set([email.trim(), emailNorm].filter((e) => e.length > 0))]) {
         try {
           const filters = [['email_id', '=', tryEmail]];
@@ -2355,7 +2635,6 @@ class ERPNextClient {
           });
 
           if (response.data && response.data.data && response.data.data.length > 0) {
-            console.log('Customer found via email_id (API key):', response.data.data[0].name);
             return response.data.data[0];
           }
         } catch (emailError: any) {
@@ -2363,7 +2642,7 @@ class ERPNextClient {
         }
       }
 
-      // Approach 3: case-insensitive email_id scan (ERP may store different casing than login email)
+      let listedCustomers: any[] = [];
       try {
         const response = await this.client.get(`${API_VERSION}/Customer`, {
           params: {
@@ -2371,16 +2650,52 @@ class ERPNextClient {
             limit_page_length: 500,
           },
         });
-        for (const row of response.data?.data || []) {
+        listedCustomers = response.data?.data || [];
+        for (const row of listedCustomers) {
           if (String(row?.email_id || '').trim().toLowerCase() === emailNorm) {
-            console.log('Customer found via email_id case-insensitive scan:', row.name);
             return row;
           }
         }
       } catch (scanError: any) {
         console.warn('Email ID scan failed:', scanError?.response?.status || scanError.message);
       }
-      
+
+      if (!doPortalChildScan) {
+        console.warn('No customer found for email:', emailNorm);
+        return null;
+      }
+
+      /** Slow path: **portal_users** child — only when email_id did not match (e.g. login email only on portal row). */
+      for (const cust of listedCustomers) {
+        const id = String(cust?.name || '').trim();
+        if (!id) continue;
+        try {
+          const fullCustomer = await this.client.get(`${API_VERSION}/Customer/${encodeURIComponent(id)}`, {
+            params: {
+              fields: JSON.stringify(['name', 'customer_name', 'email_id', 'portal_users']),
+            },
+          });
+
+          if (fullCustomer.data && fullCustomer.data.data) {
+            const customerData = fullCustomer.data.data;
+            if (customerData.portal_users && Array.isArray(customerData.portal_users)) {
+              const hasMatch = customerData.portal_users.some(
+                (pu: any) => String(pu?.user || '').trim().toLowerCase() === emailNorm
+              );
+              if (hasMatch) {
+                return {
+                  name: customerData.name,
+                  customer_name: customerData.customer_name,
+                  email_id: customerData.email_id,
+                };
+              }
+            }
+          }
+        } catch {
+          continue;
+        }
+      }
+
       console.warn('No customer found for email:', emailNorm);
       return null;
     } catch (error: any) {
@@ -2417,6 +2732,7 @@ class ERPNextClient {
 
     /** `tabPortal User`: each row ties a **Customer** (`parent`) to a portal **User** (`user`). */
     const tryCustomerFromPortalUserTable = async (candidates: string[]): Promise<string | null> => {
+      if (this.skipPortalUserListQueries) return null;
       const uniq = [...new Set(candidates.map((c) => String(c || '').trim()).filter(Boolean))];
       for (const cand of uniq) {
         try {
@@ -2433,8 +2749,16 @@ class ERPNextClient {
             const parent = String((r as { parent?: string }).parent || '').trim();
             if (parent && pt === 'Customer') return parent;
           }
-        } catch {
-          /* list on child DocType may be forbidden for this API key / site */
+        } catch (e) {
+          const st = (e as AxiosError)?.response?.status;
+          const raw = JSON.stringify((e as AxiosError)?.response?.data ?? {}).toLowerCase();
+          if (
+            st === 403 ||
+            raw.includes('insufficient permission') ||
+            raw.includes('permissionerror')
+          ) {
+            this.skipPortalUserListQueries = true;
+          }
         }
       }
       return null;
@@ -2447,11 +2771,22 @@ class ERPNextClient {
         try {
           const rows = await listRows('Customer User', {
             filters: [['user', '=', cand]],
-            fields: ['name', 'customer'],
+            fields: ['name'],
             limit_page_length: 10,
           });
           for (const r of rows || []) {
-            const cid = String((r as { customer?: string }).customer || '').trim();
+            const rowName = String((r as { name?: string }).name || '').trim();
+            if (!rowName) continue;
+            let cid = '';
+            try {
+              const cur = await this.client.get(
+                `${API_VERSION}/Customer User/${encodeURIComponent(rowName)}`,
+                { params: { fields: JSON.stringify(['name', 'customer']) } }
+              );
+              cid = String(cur.data?.data?.customer || '').trim();
+            } catch {
+              continue;
+            }
             if (!cid) continue;
             try {
               const ok = await listRows('Customer', {
@@ -2655,7 +2990,7 @@ class ERPNextClient {
     }
 
     for (const cand of uniqPortalCands) {
-      for (const uf of ['user_id', 'user'] as const) {
+      for (const uf of ['user', 'user_id'] as const) {
         try {
           const contacts = await listRows('Contact', {
             filters: [[uf, '=', cand]],
@@ -6310,59 +6645,6 @@ export const getERPNextClient = (): ERPNextClient => {
   }
   return erpNextClient;
 };
-
-/** Site origin used for universal links (no trailing slash). Safe before login. */
-export function getErpNextPublicSiteUrl(): string {
-  const raw = (erpNextBaseUrl || ERPNEXT_BASE_URL || '').trim();
-  if (!raw) return '';
-  return normalizeFrappeApiBaseUrl(raw).replace(/\/+$/, '');
-}
-
-/**
- * Guest Frappe API: set a new password using the `key` query param from the reset email.
- * @see https://github.com/frappe/frappe/blob/develop/frappe/core/doctype/user/user.py — `update_password`
- */
-export async function frappeGuestUpdatePasswordWithKey(input: {
-  key: string;
-  newPassword: string;
-  logoutAllSessions?: number;
-}): Promise<unknown> {
-  const base = getErpNextPublicSiteUrl();
-  if (!base) {
-    throw new Error('ERPNext site URL is not configured (EXPO_PUBLIC_ERPNEXT_URL).');
-  }
-  const key = String(input.key || '').trim();
-  if (!key) {
-    throw new Error('Password reset key is missing.');
-  }
-  const newPassword = String(input.newPassword || '');
-  const client = axios.create({
-    baseURL: base,
-    timeout: FIXED_TIMEOUT,
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    withCredentials: true,
-  });
-  try {
-    const { data } = await client.post('/api/method/frappe.core.doctype.user.user.update_password', {
-      key,
-      new_password: newPassword,
-      logout_all_sessions: input.logoutAllSessions ?? 0,
-    });
-    return data;
-  } catch (error) {
-    if (axios.isAxiosError(error)) {
-      const d = error.response?.data as Record<string, unknown> | undefined;
-      const exc = d && typeof d.exception === 'string' ? d.exception : '';
-      const msg = d && typeof d.message === 'string' ? d.message : '';
-      const combined = [msg, exc].filter(Boolean).join(' — ') || error.message;
-      throw new Error(combined || 'Password update failed.');
-    }
-    throw error;
-  }
-}
 
 /** `Authorization` header for Basic auth (private file images, etc.). */
 export function getERPNextAuthorizationHeader(): string | undefined {
