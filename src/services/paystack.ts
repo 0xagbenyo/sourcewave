@@ -9,8 +9,15 @@ import axios, { AxiosError } from 'axios';
 
 // Paystack Configuration
 const PAYSTACK_BASE_URL = 'https://api.paystack.co';
-const PAYSTACK_SECRET_KEY = 'PAYSTACK_SECRET_KEY_REMOVED';
-const PAYSTACK_PUBLIC_KEY = 'PAYSTACK_PUBLIC_KEY_REMOVED';
+const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || process.env.EXPO_PUBLIC_PAYSTACK_SECRET_KEY || '';
+const PAYSTACK_PUBLIC_KEY = process.env.PAYSTACK_PUBLIC_KEY || process.env.EXPO_PUBLIC_PAYSTACK_PUBLIC_KEY || '';
+
+if (!PAYSTACK_SECRET_KEY) {
+  console.warn('Warning: PAYSTACK_SECRET_KEY is not set. Payment processing will not work.');
+}
+if (!PAYSTACK_PUBLIC_KEY) {
+  console.warn('Warning: PAYSTACK_PUBLIC_KEY is not set.');
+}
 
 /** Sent on every charge so Paystack transactions can be filtered by app. */
 export const PAYSTACK_PAYMENT_SOURCE = 'sourcewave';
