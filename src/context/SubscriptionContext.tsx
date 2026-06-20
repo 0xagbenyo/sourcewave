@@ -86,8 +86,17 @@ export const SubscriptionProvider: React.FC<{ children: ReactNode }> = ({ childr
   const [subscription, setSubscription] = useState<ActiveSubscription | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Suppliers never pay for the app — the premium gate only applies to buyers.
+  const isSupplierUser = user?.appMode === 'supplier' || !!user?.supplierId?.trim();
+
   const refresh = useCallback(async (): Promise<SubscriptionRefreshResult> => {
     setIsLoading(true);
+
+    if (isSupplierUser) {
+      setSubscription(null);
+      setIsLoading(false);
+      return { isActive: true, subscription: null };
+    }
 
     if (!user?.email) {
       setSubscription(null);
@@ -116,7 +125,7 @@ export const SubscriptionProvider: React.FC<{ children: ReactNode }> = ({ childr
     setIsLoading(false);
     const active = computeIsActive(merged);
     return { isActive: active, subscription: merged };
-  }, [user?.email]);
+  }, [user?.email, isSupplierUser]);
 
   useEffect(() => {
     refresh();
@@ -127,7 +136,10 @@ export const SubscriptionProvider: React.FC<{ children: ReactNode }> = ({ childr
     return parseExpires(subscription.expiresAt);
   }, [subscription?.expiresAt]);
 
-  const isActive = useMemo(() => computeIsActive(subscription), [subscription]);
+  const isActive = useMemo(
+    () => isSupplierUser || computeIsActive(subscription),
+    [isSupplierUser, subscription]
+  );
 
   const value = useMemo(
     () => ({

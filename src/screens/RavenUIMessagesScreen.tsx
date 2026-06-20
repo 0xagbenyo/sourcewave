@@ -48,6 +48,7 @@ import {
   fetchChannelLatestAndMostRecentTextMessage,
   ravenMessageRowSortTimeMs,
   ravenChannelLastActivitySortTimeMs,
+  ravenChannelLastMessagePreviewRow,
   fetchRavenWorkspaces,
   sendRavenChannelMessage,
   uploadRavenFileWithMessage,
@@ -107,7 +108,7 @@ import { RavenQuotationDraftCard } from '../components/RavenQuotationDraftCard';
 import { RavenLinkedSupplierQuotationMessage } from '../components/RavenLinkedSupplierQuotationMessage';
 import { RavenLinkedGenericDocMessage } from '../components/RavenLinkedGenericDocMessage';
 import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
-import { channelPrefix, friendlySenderLabel, replySnippet } from '../utils/ravenSearchPreview';
+import { channelPrefix, resolveRavenUserDisplayName, replySnippet } from '../utils/ravenSearchPreview';
 import { ravenMessageShortPreview } from '../utils/ravenMessageShortPreview';
 import { resolveRavenErpAttachImageUri } from '../utils/ravenFileUrl';
 import { tryParseQuotationDraftFromMessage } from '../utils/chatQuotationDraftMessage';
@@ -115,6 +116,7 @@ import { mergeRavenMessagesWithPendingDocInsert } from '../utils/ravenDocLinkMes
 import { getERPNextClient } from '../services/erpnext';
 import { SuppliersPremiumGateContent } from '../components/SuppliersPremiumGateContent';
 import { buyerRavenRouteNeedsSubscription } from '../utils/buyerSuppliersPremium';
+import { userFacingError } from '../utils/userFacingError';
 
 const POLL_MS = 3000;
 
@@ -279,7 +281,9 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const [activeUserIds, setActiveUserIds] = useState<string[]>([]);
   const [invisibleUserIds, setInvisibleUserIds] = useState<string[]>([]);
   /** Frappe `User.user_image` by owner id (message bubbles). */
-  const [ownerProfileImageByUserId, setOwnerProfileImageByUserId] = useState<Record<string, string>>({});
+  const [ravenUserProfilesById, setRavenUserProfilesById] = useState<
+    Record<string, { full_name?: string; user_image?: string | null }>
+  >({});
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const channelIdRef = useRef<string | null>(null);
   const messagesListRef = useRef<FlatList<RavenMessageRow> | null>(null);
@@ -529,7 +533,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
           setMessages([]);
           setHasMoreOlderMessages(false);
         }
-        setError(e?.message || 'Could not load messages');
+        setError(userFacingError(e, 'Could not load messages'));
       }
     } finally {
       if (!silent) setLoadingMsgs(false);
@@ -592,7 +596,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
         const ch = channel?.name;
         if (ch) await loadMessages(ch, { silent: true });
       } catch (e: unknown) {
-        Alert.alert('Quotation', e instanceof Error ? e.message : 'Could not submit.');
+        Alert.alert('Quotation', userFacingError(e, 'Could not submit.'));
       } finally {
         setQuotationActionBusy(null);
       }
@@ -611,7 +615,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
         const ch = channel?.name;
         if (ch) await loadMessages(ch, { silent: true });
       } catch (e: unknown) {
-        Alert.alert('Quotation', e instanceof Error ? e.message : 'Could not reject.');
+        Alert.alert('Quotation', userFacingError(e, 'Could not reject.'));
       } finally {
         setQuotationActionBusy(null);
       }
@@ -639,11 +643,24 @@ export const RavenUIMessagesScreen: React.FC = () => {
     messagesRef.current = messages;
   }, [messages]);
 
+  const resolveDisplayName = useCallback(
+    (userId?: string | null, memberFullName?: string | null) => {
+      const fromMember = memberFullName != null ? String(memberFullName).trim() : '';
+      if (fromMember) return fromMember;
+      return resolveRavenUserDisplayName(userId, ravenUserProfilesById);
+    },
+    [ravenUserProfilesById]
+  );
+
   useEffect(() => {
     const owners = new Set<string>();
     for (const m of messages) {
       const o = (m.owner || '').trim();
       if (o) owners.add(o);
+    }
+    for (const mem of members) {
+      const u = (mem.user || '').trim();
+      if (u) owners.add(u);
     }
     if (owners.size === 0) return;
     let cancelled = false;
@@ -651,14 +668,22 @@ export const RavenUIMessagesScreen: React.FC = () => {
       try {
         const profiles = await fetchRavenUserProfilesByIds([...owners]);
         if (cancelled) return;
-        setOwnerProfileImageByUserId((prev) => {
+        setRavenUserProfilesById((prev) => {
           const next = { ...prev };
           for (const [id, p] of profiles) {
-            const img = p.user_image != null ? String(p.user_image).trim() : '';
-            if (!img) continue;
-            next[id] = img;
             const lo = id.toLowerCase();
-            if (lo !== id) next[lo] = img;
+            const prevP = next[id] ?? next[lo] ?? {};
+            const fn =
+              p.full_name != null && String(p.full_name).trim()
+                ? String(p.full_name).trim()
+                : prevP.full_name;
+            const img =
+              p.user_image != null && String(p.user_image).trim()
+                ? String(p.user_image).trim()
+                : prevP.user_image ?? null;
+            const entry = { full_name: fn, user_image: img };
+            next[id] = entry;
+            if (lo !== id) next[lo] = entry;
           }
           return next;
         });
@@ -669,7 +694,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [messages]);
+  }, [messages, members]);
 
   const presenceActiveSet = useMemo(
     () => new Set(activeUserIds.map((x) => x.trim().toLowerCase()).filter(Boolean)),
@@ -766,10 +791,10 @@ export const RavenUIMessagesScreen: React.FC = () => {
         }
         setWorkspace(initialWs);
         if (list.length === 0) {
-          setError('No supplier groups found. Ask your admin to add you to a supplier group in Raven.');
+          setError('No supplier groups found. Ask your administrator to add you to a supplier group.');
         }
       } catch (e: any) {
-        if (!cancelled) setError(e?.message || 'Failed to load supplier groups');
+        if (!cancelled) setError(userFacingError(e, 'Failed to load supplier groups'));
       } finally {
         if (!cancelled) setLoadingBoot(false);
       }
@@ -845,7 +870,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
         if (!cancelled && selectedWorkspaceRef.current === wsTarget) {
           setChannels([]);
           setMembers([]);
-          setError(e?.message || 'Failed to load supplier group');
+          setError(userFacingError(e, 'Failed to load supplier group'));
         }
       } finally {
         if (!cancelled && selectedWorkspaceRef.current === wsTarget) {
@@ -910,7 +935,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const filteredWorkspaceAdminsSorted = useMemo(() => {
     if (!listSearchQ) return workspaceAdminsSorted;
     return workspaceAdminsSorted.filter((m) => {
-      const label = friendlySenderLabel(m.user).toLowerCase();
+      const label = resolveDisplayName(m.user, m.full_name).toLowerCase();
       const uid = (m.user || '').trim().toLowerCase();
       const linked = (ravenWorkspaceMemberLinkedSupplierId(m) || '').trim().toLowerCase();
       return (
@@ -919,7 +944,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
         (linked.length > 0 && linked.includes(listSearchQ))
       );
     });
-  }, [workspaceAdminsSorted, listSearchQ]);
+  }, [workspaceAdminsSorted, listSearchQ, resolveDisplayName]);
 
   useEffect(() => {
     setHubInfoModal(null);
@@ -1036,6 +1061,29 @@ export const RavenUIMessagesScreen: React.FC = () => {
           const lbl = wsRow ? workspaceListPrimaryLabel(wsRow) : wsKey || 'Supplier group';
           const wsLogo =
             wsRow?.logo != null && String(wsRow.logo).trim() ? String(wsRow.logo).trim() : null;
+
+          /**
+           * Fast path: preview straight from `get_channels`' last-message snapshot — no per-channel fetch.
+           * Doc-link-only messages have empty snapshot content; those fall through to the detailed fetch.
+           */
+          const snapshotRow = ravenChannelLastMessagePreviewRow(ch);
+          if (snapshotRow && (snapshotRow.text?.trim() || snapshotRow.file?.trim())) {
+            const previewMeta = inboxPreviewFromLastMessage(snapshotRow);
+            const channelActivityMs = ravenChannelLastActivitySortTimeMs(ch);
+            const recencyMs = Math.max(previewMeta.timeMs, channelActivityMs);
+            return {
+              key: `${wsKey || 'ws'}:${id}`,
+              workspaceId: wsKey || String(wsRow?.name || '').trim() || id,
+              workspaceLabel: lbl,
+              workspaceLogo: wsLogo,
+              channel: ch,
+              preview: previewMeta.preview,
+              timeLabel: previewMeta.timeLabel,
+              timeMs: recencyMs || previewMeta.timeMs,
+              hasMessages: true,
+            };
+          }
+
           try {
             const { latest, latestText } = await fetchChannelLatestAndMostRecentTextMessage(id);
             /** Include threads whose newest activity is only a document link or attachment (no plain `text`). */
@@ -1406,7 +1454,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
       }));
       setPendingAttachments((prev) => [...prev, ...picked]);
     } catch (e: any) {
-      Alert.alert('File', e?.message || 'Could not pick a file.');
+      Alert.alert('File', userFacingError(e, 'Could not pick a file.'));
     }
   }, [channel?.name]);
 
@@ -1501,7 +1549,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
       setHasMoreOlderMessages(rows.length >= RAVEN_CHAT_FIRST_PAGE_SIZE || rows.length > apiLen);
       setError(null);
     } catch (e: any) {
-      Alert.alert('Message not sent', e?.message || 'Send failed');
+      Alert.alert('Message not sent', userFacingError(e, 'Send failed'));
     } finally {
       setSending(false);
     }
@@ -1577,7 +1625,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
       const peerLine = getRavenDmPeerUserId(ch, user?.email);
       const metaLine = isDmChannel(ch)
         ? peerLine
-          ? friendlySenderLabel(peerLine)
+          ? resolveRavenUserDisplayName(peerLine, ravenUserProfilesById)
           : 'Direct message'
         : ch.type || '';
       const titleText = `${titlePrefix}${getRavenChannelDisplayLabel(ch, user?.email)}`;
@@ -1631,7 +1679,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
         </TouchableOpacity>
       );
     },
-    [openGlobalInboxChat, user?.email, unreadByChannelId, viewerFrappeName, presenceActiveSet, presenceInvisibleSet]
+    [openGlobalInboxChat, user?.email, unreadByChannelId, viewerFrappeName, presenceActiveSet, presenceInvisibleSet, ravenUserProfilesById]
   );
 
   const openDmWith = async (otherUserId: string) => {
@@ -1656,7 +1704,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
       setDrawerOpen(false);
       await loadMessages(chId);
     } catch (e: any) {
-      Alert.alert('Direct message', e?.message || 'Could not open DM. Both people need chat accounts on the site.');
+      Alert.alert('Direct message', userFacingError(e, 'Could not open this conversation. Both people need an active chat account.'));
     } finally {
       setOpeningDmFor(null);
     }
@@ -1699,7 +1747,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
             Alert.alert('Chat', 'Could not open that conversation.');
           }
         } catch (e: any) {
-          Alert.alert('Chat', e?.message || 'Could not load conversation.');
+          Alert.alert('Chat', userFacingError(e, 'Could not load conversation.'));
         }
       } else {
         pendingOpenFromGlobalRef.current = {
@@ -1754,7 +1802,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
       if (!linked) {
         Alert.alert(
           'No supplier linked',
-          'Set the Supplier field (`custom_supplier`) on this Raven member record in Frappe to open the full supplier profile.'
+          'This member is not linked to a supplier profile yet. Ask your administrator to complete the setup.'
         );
         return;
       }
@@ -1841,7 +1889,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
           <View style={s.refListMain}>
             <View style={s.refListTopRow}>
               <Text style={s.refListTitle} numberOfLines={1}>
-                {friendlySenderLabel(item.user)}
+                {resolveDisplayName(item.user, item.full_name)}
               </Text>
             </View>
             <View style={s.refListSubRow}>
@@ -1861,7 +1909,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
         </TouchableOpacity>
       );
     },
-    [openAdminSupplierSheet, viewerFrappeName, presenceActiveSet, presenceInvisibleSet]
+    [openAdminSupplierSheet, viewerFrappeName, presenceActiveSet, presenceInvisibleSet, resolveDisplayName]
   );
 
   const renderMessage = useCallback(
@@ -1971,6 +2019,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
                   messagesById={messagesById}
                   onScrollToQuoted={scrollToMessageById}
                   variant="raven"
+                  userDisplayProfiles={ravenUserProfilesById}
                 />
               ) : null}
               {!showReplyQuote && !!item.is_reply ? <Text style={[s.replyBadge, s.replyBadgeMine]}>Reply</Text> : null}
@@ -1988,9 +2037,9 @@ export const RavenUIMessagesScreen: React.FC = () => {
       }
 
       const ownerKey = item.owner || '?';
-      const ownerRaw =
-        ownerProfileImageByUserId[ownerKey] ?? ownerProfileImageByUserId[ownerKey.toLowerCase()] ?? '';
-      const ownerAvatarUri = resolveRavenErpAttachImageUri(ownerRaw);
+      const ownerProfile =
+        ravenUserProfilesById[ownerKey] ?? ravenUserProfilesById[ownerKey.toLowerCase()];
+      const ownerAvatarUri = resolveRavenErpAttachImageUri(ownerProfile?.user_image ?? '');
       return (
         <Pressable
           style={s.msgRowTheirs}
@@ -2014,7 +2063,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
           <View style={s.msgColTheirs}>
             <View style={s.msgNameRow}>
               <Text style={s.msgAuthorName} numberOfLines={1}>
-                {friendlySenderLabel(item.owner)}
+                {resolveDisplayName(item.owner)}
               </Text>
               <Text style={s.msgHeaderTime}> {tLine}</Text>
             </View>
@@ -2025,6 +2074,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
                 messagesById={messagesById}
                 onScrollToQuoted={scrollToMessageById}
                 variant="raven"
+                userDisplayProfiles={ravenUserProfilesById}
               />
             ) : null}
             {!showReplyQuote && !!item.is_reply ? <Text style={s.replyBadge}>Reply</Text> : null}
@@ -2051,7 +2101,8 @@ export const RavenUIMessagesScreen: React.FC = () => {
       presenceActiveSet,
       presenceInvisibleSet,
       scrollToMessageById,
-      ownerProfileImageByUserId,
+      ravenUserProfilesById,
+      resolveDisplayName,
       quotationActionByName,
       quotationActionBusy,
       handleAcceptQuotationDraft,
@@ -2322,7 +2373,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
                         <Text style={s.inboxEmptyText}>No text chats yet</Text>
                         <Text style={s.inboxEmptyHint}>
                           {route.name === 'SupplierMessages'
-                            ? 'When buyers message you or add you to a channel in Raven, conversations appear here.'
+                            ? 'When buyers message you or add you to a channel, conversations appear here.'
                             : 'Please go to the supplier list and select a supplier to begin a conversation.'}
                         </Text>
                       </>
@@ -2406,8 +2457,8 @@ export const RavenUIMessagesScreen: React.FC = () => {
                         </View>
                         <Text style={s.inboxEmptyText}>No suppliers yet</Text>
                         <Text style={s.inboxEmptyHint}>
-                          In Raven / Frappe, add supplier representatives to this supplier group so they appear here.
-                          Use the menu (⋯) in a chat for channels and direct messages.
+                          Ask your administrator to add supplier representatives to this group. Use the menu (⋯) in a
+                          chat for channels and direct messages.
                         </Text>
                       </>
                     ) : (
@@ -2612,6 +2663,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
                     channelId={channel.name}
                     variant="raven"
                     onGoToMessage={goToMessageFromSharedMenu}
+                    userDisplayProfiles={ravenUserProfilesById}
                   />
                 ) : null}
 
@@ -2662,7 +2714,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
                             </View>
                             <View style={s.flex}>
                               <Text style={s.memberUser} numberOfLines={1}>
-                                {friendlySenderLabel(m.user)}
+                                {resolveDisplayName(m.user, m.full_name)}
                               </Text>
                               {isAdmin ? <Text style={s.memberAdmin}>Supplier</Text> : null}
                             </View>
@@ -2747,6 +2799,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
         title="Search"
         inChannelId={channel?.name}
         inChannelLabel={channel ? getRavenChannelDisplayLabel(channel, user?.email) : undefined}
+        userDisplayProfiles={ravenUserProfilesById}
         onChannelPicked={(ws, chId) => {
           pendingOpenFromGlobalRef.current = { ws, channelId: chId };
           setDrawerOpen(false);

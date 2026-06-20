@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,13 +11,15 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { getERPNextClient } from '../services/erpnext';
 import { OTP_PURPOSE_SIGN_UP } from '../constants/otpPurposes';
+import { userFacingError } from '../utils/userFacingError';
+import { hasAcceptedLegalTerms } from '../legal/legalAcceptance';
 
 export const RegisterScreen: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -35,6 +37,21 @@ export const RegisterScreen: React.FC = () => {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const navigation = useNavigation();
   const { t } = useTranslation();
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      (async () => {
+        const accepted = await hasAcceptedLegalTerms();
+        if (active && !accepted) {
+          navigation.navigate('RegisterConsent' as never);
+        }
+      })();
+      return () => {
+        active = false;
+      };
+    }, [navigation])
+  );
 
   const validateEmail = (value: string) => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -101,7 +118,7 @@ export const RegisterScreen: React.FC = () => {
       await client.sendOtp({ email: email.trim(), purpose: OTP_PURPOSE_SIGN_UP });
       setOtpStep('verify');
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : t('register.alerts.otpSendFailed');
+      const msg = userFacingError(error, t('register.alerts.otpSendFailed'));
       Alert.alert(t('register.alerts.registrationError'), msg);
     } finally {
       setIsLoading(false);
@@ -171,8 +188,9 @@ export const RegisterScreen: React.FC = () => {
 
       navigation.navigate('Login' as never);
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : t('register.alerts.sendFailed');
-      if (/otp|code|expired|invalid/i.test(msg)) {
+      const raw = error instanceof Error ? error.message : '';
+      const msg = userFacingError(raw, t('register.alerts.sendFailed'));
+      if (/otp|code|expired|invalid/i.test(raw) || /otp|code|expired|invalid/i.test(msg)) {
         Alert.alert(t('register.alerts.registrationError'), t('register.alerts.otpInvalid'));
       } else {
         Alert.alert(t('register.alerts.registrationError'), msg);
@@ -410,8 +428,14 @@ export const RegisterScreen: React.FC = () => {
           </View>
 
           <Text style={styles.legalText}>
-            {t('register.legalPrefix')} <Text style={styles.linkText}>{t('register.privacy')}</Text>{' '}
-            {t('register.and')} <Text style={styles.linkText}>{t('register.terms')}</Text>
+            {t('register.legalPrefix')}{' '}
+            <Text style={styles.linkText} onPress={() => navigation.navigate('PrivacyPolicy' as never)}>
+              {t('register.privacy')}
+            </Text>{' '}
+            {t('register.and')}{' '}
+            <Text style={styles.linkText} onPress={() => navigation.navigate('TermsAndConditions' as never)}>
+              {t('register.terms')}
+            </Text>
             {t('register.legalSuffix')}
           </Text>
         </ScrollView>

@@ -1,5 +1,27 @@
 /** Small helpers shared by Raven search UIs (message previews, channel labels). */
 
+export type RavenUserDisplayProfile = {
+  full_name?: string;
+};
+
+export type RavenUserDisplayProfiles =
+  | Readonly<Record<string, RavenUserDisplayProfile>>
+  | ReadonlyMap<string, RavenUserDisplayProfile>;
+
+function lookupRavenUserProfile(
+  userId: string,
+  profiles?: RavenUserDisplayProfiles
+): RavenUserDisplayProfile | undefined {
+  if (!profiles) return undefined;
+  const t = userId.trim();
+  if (!t) return undefined;
+  if (profiles instanceof Map) {
+    return profiles.get(t) ?? profiles.get(t.toLowerCase());
+  }
+  return profiles[t] ?? profiles[t.toLowerCase()];
+}
+
+/** Fallback label from Frappe `User.name` (email local-part or username). */
 export function friendlySenderLabel(owner?: string): string {
   const t = (owner || '').trim();
   if (!t) return 'Unknown';
@@ -8,6 +30,18 @@ export function friendlySenderLabel(owner?: string): string {
     if (local) return local.replace(/[._]/g, ' ').replace(/\b\w/g, (x) => x.toUpperCase());
   }
   return t;
+}
+
+/** Prefer **Raven User.full_name** (via profile map), then `friendlySenderLabel`. */
+export function resolveRavenUserDisplayName(
+  userId?: string | null,
+  profiles?: RavenUserDisplayProfiles
+): string {
+  const t = (userId || '').trim();
+  if (!t) return 'Unknown';
+  const fn = lookupRavenUserProfile(t, profiles)?.full_name;
+  if (fn != null && String(fn).trim()) return String(fn).trim();
+  return friendlySenderLabel(t);
 }
 
 export function replySnippet(text?: string): string {

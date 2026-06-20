@@ -65,6 +65,8 @@ export type RavenChannelRow = {
   last_message_timestamp?: string;
   /** Channel document `modified` — fallback sort when `last_message_timestamp` is empty. */
   modified?: string;
+  /** From Raven `get_channels` — JSON (string or object) snapshot of the channel's newest message. */
+  last_message_details?: unknown;
   /** From Raven `get_channels` — DM peer Frappe User.name (usually email). */
   peer_user_id?: string;
   /** From Raven `get_channels` — User.full_name of peer for DMs. */
@@ -172,6 +174,8 @@ export type RavenWorkspaceMemberRow = {
   supplier_image?: string | null;
   /** Frappe `User.user_image` for this member (`user` → User.name); batched in `fetchWorkspaceMembers`. */
   user_profile_image?: string | null;
+  /** **Raven User.full_name** (filled in `fetchWorkspaceMembers` profile merge). */
+  full_name?: string | null;
 };
 
 /** Non-string / empty values are ignored (avoids treating Check `0` as a Supplier id). */
@@ -740,7 +744,47 @@ export async function fetchRavenUserProfilesByIds(
   const map = new Map<string, { full_name?: string; user_image?: string | null }>();
   const unique = [...new Set(userIds.map((x) => String(x).trim()).filter(Boolean))];
   if (!unique.length) return map;
+
+  const putEntry = (
+    userKey: string,
+    patch: { full_name?: string; user_image?: string | null }
+  ) => {
+    const k = userKey.trim();
+    if (!k) return;
+    const prev = map.get(k) ?? map.get(k.toLowerCase()) ?? {};
+    const fullName =
+      patch.full_name != null && String(patch.full_name).trim()
+        ? String(patch.full_name).trim()
+        : prev.full_name;
+    const userImage =
+      patch.user_image != null && String(patch.user_image).trim()
+        ? String(patch.user_image).trim()
+        : prev.user_image ?? null;
+    const entry = { full_name: fullName, user_image: userImage };
+    map.set(k, entry);
+    const kl = k.toLowerCase();
+    if (kl !== k) map.set(kl, entry);
+  };
+
   const chunkSize = 40;
+  for (let i = 0; i < unique.length; i += chunkSize) {
+    const chunk = unique.slice(i, i + chunkSize);
+    try {
+      const ravenRows = await ravenListResourceRows('Raven User', {
+        filters: [['user', 'in', chunk]],
+        fields: ['user', 'full_name', 'user_image'],
+        limit_page_length: chunk.length,
+      });
+      for (const r of ravenRows as { user?: string; full_name?: string; user_image?: string | null }[]) {
+        const u = r?.user != null ? String(r.user).trim() : '';
+        if (!u) continue;
+        putEntry(u, { full_name: r.full_name, user_image: r.user_image });
+      }
+    } catch (e) {
+      console.warn(LOG, 'fetchRavenUserProfilesByIds Raven User', e);
+    }
+  }
+
   for (let i = 0; i < unique.length; i += chunkSize) {
     const chunk = unique.slice(i, i + chunkSize);
     try {
@@ -752,20 +796,21 @@ export async function fetchRavenUserProfilesByIds(
       for (const r of rows as { name?: string; full_name?: string; user_image?: string | null }[]) {
         const n = r?.name != null ? String(r.name).trim() : '';
         if (!n) continue;
-        const entry = { full_name: r.full_name, user_image: r.user_image };
-        map.set(n, entry);
-        const nl = n.toLowerCase();
-        if (nl !== n) map.set(nl, entry);
+        const prev = map.get(n) ?? map.get(n.toLowerCase());
+        putEntry(n, {
+          full_name: prev?.full_name?.trim() ? prev.full_name : r.full_name,
+          user_image: prev?.user_image?.trim() ? prev.user_image : r.user_image,
+        });
       }
     } catch (e) {
-      console.warn(LOG, 'fetchRavenUserProfilesByIds', e);
+      console.warn(LOG, 'fetchRavenUserProfilesByIds User', e);
     }
   }
   return map;
 }
 
 /**
- * Attach `peer_user_image` (and `full_name` when missing) for DM channels by loading Frappe `User` rows.
+ * Attach `peer_user_image` (and `full_name` when missing) for DM channels by loading **Raven User** / `User` rows.
  */
 export async function enrichRavenChannelsWithPeerProfiles(
   channels: RavenChannelRow[],
@@ -809,8 +854,13 @@ async function mergeFrappeUserProfileImagesIntoMembers(
     const p = map.get(u) ?? map.get(u.toLowerCase());
     if (!p) return m;
     const img = p.user_image != null ? String(p.user_image).trim() : '';
-    if (!img) return m;
-    return { ...m, user_profile_image: img };
+    const fn = p.full_name != null ? String(p.full_name).trim() : '';
+    if (!img && !fn) return m;
+    return {
+      ...m,
+      user_profile_image: img || m.user_profile_image,
+      full_name: fn || m.full_name,
+    };
   });
 }
 
@@ -1306,6 +1356,51 @@ async function scanInboxFromResource(
     }
   }
   return { latest: undefined, latestText: null };
+}
+
+/**
+ * Build an inbox-preview message row from the channel's own `last_message_details` snapshot
+ * (returned by Raven `get_channels`) — zero extra HTTP requests. Returns null when the
+ * snapshot is missing/empty so callers can fall back to a real message fetch.
+ */
+export function ravenChannelLastMessagePreviewRow(ch: RavenChannelRow): RavenMessageRow | null {
+  const raw = ch.last_message_details;
+  if (raw == null) return null;
+
+  let d: Record<string, unknown> | null = null;
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed != null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        d = parsed as Record<string, unknown>;
+      }
+    } catch {
+      d = null;
+    }
+  } else if (typeof raw === 'object' && !Array.isArray(raw)) {
+    d = raw as Record<string, unknown>;
+  }
+  if (!d) return null;
+
+  const content = d.content != null ? String(d.content) : '';
+  const messageType = d.message_type != null ? String(d.message_type).trim() : '';
+  const name = d.message_id != null ? String(d.message_id).trim() : '';
+  const owner = d.owner != null ? String(d.owner).trim() : '';
+  const isFileLike = /^(image|file)$/i.test(messageType);
+  const text = !isFileLike && content.trim() ? plainTextFromMaybeHtml(content) : '';
+  const file = isFileLike && content.trim() ? content.trim() : undefined;
+
+  if (!name && !text && !file) return null;
+
+  return {
+    name,
+    channel_id: ch.name,
+    text: text || undefined,
+    owner: owner || undefined,
+    creation: ch.last_message_timestamp || ch.modified,
+    message_type: messageType || undefined,
+    file,
+  };
 }
 
 /**

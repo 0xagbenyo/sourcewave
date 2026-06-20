@@ -106,7 +106,6 @@ function ItemReceiptRow({ item, t }: { item: OrderItem; t: (k: string, o?: objec
           : null;
   const sku =
     item.product?.name && item.productId !== item.product?.name ? String(item.productId) : null;
-  const metaExtra = [sku, variant].filter(Boolean).join(' · ');
   const lineTotal = item.price * item.quantity;
   const qtyPrice = t('orderDetails.lineQtyPrice', {
     qty: item.quantity,
@@ -115,16 +114,28 @@ function ItemReceiptRow({ item, t }: { item: OrderItem; t: (k: string, o?: objec
 
   return (
     <View style={styles.itemRow}>
-      <View style={styles.itemRowLeft}>
-        <Text style={styles.itemName} numberOfLines={3}>
-          {title}
+      <Text style={styles.itemName} numberOfLines={3}>
+        {title}
+      </Text>
+      {sku ? (
+        <Text style={styles.itemMeta} numberOfLines={1}>
+          {sku}
         </Text>
-        <Text style={styles.itemSub} numberOfLines={2}>
+      ) : null}
+      {variant ? (
+        <Text style={styles.itemMeta} numberOfLines={1}>
+          {variant}
+        </Text>
+      ) : null}
+      <View style={styles.itemDetailRow}>
+        <Text style={styles.itemQtyPrice} numberOfLines={2}>
           {qtyPrice}
-          {metaExtra ? ` · ${metaExtra}` : ''}
         </Text>
+        <View style={styles.itemLineTotalBlock}>
+          <Text style={styles.itemLineTotalLabel}>{t('orderDetails.lineTotal')}</Text>
+          <Text style={styles.itemLineTotalValue}>{formatGhanaCedis(lineTotal)}</Text>
+        </View>
       </View>
-      <Text style={styles.itemAmount}>{formatGhanaCedis(lineTotal)}</Text>
     </View>
   );
 }
@@ -400,31 +411,53 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.SM,
   },
   itemRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
     paddingVertical: Spacing.SM,
-    gap: Spacing.MD,
-  },
-  itemRowLeft: {
-    flex: 1,
-    minWidth: 0,
+    gap: 4,
   },
   itemName: {
-    fontSize: 16,
-    fontWeight: '500',
+    fontSize: 17,
+    fontWeight: '700',
     color: Colors.BLACK,
-    lineHeight: 22,
+    lineHeight: 24,
   },
-  itemSub: {
-    marginTop: 4,
-    fontSize: 13,
+  itemMeta: {
+    fontSize: 14,
     color: Colors.TEXT_SECONDARY,
-    lineHeight: 18,
+    lineHeight: 20,
   },
-  itemAmount: {
-    fontSize: 16,
+  itemDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    gap: Spacing.MD,
+    marginTop: 6,
+    paddingTop: 8,
+    borderTopWidth: hairline,
+    borderTopColor: Colors.MEDIUM_GRAY,
+  },
+  itemQtyPrice: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 15,
+    fontWeight: '500',
+    color: Colors.DARK_GRAY,
+    lineHeight: 21,
+  },
+  itemLineTotalBlock: {
+    alignItems: 'flex-end',
+    flexShrink: 0,
+  },
+  itemLineTotalLabel: {
+    fontSize: 12,
     fontWeight: '600',
+    color: Colors.TEXT_SECONDARY,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 2,
+  },
+  itemLineTotalValue: {
+    fontSize: 17,
+    fontWeight: '700',
     color: Colors.BLACK,
     fontVariant: ['tabular-nums'],
   },

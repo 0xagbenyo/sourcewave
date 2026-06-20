@@ -35,6 +35,7 @@ import { ErpAuthenticatedPdfWebView } from '../components/ErpAuthenticatedPdfWeb
 import { buildAuthenticatedErpImageSource, encodeErpFileUrl } from '../utils/erpImageUrl';
 import { initialsFromUserId } from '../utils/ravenChatUi';
 import { emitRavenOpenChatFromProfile } from '../utils/ravenOpenChatFromProfileBridge';
+import { userFacingError } from '../utils/userFacingError';
 import { SuppliersPremiumGateContent } from '../components/SuppliersPremiumGateContent';
 import { useTranslation } from 'react-i18next';
 
@@ -145,10 +146,9 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
     try {
       const p = await fetchErpSupplierProfile(key);
       setProfile(p);
-      setError(p ? null : `Could not load Supplier "${key}" from ERPNext. Check the document name and API access.`);
+      setError(p ? null : `Could not load this supplier profile. Try again or contact support.`);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Failed to load supplier.';
-      setError(msg);
+      setError(userFacingError(e, 'Failed to load supplier.'));
       setProfile(null);
     } finally {
       setLoading(false);
@@ -523,8 +523,8 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
                     <Text style={styles.cardBadge}>{fileAttachments.length}</Text>
                   </View>
                   <Text style={styles.cardHint}>
-                    Files open inside the app with your ERPNext session when needed. Use “Browser” in the viewer toolbar
-                    if you prefer Safari/Chrome or another app (Office may still need that).
+                    Files open inside the app when you are signed in. Use “Browser” in the viewer toolbar if you prefer
+                    Safari/Chrome or another app (Office may still need that).
                   </Text>
                   {fileAttachments.map((att) => {
                     const { icon, color } = fileKindLabel(att.file_name);

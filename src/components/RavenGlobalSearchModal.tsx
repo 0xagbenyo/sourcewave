@@ -19,6 +19,7 @@ import { Spacing } from '../constants/spacing';
 import { useUserSession } from '../context/UserContext';
 import {
   fetchRavenChannelWorkspaceId,
+  fetchRavenUserProfilesByIds,
   fetchRavenWorkspaces,
   getRavenSearchResults,
   type RavenSearchFilterType,
@@ -27,7 +28,7 @@ import {
 } from '../services/ravenNativeApi';
 import { formatMessageHeaderTime } from '../utils/ravenChatUi';
 import { plainTextFromMaybeHtml } from '../utils/chatPlainText';
-import { channelPrefix, friendlySenderLabel, replySnippet } from '../utils/ravenSearchPreview';
+import { channelPrefix, replySnippet, resolveRavenUserDisplayName, type RavenUserDisplayProfiles } from '../utils/ravenSearchPreview';
 import { setRavenLastChat } from '../utils/ravenLastChatStorage';
 
 const RAVEN_SEARCH_TABS: { key: RavenSearchFilterType; label: string }[] = [
@@ -46,6 +47,7 @@ export type RavenGlobalSearchModalProps = {
   onChannelPicked: (workspaceId: string, channelId: string) => void;
   /** Modal title (e.g. "Search" in chat, "Team search" from main header). */
   title?: string;
+  userDisplayProfiles?: RavenUserDisplayProfiles;
 };
 
 export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
@@ -55,6 +57,7 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
   inChannelLabel,
   onChannelPicked,
   title = 'Search',
+  userDisplayProfiles,
 }) => {
   const { user } = useUserSession();
   const [searchQuery, setSearchQuery] = useState('');
@@ -63,6 +66,9 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [workspaceRows, setWorkspaceRows] = useState<RavenWorkspaceRow[]>([]);
+  const [localUserProfiles, setLocalUserProfiles] = useState<
+    Record<string, { full_name?: string; user_image?: string | null }>
+  >({});
   const searchReqGenRef = useRef(0);
   const searchInputRef = useRef<TextInput>(null);
 
@@ -96,6 +102,51 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
       cancelled = true;
     };
   }, [visible, scopedToChannel]);
+
+  useEffect(() => {
+    const owners = new Set<string>();
+    for (const row of searchResults) {
+      const o = String(row.owner || '').trim();
+      if (o) owners.add(o);
+    }
+    if (owners.size === 0) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const profiles = await fetchRavenUserProfilesByIds([...owners]);
+        if (cancelled) return;
+        setLocalUserProfiles((prev) => {
+          const next = { ...prev };
+          for (const [id, p] of profiles) {
+            const lo = id.toLowerCase();
+            const prevP = next[id] ?? next[lo] ?? {};
+            const fn =
+              p.full_name != null && String(p.full_name).trim()
+                ? String(p.full_name).trim()
+                : prevP.full_name;
+            const img =
+              p.user_image != null && String(p.user_image).trim()
+                ? String(p.user_image).trim()
+                : prevP.user_image ?? null;
+            const entry = { full_name: fn, user_image: img };
+            next[id] = entry;
+            if (lo !== id) next[lo] = entry;
+          }
+          return next;
+        });
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchResults]);
+
+  const mergedUserProfiles = useMemo(
+    () => ({ ...(userDisplayProfiles ?? {}), ...localUserProfiles }),
+    [userDisplayProfiles, localUserProfiles]
+  );
 
   useEffect(() => {
     if (!visible) {
@@ -280,14 +331,14 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
               {preview}
             </Text>
             <Text style={styles.searchRowMeta} numberOfLines={1}>
-              {[owner ? friendlySenderLabel(owner) : '', time, wsLab].filter(Boolean).join(' · ')}
+              {[owner ? resolveRavenUserDisplayName(owner, mergedUserProfiles) : '', time, wsLab].filter(Boolean).join(' · ')}
             </Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color={RavenLight.textMuted} />
         </TouchableOpacity>
       );
     },
-    [searchTab, openSearchRowFromHit, workspaceLabelForId]
+    [searchTab, openSearchRowFromHit, workspaceLabelForId, mergedUserProfiles]
   );
 
   return (
@@ -307,8 +358,7 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
         </View>
         {inChannelId ? (
           <Text style={styles.searchScopedHint} numberOfLines={2}>
-            Searching messages and files in {inChannelLabel?.trim() || 'this channel'} only (same as Raven web
-            in-channel search).
+            Searching messages and files in {inChannelLabel?.trim() || 'this channel'} only.
           </Text>
         ) : null}
         <TextInput

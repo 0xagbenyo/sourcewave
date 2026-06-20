@@ -9,8 +9,11 @@ import axios, { AxiosError } from 'axios';
 
 // Paystack Configuration
 const PAYSTACK_BASE_URL = 'https://api.paystack.co';
-const PAYSTACK_SECRET_KEY = 'sk_test_f794b6852ccb41c223d8c73841c634f9ab752f59';
-const PAYSTACK_PUBLIC_KEY = 'pk_test_d334b40c4ade19bd5a6123c720fe8b3177743ce7';
+const PAYSTACK_SECRET_KEY = 'PAYSTACK_SECRET_KEY_REMOVED';
+const PAYSTACK_PUBLIC_KEY = 'PAYSTACK_PUBLIC_KEY_REMOVED';
+
+/** Sent on every charge so Paystack transactions can be filtered by app. */
+export const PAYSTACK_PAYMENT_SOURCE = 'sourcewave';
 
 export interface PaystackChargeRequest {
   email: string;
@@ -21,6 +24,8 @@ export interface PaystackChargeRequest {
     phone: string; // Phone number (e.g., "0551234987")
     provider: 'mtn' | 'vod'; // 'mtn' for MTN Mobile Money, 'vod' for Vodafone Cash
   };
+  /** Merged with default `{ source: sourcewave }` on every charge. */
+  metadata?: Record<string, string>;
 }
 
 export interface PaystackChargeResponse {
@@ -48,10 +53,88 @@ export interface PaystackChargeResponse {
 export const isPaystackChargeTransactionSuccessful = (res: PaystackChargeResponse): boolean => {
   const tx = res.data;
   if (!tx) return false;
-  if (tx.status === 'success') return true;
+  if (String(tx.status || '').toLowerCase() === 'success') return true;
   const gw = String(tx.gateway_response || '').toLowerCase();
   if (gw === 'approved' || gw.includes('success')) return true;
   return false;
+};
+
+export type PaystackChargeStep =
+  | 'success'
+  | 'pay_offline'
+  | 'send_otp'
+  | 'pending'
+  | 'failed'
+  | 'timeout'
+  | 'unknown';
+
+/** Next action required after POST /charge or submit_otp. */
+export function getPaystackChargeStep(res: PaystackChargeResponse): PaystackChargeStep {
+  if (isPaystackChargeTransactionSuccessful(res)) return 'success';
+  const txStatus = String(res.data?.status || '').toLowerCase();
+  if (txStatus === 'pay_offline') return 'pay_offline';
+  if (txStatus === 'send_otp') return 'send_otp';
+  if (txStatus === 'pending') return 'pending';
+  if (txStatus === 'failed') return 'failed';
+  if (txStatus === 'timeout') return 'timeout';
+  return 'unknown';
+}
+
+/** Ghana MoMo numbers for Paystack: 0XXXXXXXXX (e.g. 0244123456). */
+export function normalizeGhanaMoMoPhoneForPaystack(raw: string): string {
+  let digits = raw.replace(/\D/g, '');
+  if (digits.startsWith('233')) {
+    digits = `0${digits.slice(3)}`;
+  } else if (digits.length === 9) {
+    digits = `0${digits}`;
+  }
+  return digits;
+}
+
+async function paystackAuthorizedPost(
+  path: string,
+  body: Record<string, string>
+): Promise<PaystackChargeResponse> {
+  const response = await axios.post<PaystackChargeResponse>(
+    `${PAYSTACK_BASE_URL}${path}`,
+    body,
+    {
+      headers: {
+        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 30000,
+    }
+  );
+  return response.data;
+}
+
+/** Submit OTP when Paystack returns `send_otp`. */
+export const submitPaystackChargeOtp = async (
+  otp: string,
+  reference: string
+): Promise<PaystackChargeResponse> => {
+  return paystackAuthorizedPost('/charge/submit_otp', {
+    otp: otp.trim(),
+    reference,
+  });
+};
+
+/** Poll charge status — wait ≥10s after pending before calling. */
+export const checkPendingPaystackCharge = async (
+  reference: string
+): Promise<PaystackChargeResponse> => {
+  const response = await axios.get<PaystackChargeResponse>(
+    `${PAYSTACK_BASE_URL}/charge/${encodeURIComponent(reference)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 30000,
+    }
+  );
+  return response.data;
 };
 
 export interface PaystackVerifyResponse {
@@ -75,9 +158,18 @@ export const initializePaystackCharge = async (
   request: PaystackChargeRequest
 ): Promise<PaystackChargeResponse> => {
   try {
+    const { metadata: extraMetadata, ...chargeBody } = request;
+    const payload = {
+      ...chargeBody,
+      metadata: {
+        source: PAYSTACK_PAYMENT_SOURCE,
+        ...extraMetadata,
+      },
+    };
+
     const response = await axios.post<PaystackChargeResponse>(
       `${PAYSTACK_BASE_URL}/charge`,
-      request,
+      payload,
       {
         headers: {
           'Authorization': `Bearer ${PAYSTACK_SECRET_KEY}`,

@@ -12,6 +12,7 @@ import {
 import { RavenQuotationDraftCard } from './RavenQuotationDraftCard';
 import { SupplierQuotationPaymentModal } from './SupplierQuotationPaymentModal';
 import { getERPNextClient } from '../services/erpnext';
+import { userFacingError } from '../utils/userFacingError';
 import type { SourcewaveQuotationDraftPayload } from '../utils/chatQuotationDraftMessage';
 import {
   supplierQuotationDocAllowsChatBuyerReview,
@@ -223,14 +224,14 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
         Alert.alert(
           'Payment',
           snap.grandTotal > 0
-            ? 'This invoice has no outstanding balance (it may already be paid in ERPNext).'
-            : 'This invoice has no billable total. Check the sales invoice in ERPNext.'
+            ? 'This invoice has no outstanding balance—it may already be paid.'
+            : 'This invoice has no amount due. Contact support if you expected a charge.'
         );
         return;
       }
       setPayModal(true);
     } catch (e: unknown) {
-      Alert.alert('Invoice', e instanceof Error ? e.message : 'Could not prepare the sales invoice.');
+      Alert.alert('Invoice', userFacingError(e, 'Could not prepare the sales invoice.'));
     } finally {
       setInvoiceBusy(false);
     }
@@ -246,9 +247,9 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
       });
       setPayModal(false);
       await refreshLinkedInvoice(sqName.trim());
-      Alert.alert('Payment', 'Payment was recorded in ERPNext.');
+      Alert.alert('Payment', 'Payment recorded successfully.');
     } catch (e: unknown) {
-      Alert.alert('Payment', e instanceof Error ? e.message : 'Could not record payment.');
+      Alert.alert('Payment', userFacingError(e, 'Could not record payment.'));
     } finally {
       setPaySubmitting(false);
     }
@@ -261,7 +262,7 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
           name: sqName.trim(),
           currency: 'USD',
           total: 0,
-          title: 'Could not load quotation from ERPNext',
+          title: 'Could not load quotation',
           status: 'draft',
         }}
         showBuyerActions={false}

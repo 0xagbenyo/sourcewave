@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -26,6 +27,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../constants/colors';
 import { RavenLight } from '../constants/ravenLightTheme';
 import type { RavenMessageRow } from '../services/ravenNativeApi';
+import { fetchErpSiteFileAsDataUri, getERPNextAuthorizationHeader } from '../services/erpnext';
+import { hasFrappeRavenSession } from '../services/frappeRavenSession';
 import { buildAuthenticatedErpImageSource } from '../utils/erpImageUrl';
 import {
   buildAbsoluteRavenFileUrl,
@@ -275,6 +278,8 @@ export const RavenMessageAttachmentBody: React.FC<Props> = ({
   const [pdfPreview, setPdfPreview] = useState<{ uri: string; title: string } | null>(null);
   const [videoPreview, setVideoPreview] = useState<{ uri: string; title: string } | null>(null);
   const [busyDownload, setBusyDownload] = useState(false);
+  /** Android: expo-av posterSource ignores auth headers; load JPEG/PNG poster via axios like ErpAuthenticatedImage. */
+  const [androidVideoPosterDataUri, setAndroidVideoPosterDataUri] = useState<string | null>(null);
 
   const fullResImageUri = sanitizeRavenWebMessageFileUrl(item.file) || display;
 
@@ -349,6 +354,46 @@ export const RavenMessageAttachmentBody: React.FC<Props> = ({
     return null;
   }, [item.file_thumbnail]);
 
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      setAndroidVideoPosterDataUri(null);
+      return;
+    }
+    if (!videoPosterUri) {
+      setAndroidVideoPosterDataUri(null);
+      return;
+    }
+    const src = buildAuthenticatedErpImageSource(videoPosterUri);
+    if (!src?.uri) {
+      setAndroidVideoPosterDataUri(null);
+      return;
+    }
+    const low = src.uri.toLowerCase();
+    if (!low.includes('/files/')) {
+      setAndroidVideoPosterDataUri(null);
+      return;
+    }
+    let auth: string | undefined;
+    try {
+      auth = getERPNextAuthorizationHeader();
+    } catch {
+      auth = undefined;
+    }
+    const needBinary = !!(src.headers?.Authorization || (hasFrappeRavenSession() && !auth));
+    if (!needBinary) {
+      setAndroidVideoPosterDataUri(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchErpSiteFileAsDataUri(src.uri).then((d) => {
+      if (cancelled) return;
+      setAndroidVideoPosterDataUri(d);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [videoPosterUri]);
+
   const inlineVideoSource = useMemo(() => buildAuthenticatedErpImageSource(stream), [stream]);
 
   const imageNaturalForFit = useMemo(() => {
@@ -419,6 +464,15 @@ export const RavenMessageAttachmentBody: React.FC<Props> = ({
     );
   } else if (kind === 'video') {
     const posterAuth = videoPosterUri ? buildAuthenticatedErpImageSource(videoPosterUri) : null;
+    const videoPosterResolved =
+      Platform.OS === 'android' && androidVideoPosterDataUri
+        ? { uri: androidVideoPosterDataUri }
+        : posterAuth?.uri
+          ? {
+              uri: posterAuth.uri,
+              ...(posterAuth.headers ? { headers: posterAuth.headers } : {}),
+            }
+          : undefined;
     blocks.push(
       <Pressable
         key="vid"
@@ -448,15 +502,8 @@ export const RavenMessageAttachmentBody: React.FC<Props> = ({
               isMuted
               isLooping={false}
               useNativeControls={false}
-              usePoster={!!posterAuth?.uri}
-              posterSource={
-                posterAuth?.uri
-                  ? {
-                      uri: posterAuth.uri,
-                      ...(posterAuth.headers ? { headers: posterAuth.headers } : {}),
-                    }
-                  : undefined
-              }
+              usePoster={!!videoPosterResolved}
+              posterSource={videoPosterResolved}
               onReadyForDisplay={(evt) => {
                 if (ravenStoredMediaSize) return;
                 const ns = evt.naturalSize;

@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { getERPNextClient } from '../services/erpnext';
 import { OTP_PURPOSE_RESET_PASSWORD } from '../constants/otpPurposes';
+import { userFacingError } from '../utils/userFacingError';
 
 interface RouteParams {
   email?: string;
@@ -68,7 +69,7 @@ export const ForgotPasswordScreen: React.FC = () => {
       await client.sendOtp({ email: trimmedEmail, purpose: OTP_PURPOSE_RESET_PASSWORD });
       setStep('otp');
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : t('forgot.alerts.otpSendFailed');
+      const msg = userFacingError(error, t('forgot.alerts.otpSendFailed'));
       Alert.alert(t('forgot.alerts.errorTitle'), msg);
     } finally {
       setIsLoading(false);
@@ -96,7 +97,7 @@ export const ForgotPasswordScreen: React.FC = () => {
       await client.resetPasswordWithOtp(trimmedEmail, otpCode.trim(), newPassword.trim());
       setIsSuccess(true);
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : t('forgot.alerts.resetFailed');
+      const msg = userFacingError(error, t('forgot.alerts.resetFailed'));
       Alert.alert(t('forgot.alerts.errorTitle'), msg);
     } finally {
       setIsLoading(false);

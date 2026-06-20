@@ -38,7 +38,7 @@ import { RavenInlineReplyQuote } from './RavenInlineReplyQuote';
 import { RavenSharedInChatList } from './RavenSharedInChatList';
 import { ravenMessageHasVisualMedia, ravenSameMessageOwner } from '../utils/ravenAttachment';
 import { isDmChannel, initialsFromUserId, pastelAvatarBg } from '../utils/ravenChatUi';
-import { friendlySenderLabel } from '../utils/ravenSearchPreview';
+import { resolveRavenUserDisplayName } from '../utils/ravenSearchPreview';
 import { ravenMessageShortPreview } from '../utils/ravenMessageShortPreview';
 import {
   listChannelsForWorkspace,
@@ -49,6 +49,7 @@ import {
   getRavenChannelDisplayLabel,
   getRavenDmPeerUserId,
   enrichRavenChannelsWithPeerProfiles,
+  fetchRavenUserProfilesByIds,
   type RavenChannelRow,
   type RavenMessageRow,
   ravenMessageShowsReplyQuoteRow,
@@ -75,6 +76,7 @@ import { RavenQuotationDraftCard } from './RavenQuotationDraftCard';
 import { RavenLinkedSupplierQuotationMessage } from './RavenLinkedSupplierQuotationMessage';
 import { RavenLinkedGenericDocMessage } from './RavenLinkedGenericDocMessage';
 import { getERPNextClient } from '../services/erpnext';
+import { userFacingError } from '../utils/userFacingError';
 import type { RootStackParamList } from '../types';
 import type { NavigationProp } from '@react-navigation/native';
 
@@ -143,6 +145,9 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   const [error, setError] = useState<string | null>(null);
   const [quotationActionByName, setQuotationActionByName] = useState<Record<string, 'accepted' | 'rejected'>>({});
   const [quotationActionBusy, setQuotationActionBusy] = useState<string | null>(null);
+  const [ravenUserProfilesById, setRavenUserProfilesById] = useState<
+    Record<string, { full_name?: string; user_image?: string | null }>
+  >({});
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const channelIdRef = useRef<string | null>(null);
   const messagesListRef = useRef<FlatList<RavenMessageRow> | null>(null);
@@ -199,7 +204,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
           setMessages([]);
           setHasMoreOlderMessages(false);
         }
-        setError(e?.message || 'Could not load messages');
+        setError(userFacingError(e, 'Could not load messages'));
       }
     } finally {
       if (!silent) setLoadingMsgs(false);
@@ -320,6 +325,46 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   }, [messages]);
 
   useEffect(() => {
+    const owners = new Set<string>();
+    for (const m of messages) {
+      const o = (m.owner || '').trim();
+      if (o) owners.add(o);
+    }
+    if (owners.size === 0) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const profiles = await fetchRavenUserProfilesByIds([...owners]);
+        if (cancelled) return;
+        setRavenUserProfilesById((prev) => {
+          const next = { ...prev };
+          for (const [id, p] of profiles) {
+            const lo = id.toLowerCase();
+            const prevP = next[id] ?? next[lo] ?? {};
+            const fn =
+              p.full_name != null && String(p.full_name).trim()
+                ? String(p.full_name).trim()
+                : prevP.full_name;
+            const img =
+              p.user_image != null && String(p.user_image).trim()
+                ? String(p.user_image).trim()
+                : prevP.user_image ?? null;
+            const entry = { full_name: fn, user_image: img };
+            next[id] = entry;
+            if (lo !== id) next[lo] = entry;
+          }
+          return next;
+        });
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [messages]);
+
+  useEffect(() => {
     const email = user?.email?.trim();
     const ch = channel?.name?.trim();
     if (!email || !ch || messages.length === 0) return;
@@ -339,7 +384,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
         if (cancelled) return;
         setWorkspace(ws);
         if (!ws) {
-          setError('No supplier group selected. Set the supplier group in app settings or ask an admin for access.');
+          setError('No supplier group is set up for your account. Contact your administrator for access.');
           setLoadingMsgs(false);
           setLoadingBoot(false);
           return;
@@ -364,7 +409,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
         }
       } catch (e: any) {
         if (!cancelled) {
-          setError(e?.message || 'Failed to open chat');
+          setError(userFacingError(e, 'Failed to open chat'));
           setLoadingMsgs(false);
         }
       } finally {
@@ -666,6 +711,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
               messagesById={messagesById}
               onScrollToQuoted={scrollToMessageById}
               variant="wine"
+              userDisplayProfiles={ravenUserProfilesById}
             />
           ) : null}
           {!showReplyQuote && !!item.is_reply ? (
@@ -699,7 +745,9 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
           delayLongPress={380}
         >
           <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
-            {!mine && !!item.owner && <Text style={styles.bubbleMeta}>{item.owner}</Text>}
+            {!mine && !!item.owner && (
+              <Text style={styles.bubbleMeta}>{resolveRavenUserDisplayName(item.owner, ravenUserProfilesById)}</Text>
+            )}
             {inner}
           </View>
         </Pressable>
@@ -713,6 +761,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       messages,
       messagesById,
       scrollToMessageById,
+      ravenUserProfilesById,
       quotationActionByName,
       quotationActionBusy,
       handleAcceptQuotationDraft,
@@ -942,6 +991,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
                   channelId={channel.name}
                   variant="wine"
                   onGoToMessage={goToMessageFromSharedMenu}
+                  userDisplayProfiles={ravenUserProfilesById}
                 />
               ) : (
                 <Text style={[styles.channelRowMeta, { paddingHorizontal: Spacing.LG, paddingVertical: Spacing.MD }]}>

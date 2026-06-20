@@ -154,7 +154,7 @@ export const InvoicesPaymentsScreen: React.FC = () => {
         <Text style={styles.topTitle}>Invoices & payments</Text>
         <View style={{ width: 32 }} />
       </View>
-      <Text style={styles.hint}>Your sales invoices and payments recorded in ERPNext.</Text>
+      <Text style={styles.hint}>Your sales invoices and payment history.</Text>
 
       <View style={styles.filterBox}>
         <View style={styles.dateRow}>

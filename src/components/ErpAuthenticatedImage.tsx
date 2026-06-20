@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Image, type ImageContentFit, type ImageErrorEventData, type ImageLoadEventData } from 'expo-image';
-import { ActivityIndicator, View, type StyleProp, type ImageStyle } from 'react-native';
+import { ActivityIndicator, Platform, View, type StyleProp, type ImageStyle } from 'react-native';
 import { buildAuthenticatedErpImageSource } from '../utils/erpImageUrl';
-import { fetchErpSiteFileAsDataUri } from '../services/erpnext';
+import { fetchErpSiteFileAsDataUri, getERPNextAuthorizationHeader } from '../services/erpnext';
+import { hasFrappeRavenSession } from '../services/frappeRavenSession';
 
 type ResizeMode = 'cover' | 'contain' | 'stretch' | 'center' | 'repeat';
 
@@ -26,8 +27,10 @@ export type ErpAuthenticatedImageProps = {
 /**
  * Loads catalog images from your connected site.
  *
- * - **Public `/files/` URLs**: expo-image with optional Basic auth headers.
- * - **`/private/files/`**: load with the same axios client as `/api` (Basic auth) and show a `data:` URI.
+ * - **Default (iOS, or unauthenticated public URLs)**: expo-image with optional Basic auth headers.
+ * - **Binary path (`data:` URI)**: `/private/files/` everywhere, and on **Android** any same-site `/files/` URL
+ *   when we need auth (Basic header or cookie session only) — native image loaders often ignore `headers`
+ *   and never send cookies, so previews would stay blank.
  */
 export const ErpAuthenticatedImage: React.FC<ErpAuthenticatedImageProps> = ({
   uri,
@@ -44,45 +47,57 @@ export const ErpAuthenticatedImage: React.FC<ErpAuthenticatedImageProps> = ({
     }
   };
   const src = useMemo(() => buildAuthenticatedErpImageSource(uri), [uri]);
-  const isPrivateSiteFile = useMemo(() => {
+
+  const useBinaryFetchPath = useMemo(() => {
     if (!src?.uri) return false;
-    return src.uri.toLowerCase().includes('/private/files/');
-  }, [src?.uri]);
+    const low = src.uri.toLowerCase();
+    if (low.includes('/private/files/')) return true;
+    if (Platform.OS !== 'android') return false;
+    if (!low.includes('/files/')) return false;
+    if (src.headers?.Authorization) return true;
+    let auth: string | undefined;
+    try {
+      auth = getERPNextAuthorizationHeader();
+    } catch {
+      auth = undefined;
+    }
+    return hasFrappeRavenSession() && !auth;
+  }, [src?.uri, src?.headers]);
 
   const [dataUri, setDataUri] = useState<string | null>(null);
-  const [privateFetch, setPrivateFetch] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const [binaryFetch, setBinaryFetch] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
 
   useEffect(() => {
-    if (!src?.uri || !isPrivateSiteFile) {
+    if (!src?.uri || !useBinaryFetchPath) {
       setDataUri(null);
-      setPrivateFetch('idle');
+      setBinaryFetch('idle');
       return;
     }
     let cancelled = false;
-    setPrivateFetch('loading');
+    setBinaryFetch('loading');
     setDataUri(null);
     void fetchErpSiteFileAsDataUri(src.uri)
       .then((d) => {
         if (cancelled) return;
         if (d) {
           setDataUri(d);
-          setPrivateFetch('done');
+          setBinaryFetch('done');
         } else {
-          setPrivateFetch('error');
+          setBinaryFetch('error');
           onError?.({
-            error: 'Could not load private file (API user needs File read permission, or use public files).',
+            error: 'Could not load this file. Try signing in again.',
           });
         }
       })
       .catch(() => {
         if (cancelled) return;
-        setPrivateFetch('error');
-        onError?.({ error: 'Private file request failed.' });
+        setBinaryFetch('error');
+        onError?.({ error: 'File request failed.' });
       });
     return () => {
       cancelled = true;
     };
-  }, [src?.uri, isPrivateSiteFile]);
+  }, [src?.uri, useBinaryFetchPath]);
 
   if (!src?.uri) {
     return null;
@@ -90,8 +105,8 @@ export const ErpAuthenticatedImage: React.FC<ErpAuthenticatedImageProps> = ({
 
   const contentFit = fitMap[resizeMode] ?? 'cover';
 
-  if (isPrivateSiteFile) {
-    if (privateFetch === 'done' && dataUri) {
+  if (useBinaryFetchPath) {
+    if (binaryFetch === 'done' && dataUri) {
       return (
         <Image
           source={{ uri: dataUri }}
@@ -102,7 +117,7 @@ export const ErpAuthenticatedImage: React.FC<ErpAuthenticatedImageProps> = ({
         />
       );
     }
-    if (privateFetch === 'error') {
+    if (binaryFetch === 'error') {
       return null;
     }
     return (

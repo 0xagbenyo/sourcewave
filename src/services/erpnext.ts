@@ -11,6 +11,14 @@
 import axios, { AxiosHeaders, AxiosInstance, AxiosError, AxiosResponse } from 'axios';
 import { Platform } from 'react-native';
 import { OTP_PURPOSE_RESET_PASSWORD } from '../constants/otpPurposes';
+import type { AppliedSubscriptionPromo } from '../utils/subscriptionPromoCode';
+import {
+  normalizePromoCode,
+  pricingRuleMatchesPromoCode,
+  getSubscriptionDiscountFromRule,
+  buildAppliedSubscriptionPromo,
+  isPricingRuleValidForPromo,
+} from '../utils/subscriptionPromoCode';
 
 // Configuration
 const ERPNEXT_BASE_URL = process.env.EXPO_PUBLIC_ERPNEXT_URL || 'http://localhost:8000';
@@ -767,9 +775,7 @@ class ERPNextClient {
       } catch (resourceErr) {
         const doctype = (process.env.EXPO_PUBLIC_OTP_DOCTYPE || 'OTP').trim();
         const base = resourceErr instanceof Error ? resourceErr.message : String(resourceErr);
-        throw new Error(
-          `${base} If RPC is blocked, whitelist guest access to validate_otp on ERPNext, or grant the integration user read/write on DocType ${doctype}.`
-        );
+        throw new Error('Verification code could not be checked. Try again or request a new code.');
       }
     }
 
@@ -777,7 +783,7 @@ class ERPNextClient {
       throw this.handleError(lastError);
     }
     throw new Error(
-      'OTP verification is not available from this app. On ERPNext, whitelist `validate_otp` in the OTP Generation app, set EXPO_PUBLIC_OTP_VALIDATE_METHOD, or grant the API user access to the OTP DocType for resource verification.'
+      'Verification is not available right now. Try again later or contact support.'
     );
   }
 
@@ -4932,6 +4938,67 @@ class ERPNextClient {
       console.warn('listSubscriptionsForCustomer:', error);
       return [];
     }
+  }
+
+  /**
+   * Resolve a subscription promo code against ERPNext Pricing Rules.
+   * Matches `custom_promo_code` (and common alternates) on active, non-expired rules.
+   */
+  async resolveSubscriptionPromoCode(
+    rawCode: string,
+    originalPriceGhs: number
+  ): Promise<AppliedSubscriptionPromo | null> {
+    const code = normalizePromoCode(rawCode);
+    if (!code) return null;
+
+    const tryRule = (rule: Record<string, unknown> | null | undefined) => {
+      if (!rule || !isPricingRuleValidForPromo(rule)) return null;
+      const discount = getSubscriptionDiscountFromRule(rule);
+      return buildAppliedSubscriptionPromo(
+        code,
+        String(rule.name || ''),
+        originalPriceGhs,
+        discount
+      );
+    };
+
+    for (const field of ['custom_promo_code', 'coupon_code', 'promo_code'] as const) {
+      try {
+        const filters = [
+          ['Pricing Rule', 'disable', '=', 0],
+          ['Pricing Rule', field, '=', code],
+        ];
+        const listResponse = await this.client.get(`${API_VERSION}/Pricing Rule`, {
+          params: {
+            filters: JSON.stringify(filters),
+            limit_page_length: 5,
+            fields: JSON.stringify(['name']),
+          },
+        });
+        const names = (listResponse.data?.data || [])
+          .map((row: { name?: string }) => row.name)
+          .filter(Boolean) as string[];
+
+        for (const ruleName of names) {
+          const ruleResponse = await this.client.get(
+            `${API_VERSION}/Pricing Rule/${encodeURIComponent(ruleName)}`
+          );
+          const applied = tryRule(ruleResponse.data?.data);
+          if (applied) return applied;
+        }
+      } catch {
+        // Custom field may not exist on this site — fall through to scan.
+      }
+    }
+
+    const rules = await this.getPricingRules();
+    for (const rule of rules) {
+      if (!pricingRuleMatchesPromoCode(rule, code)) continue;
+      const applied = tryRule(rule);
+      if (applied) return applied;
+    }
+
+    return null;
   }
 
   /** Create **Subscription** (draft); status is set by ERPNext workflow. */

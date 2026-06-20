@@ -10,6 +10,10 @@ import { OnboardingScreen } from '../screens/OnboardingScreen';
 import { LoginScreen } from '../screens/LoginScreen';
 import { RegisterScreen } from '../screens/RegisterScreen';
 import { ForgotPasswordScreen } from '../screens/ForgotPasswordScreen';
+import {
+  LegalDocumentScreen,
+  RegisterConsentScreen,
+} from '../screens/LegalScreens';
 import { SearchScreen } from '../screens/SearchScreen';
 import { OrderHistoryScreen } from '../screens/OrderHistoryScreen';
 import { OrderDetailsScreen } from '../screens/OrderDetailsScreen';
@@ -55,7 +59,10 @@ const AuthNavigator = () => {
       }}
     >
       <AuthStack.Screen name="Login" component={LoginScreen} />
+      <AuthStack.Screen name="RegisterConsent" component={RegisterConsentScreen} />
       <AuthStack.Screen name="Register" component={RegisterScreen} />
+      <AuthStack.Screen name="PrivacyPolicy" component={LegalDocumentScreen} />
+      <AuthStack.Screen name="TermsAndConditions" component={LegalDocumentScreen} />
       <AuthStack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
     </AuthStack.Navigator>
   );

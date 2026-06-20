@@ -40,7 +40,7 @@ export function guessMimeTypeForExtension(ext: string): string {
 
 export async function downloadErpFileAndShare(sanitizedPath: string, displayName: string): Promise<void> {
   if (Platform.OS === 'web') {
-    Alert.alert('Download', 'File download is not supported in web preview. Use the mobile app or Raven in the browser.');
+    Alert.alert('Download', 'File download is not supported in web preview. Use the mobile app instead.');
     return;
   }
 

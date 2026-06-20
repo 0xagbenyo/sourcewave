@@ -59,8 +59,7 @@ export const SupplierQuotationPdfModal: React.FC<Props> = ({
           <View style={[styles.webCard, { marginTop: Math.max(insets.top, 16) }]}>
             <Text style={styles.webTitle}>PDF preview</Text>
             <Text style={styles.webBody}>
-              PDF preview and download use authenticated requests and are not available in the web preview. Use the
-              mobile app or open this quotation in ERPNext to print.
+              PDF preview and download are not available in the web preview. Use the mobile app instead.
             </Text>
             <TouchableOpacity style={styles.webBtn} onPress={onClose}>
               <Text style={styles.webBtnText}>Close</Text>

@@ -207,7 +207,7 @@ export const LoginScreen: React.FC = () => {
   };
 
   const handleRegister = () => {
-    navigation.navigate('Register' as never);
+    navigation.navigate('RegisterConsent' as never);
   };
 
   return (
@@ -307,7 +307,7 @@ export const LoginScreen: React.FC = () => {
 
             <View style={styles.signupSection}>
               <Text style={styles.signupText}>{t('login.noAccount')}</Text>
-              <TouchableOpacity onPress={() => navigation.navigate('Register' as never)}>
+              <TouchableOpacity onPress={() => navigation.navigate('RegisterConsent' as never)}>
                 <Text style={styles.signupLink}>{t('login.signUp')}</Text>
               </TouchableOpacity>
             </View>
@@ -316,10 +316,14 @@ export const LoginScreen: React.FC = () => {
           {/* Legal Text */}
           <Text style={styles.legalText}>
             {t('login.legalPrefix')}{' '}
-            <Text style={styles.linkText}>{t('login.privacy')}</Text>
+            <Text style={styles.linkText} onPress={() => navigation.navigate('PrivacyPolicy' as never)}>
+              {t('login.privacy')}
+            </Text>
             {' '}
             {t('login.and')}{' '}
-            <Text style={styles.linkText}>{t('login.terms')}</Text>
+            <Text style={styles.linkText} onPress={() => navigation.navigate('TermsAndConditions' as never)}>
+              {t('login.terms')}
+            </Text>
             {t('login.legalSuffix')}
           </Text>
         </ScrollView>

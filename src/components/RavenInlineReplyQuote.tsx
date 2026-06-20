@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { RavenLight } from '../constants/ravenLightTheme';
 import { Colors } from '../constants/colors';
 import { ErpAuthenticatedImage } from './ErpAuthenticatedImage';
-import { friendlySenderLabel, replySnippet } from '../utils/ravenSearchPreview';
+import { replySnippet, resolveRavenUserDisplayName, type RavenUserDisplayProfiles } from '../utils/ravenSearchPreview';
 import { ravenMessageShortPreview, ravenRepliedDetailsResolvedPlainText } from '../utils/ravenMessageShortPreview';
 import { formatRavenReplyQuotedDateTime } from '../utils/ravenChatUi';
 import {
@@ -58,6 +58,7 @@ type Props = {
   messagesById: Map<string, RavenMessageRow>;
   onScrollToQuoted: (messageId: string) => void;
   variant?: RavenInlineReplyQuoteVariant;
+  userDisplayProfiles?: RavenUserDisplayProfiles;
 };
 
 export const RavenInlineReplyQuote: React.FC<Props> = ({
@@ -66,6 +67,7 @@ export const RavenInlineReplyQuote: React.FC<Props> = ({
   messagesById,
   onScrollToQuoted,
   variant = 'raven',
+  userDisplayProfiles,
 }) => {
   const isWine = variant === 'wine';
   const lid = (ravenMessageReplyLinkedId(item) ?? '').trim();
@@ -76,7 +78,9 @@ export const RavenInlineReplyQuote: React.FC<Props> = ({
   if (!lid && !detailsSnippet && !isReply) return null;
 
   const parent = lid ? messagesById.get(lid) : undefined;
-  const author = parent ? friendlySenderLabel(parent.owner) : 'Replied message';
+  const author = parent
+    ? resolveRavenUserDisplayName(parent.owner, userDisplayProfiles)
+    : 'Replied message';
   const quotedTime = parent?.creation ? formatRavenReplyQuotedDateTime(parent.creation) : '';
   const parentVisual = buildParentVisual(parent);
 

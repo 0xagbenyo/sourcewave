@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useUserSession } from '../context/UserContext';
 import { getSupplierDocumentIdForApi } from '../services/supplierPortal';
+import { userFacingError } from '../utils/userFacingError';
 
 /**
  * ERPNext `Supplier.name` for the logged-in supplier portal user.
@@ -45,12 +46,12 @@ export function useSupplierDocumentId(): {
         setError(
           id
             ? null
-            : 'No Supplier document is linked to this login. In ERPNext, add this user under the Supplier’s Portal Users / User table, or set Supplier email.'
+            : 'Your account is not linked to a supplier profile. Contact your administrator.'
         );
       } catch (e: unknown) {
         if (!cancelled) {
           setSupplierDocId(null);
-          setError(e instanceof Error ? e.message : 'Could not resolve Supplier.');
+          setError(userFacingError(e, 'Could not load your supplier profile.'));
         }
       } finally {
         if (!cancelled) setLoading(false);

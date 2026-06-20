@@ -10,7 +10,7 @@ import {
 } from '../services/ravenNativeApi';
 import { classifyRavenAttachment, getRavenAttachmentLabel } from '../utils/ravenAttachment';
 import { formatMessageHeaderTime } from '../utils/ravenChatUi';
-import { friendlySenderLabel } from '../utils/ravenSearchPreview';
+import { resolveRavenUserDisplayName, type RavenUserDisplayProfiles } from '../utils/ravenSearchPreview';
 
 export type RavenSharedInChatListVariant = 'raven' | 'wine';
 
@@ -21,6 +21,7 @@ type Props = {
   variant?: RavenSharedInChatListVariant;
   /** Close menu and scroll the open chat to this message. */
   onGoToMessage: (messageName: string) => void;
+  userDisplayProfiles?: RavenUserDisplayProfiles;
 };
 
 function attachmentIconName(kind: string): keyof typeof Ionicons.glyphMap {
@@ -38,7 +39,13 @@ function attachmentIconName(kind: string): keyof typeof Ionicons.glyphMap {
   }
 }
 
-export const RavenSharedInChatList: React.FC<Props> = ({ active, channelId, variant = 'raven', onGoToMessage }) => {
+export const RavenSharedInChatList: React.FC<Props> = ({
+  active,
+  channelId,
+  variant = 'raven',
+  onGoToMessage,
+  userDisplayProfiles,
+}) => {
   const wine = variant === 'wine';
   const text = wine ? Colors.BLACK : RavenLight.text;
   const textMuted = wine ? Colors.TEXT_SECONDARY : RavenLight.textMuted;
@@ -103,7 +110,7 @@ export const RavenSharedInChatList: React.FC<Props> = ({ active, channelId, vari
           const { kind } = classifyRavenAttachment(row.file, row.message_type);
           const label = getRavenAttachmentLabel(row.file) || 'Attachment';
           const when = formatMessageHeaderTime(row.creation);
-          const who = friendlySenderLabel(row.owner);
+          const who = resolveRavenUserDisplayName(row.owner, userDisplayProfiles);
           return (
             <TouchableOpacity
               key={`${row.messageName}-${row.file}`}

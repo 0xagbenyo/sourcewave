@@ -31,6 +31,7 @@ import {
   type RavenChannelRow,
 } from '../../services/ravenNativeApi';
 import { setPendingRavenDocLinkMessageMerge } from '../../utils/ravenDocLinkMessageMergeBridge';
+import { userFacingError } from '../../utils/userFacingError';
 import type { RootStackParamList } from '../../types';
 import { ErpAuthenticatedImage } from '../../components/ErpAuthenticatedImage';
 import { useSupplierComposeLeave } from '../../context/SupplierComposeLeaveContext';
@@ -328,8 +329,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
     if (!supplierDocId) {
       Alert.alert(
         'Supplier',
-        supplierLinkError ||
-          'Your login is not linked to a Supplier in ERPNext. Add this user under Supplier → Portal Users (or link email on the Supplier).'
+        userFacingError(supplierLinkError, 'Your account is not linked to a supplier profile. Contact your administrator.')
       );
       return;
     }
@@ -424,7 +424,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
     }
     Alert.alert(
       'Skip sharing?',
-      `Quotation ${createdQuotation.name} is saved in ERPNext. You can share a link from Raven later.`,
+      `Quotation ${createdQuotation.name} is saved. You can share a link from Messages later.`,
       [
         { text: 'Stay', style: 'cancel' },
         { text: 'Leave', style: 'destructive', onPress: () => exitCompose() },
@@ -437,7 +437,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
       exitCompose();
       return;
     }
-    Alert.alert('Leave?', 'Your quotation is saved. You can share it later from Raven.', [
+    Alert.alert('Leave?', 'Your quotation is saved. You can share it later from Messages.', [
       { text: 'Stay', style: 'cancel' },
       { text: 'Leave', onPress: () => exitCompose() },
     ]);
@@ -465,8 +465,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
           ) : shareSections.length === 0 ? (
             <View style={styles.shareEmpty}>
               <Text style={styles.shareEmptyText}>
-                No direct messages found. Start a one-to-one conversation in Messages, or sign in with email/password
-                for Raven.
+                No direct messages found. Start a one-to-one conversation in Messages first.
               </Text>
             </View>
           ) : (

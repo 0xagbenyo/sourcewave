@@ -72,7 +72,7 @@ export const SupplierProfileScreen: React.FC = () => {
           <View style={styles.row}>
             <Ionicons name="pricetag-outline" size={22} color={Colors.TEXT_SECONDARY} />
             <View style={styles.rowText}>
-              <Text style={styles.label}>Supplier ID (ERPNext)</Text>
+              <Text style={styles.label}>Supplier ID</Text>
               <Text style={styles.value}>
                 {sidLoading ? 'Resolving…' : supplierDocId || user?.supplierId || sidError || '—'}
               </Text>

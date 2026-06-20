@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -21,10 +21,17 @@ import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { Header } from '../components/Header';
 import {
+  SubscriptionPaystackPending,
+  type PendingPaystackPayment,
+} from '../components/SubscriptionPaystackPending';
+import {
   SOURCEWAVE_SUBSCRIPTION_PLANS,
+  DEFAULT_SUBSCRIPTION_PLAN_ID,
   type SubscriptionPlanId,
   getErpSubscriptionPlanName,
   getErpSubscriptionCompany,
+  formatSubscriptionMonthlyRate,
+  getPlanTotalSavingsGhs,
 } from '../constants/subscriptions';
 import { useUserSession } from '../context/UserContext';
 import { useSubscription } from '../context/SubscriptionContext';
@@ -34,10 +41,17 @@ import {
   convertToPesewas,
   verifyPaystackPayment,
   isPaystackChargeTransactionSuccessful,
+  getPaystackChargeStep,
+  normalizeGhanaMoMoPhoneForPaystack,
+  submitPaystackChargeOtp,
+  checkPendingPaystackCharge,
+  type PaystackChargeResponse,
 } from '../services/paystack';
 import { getERPNextClient } from '../services/erpnext';
 import { formatGhanaCedis } from '../utils/currency';
 import { toYmd, erpSubscriptionCoversThrough } from '../utils/subscriptionErpnext';
+import type { AppliedSubscriptionPromo } from '../utils/subscriptionPromoCode';
+import { normalizePromoCode } from '../utils/subscriptionPromoCode';
 import type { RootStackParamList } from '../types';
 
 const hairline = StyleSheet.hairlineWidth;
@@ -65,16 +79,170 @@ export const SubscriptionScreen: React.FC = () => {
   const { user } = useUserSession();
   const { subscription, isActive, isLoading, refresh } = useSubscription();
 
-  const [selectedPlanId, setSelectedPlanId] = useState<SubscriptionPlanId>('sw-6m');
+  const [selectedPlanId, setSelectedPlanId] = useState<SubscriptionPlanId>(DEFAULT_SUBSCRIPTION_PLAN_ID);
   const [selectedPayment, setSelectedPayment] = useState<'mtn' | 'telecel' | null>(null);
   const [paymentNumber, setPaymentNumber] = useState('');
   const [paying, setPaying] = useState(false);
   const [lastReference, setLastReference] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
+  const [promoCodeInput, setPromoCodeInput] = useState('');
+  const [appliedPromo, setAppliedPromo] = useState<AppliedSubscriptionPromo | null>(null);
+  const [promoValidating, setPromoValidating] = useState(false);
+  const [promoError, setPromoError] = useState<string | null>(null);
+  const [pendingPayment, setPendingPayment] = useState<PendingPaystackPayment | null>(null);
+  const [paymentOtp, setPaymentOtp] = useState('');
+  const [submittingOtp, setSubmittingOtp] = useState(false);
+  const pendingPromoRef = useRef<string | null>(null);
 
   const selectedPlan = SOURCEWAVE_SUBSCRIPTION_PLANS.find((p) => p.id === selectedPlanId)!;
 
-  const finishActivation = async (reference: string) => {
+  const checkoutPriceGhs = appliedPromo?.finalPriceGhs ?? selectedPlan.priceGhs;
+  const prevPlanIdRef = useRef(selectedPlanId);
+
+  useEffect(() => {
+    if (prevPlanIdRef.current === selectedPlanId) return;
+    prevPlanIdRef.current = selectedPlanId;
+
+    const code = appliedPromo?.code;
+    if (!code) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const client = getERPNextClient();
+        const result = await client.resolveSubscriptionPromoCode(code, selectedPlan.priceGhs);
+        if (cancelled) return;
+        setAppliedPromo(result);
+        setPromoError(result ? null : t('subscriptionPage.promoInvalid'));
+      } catch {
+        if (!cancelled) {
+          setAppliedPromo(null);
+          setPromoError(t('subscriptionPage.promoInvalid'));
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPlanId, selectedPlan.priceGhs, appliedPromo?.code, t]);
+
+  useEffect(() => {
+    if (!pendingPayment) return;
+
+    let cancelled = false;
+    let intervalId: ReturnType<typeof setInterval> | undefined;
+
+    const startPoll = setTimeout(() => {
+      intervalId = setInterval(async () => {
+        if (cancelled) return;
+        try {
+          const res = await checkPendingPaystackCharge(pendingPayment.reference);
+          if (cancelled) return;
+          if (isPaystackChargeTransactionSuccessful(res)) {
+            await finishActivation(pendingPayment.reference, pendingPromoRef.current);
+            setPendingPayment(null);
+            setLastReference(null);
+            setPaymentOtp('');
+            return;
+          }
+          const step = getPaystackChargeStep(res);
+          if (step === 'send_otp') {
+            setPendingPayment((current) =>
+              current
+                ? {
+                    ...current,
+                    step: 'send_otp',
+                    displayText: res.data?.display_text || current.displayText,
+                  }
+                : null
+            );
+          }
+        } catch {
+          // Ignore transient poll errors.
+        }
+      }, 15000);
+    }, 12000);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(startPoll);
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [pendingPayment?.reference]);
+
+  const processPaystackChargeResponse = async (
+    paystackResponse: PaystackChargeResponse,
+    ref: string,
+    amountGhs: number,
+    promoCodeForErp: string | null,
+    provider: 'mtn' | 'telecel'
+  ) => {
+    if (isPaystackChargeTransactionSuccessful(paystackResponse)) {
+      await finishActivation(ref, promoCodeForErp);
+      setPendingPayment(null);
+      setLastReference(null);
+      setPaymentOtp('');
+      return;
+    }
+
+    const step = getPaystackChargeStep(paystackResponse);
+    if (step === 'failed' || step === 'timeout') {
+      Alert.alert(
+        t('subscriptionPage.paymentFailed'),
+        paystackResponse.data?.display_text || paystackResponse.message || t('subscriptionPage.momoFailed')
+      );
+      return;
+    }
+
+    pendingPromoRef.current = promoCodeForErp;
+    setLastReference(ref);
+    setPendingPayment({
+      reference: ref,
+      amountGhs,
+      displayText:
+        paystackResponse.data?.display_text?.trim() || t('subscriptionPage.momoDefaultDisplay'),
+      step: step === 'send_otp' ? 'send_otp' : step === 'pending' ? 'pending' : 'pay_offline',
+      provider,
+    });
+  };
+
+  const handleApplyPromo = async () => {
+    const code = normalizePromoCode(promoCodeInput);
+    if (!code) {
+      setPromoError(t('subscriptionPage.promoRequired'));
+      setAppliedPromo(null);
+      return;
+    }
+
+    setPromoValidating(true);
+    setPromoError(null);
+    try {
+      const client = getERPNextClient();
+      const result = await client.resolveSubscriptionPromoCode(code, selectedPlan.priceGhs);
+      if (!result) {
+        setAppliedPromo(null);
+        setPromoError(t('subscriptionPage.promoInvalid'));
+        return;
+      }
+      setAppliedPromo(result);
+      setPromoCodeInput(result.code);
+    } catch (e: unknown) {
+      setAppliedPromo(null);
+      const msg = e instanceof Error ? e.message : t('subscriptionPage.promoInvalid');
+      setPromoError(msg);
+    } finally {
+      setPromoValidating(false);
+    }
+  };
+
+  const handleClearPromo = () => {
+    setPromoCodeInput('');
+    setAppliedPromo(null);
+    setPromoError(null);
+  };
+
+  const finishActivation = async (reference: string, promoCode?: string | null) => {
     const expires = addMonths(new Date(), selectedPlan.months);
     const erpPlanName = getErpSubscriptionPlanName(selectedPlan.id);
     let erpWarning: string | null = null;
@@ -88,7 +256,7 @@ export const SubscriptionScreen: React.FC = () => {
           const rows = await client.listSubscriptionsForCustomer(customer.name);
           const shouldCreate = !erpSubscriptionCoversThrough(rows, expires);
           if (shouldCreate) {
-            await client.createSubscriptionDoc({
+            const subscriptionPayload: Record<string, unknown> = {
               party_type: 'Customer',
               party: customer.name,
               company: getErpSubscriptionCompany(),
@@ -98,13 +266,16 @@ export const SubscriptionScreen: React.FC = () => {
               generate_invoice_at: 'End of the current subscription period',
               days_until_due: 7,
               submit_invoice: 0,
-            });
+            };
+            if (promoCode) {
+              subscriptionPayload.custom_promo_code = promoCode;
+            }
+            await client.createSubscriptionDoc(subscriptionPayload);
           }
         }
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
         console.warn('Subscription create failed', e);
-        erpWarning = t('subscriptionPage.erpSaveFailed', { message: msg });
+        erpWarning = t('subscriptionPage.erpSaveFailed');
       }
     }
 
@@ -133,43 +304,79 @@ export const SubscriptionScreen: React.FC = () => {
       return;
     }
 
+    const momoPhone = normalizeGhanaMoMoPhoneForPaystack(paymentNumber.trim());
+    if (!/^0[0-9]{9}$/.test(momoPhone)) {
+      Alert.alert(t('subscriptionPage.enterWallet'), t('subscriptionPage.invalidMoMoPhone'));
+      return;
+    }
+
+    let promoForCheckout = appliedPromo;
+    const pendingCode = normalizePromoCode(promoCodeInput);
+    if (pendingCode && !appliedPromo) {
+      setPromoValidating(true);
+      try {
+        const client = getERPNextClient();
+        promoForCheckout = await client.resolveSubscriptionPromoCode(pendingCode, selectedPlan.priceGhs);
+        if (!promoForCheckout) {
+          Alert.alert(t('subscriptionPage.promoInvalidTitle'), t('subscriptionPage.promoInvalid'));
+          return;
+        }
+        setAppliedPromo(promoForCheckout);
+      } catch {
+        Alert.alert(t('subscriptionPage.promoInvalidTitle'), t('subscriptionPage.promoInvalid'));
+        return;
+      } finally {
+        setPromoValidating(false);
+      }
+    }
+
+    const amountGhs = promoForCheckout?.finalPriceGhs ?? selectedPlan.priceGhs;
+    const promoCodeForErp = promoForCheckout?.code ?? null;
+    const provider = selectedPayment;
+
     setPaying(true);
+    setPendingPayment(null);
+    setPaymentOtp('');
     const reference = `SW-SUB-${selectedPlan.id}-${Date.now()}`;
     try {
       const paystackResponse = await initializePaystackCharge({
         email: user.email,
-        amount: convertToPesewas(selectedPlan.priceGhs),
+        amount: convertToPesewas(amountGhs),
         currency: 'GHS',
         reference,
         mobile_money: {
-          phone: paymentNumber.trim(),
+          phone: momoPhone,
           provider: mapProviderToPaystack(selectedPayment),
         },
       });
 
-      const displayText = paystackResponse.data?.display_text;
       const ref = paystackResponse.data?.reference || reference;
-
-      if (isPaystackChargeTransactionSuccessful(paystackResponse)) {
-        await finishActivation(ref);
-        setLastReference(null);
-        setPaying(false);
-        return;
-      }
-
-      setLastReference(ref);
-      setPaying(false);
-      Alert.alert(t('subscriptionPage.completePayment'), displayText || t('subscriptionPage.completePaymentBody'), [
-        { text: t('contactUs.ok') },
-        {
-          text: t('subscriptionPage.verifyPayment'),
-          onPress: () => handleVerify(ref),
-        },
-      ]);
+      await processPaystackChargeResponse(paystackResponse, ref, amountGhs, promoCodeForErp, provider);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Payment could not be started.';
       Alert.alert(t('subscriptionPage.paymentFailed'), msg);
+    } finally {
       setPaying(false);
+    }
+  };
+
+  const handleSubmitPaymentOtp = async () => {
+    if (!pendingPayment || !paymentOtp.trim()) return;
+    setSubmittingOtp(true);
+    try {
+      const res = await submitPaystackChargeOtp(paymentOtp.trim(), pendingPayment.reference);
+      await processPaystackChargeResponse(
+        res,
+        pendingPayment.reference,
+        pendingPayment.amountGhs,
+        pendingPromoRef.current,
+        pendingPayment.provider
+      );
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : t('subscriptionPage.momoOtpFailed');
+      Alert.alert(t('subscriptionPage.paymentFailed'), msg);
+    } finally {
+      setSubmittingOtp(false);
     }
   };
 
@@ -179,18 +386,21 @@ export const SubscriptionScreen: React.FC = () => {
     }, [refresh])
   );
 
-  const handleVerify = async (ref?: string) => {
+  const handleVerify = async (ref?: string, promoCode?: string | null) => {
     const r = ref || lastReference;
     if (!r) {
       Alert.alert(t('subscriptionPage.verifyNoRef'), t('subscriptionPage.verifyNoRefBody'));
       return;
     }
+    const promoCodeForErp = promoCode ?? appliedPromo?.code ?? null;
     setVerifying(true);
     try {
       const v = await verifyPaystackPayment(r);
       if (v.data?.status === 'success') {
-        await finishActivation(v.data.reference || r);
+        await finishActivation(v.data.reference || r, promoCodeForErp);
         setLastReference(null);
+        setPendingPayment(null);
+        setPaymentOtp('');
       } else {
         Alert.alert(t('subscriptionPage.notCompleted'), v.data?.gateway_response || 'Status is not success yet.');
       }
@@ -202,7 +412,7 @@ export const SubscriptionScreen: React.FC = () => {
     }
   };
 
-  const showPurchaseFooter = !isLoading && !isActive;
+  const showPurchaseFooter = !isLoading && !isActive && !pendingPayment;
   const showActiveFooter = !isLoading && isActive && !!subscription;
 
   return (
@@ -233,11 +443,11 @@ export const SubscriptionScreen: React.FC = () => {
               <Text style={styles.mutedLead}>{t('subscriptionPage.activeLead')}</Text>
               <Text style={styles.sectionLabel}>{t('subscriptionPage.sectionStatus')}</Text>
               <View style={styles.group}>
-                <View style={styles.statusBlock}>
-                  <Ionicons name="checkmark-circle" size={24} color={Colors.SUCCESS} />
-                  <View style={styles.statusText}>
-                    <Text style={styles.statusTitle}>{t('subscriptionPage.activeTitle')}</Text>
-                    <Text style={styles.statusSub}>
+                <View style={[styles.row, styles.rowLast]}>
+                  <Ionicons name="checkmark-circle" size={22} color={Colors.SUCCESS} style={styles.rowIcon} />
+                  <View style={styles.rowMain}>
+                    <Text style={styles.rowTitle}>{t('subscriptionPage.activeTitle')}</Text>
+                    <Text style={styles.rowSubtitle}>
                       {t('subscriptionPage.activeEnds', {
                         plan: subscription.planTitle,
                         date: new Date(subscription.expiresAt).toLocaleDateString('en-GB', {
@@ -259,64 +469,245 @@ export const SubscriptionScreen: React.FC = () => {
 
           {!isLoading && !isActive ? (
             <>
+              <Text style={styles.sectionLabel}>{t('subscriptionPage.checkoutHeroEyebrow')}</Text>
+              <View style={styles.group}>
+                <View style={[styles.row, styles.rowLast]}>
+                  <View style={styles.rowMain}>
+                    <Text style={styles.rowTitle}>{selectedPlan.durationLabel}</Text>
+                    {appliedPromo ? (
+                      <Text style={styles.rowSubtitle}>
+                        {t('subscriptionPage.promoDiscountLine', {
+                          percent: appliedPromo.discountPercent,
+                          amount: formatGhanaCedis(appliedPromo.discountAmountGhs),
+                        })}
+                      </Text>
+                    ) : selectedPlan.savingsPercent ? (
+                      <Text style={styles.rowSubtitle}>
+                        {t('subscriptionPage.planSave', { percent: selectedPlan.savingsPercent })}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <View style={styles.priceCol}>
+                    {appliedPromo ? (
+                      <Text style={styles.priceWas}>{formatGhanaCedis(selectedPlan.priceGhs)}</Text>
+                    ) : null}
+                    <Text style={styles.priceNow}>{formatGhanaCedis(checkoutPriceGhs)}</Text>
+                  </View>
+                </View>
+              </View>
+
               <Text style={styles.sectionLabel}>{t('subscriptionPage.sectionPlan')}</Text>
               <View style={styles.group}>
                 {SOURCEWAVE_SUBSCRIPTION_PLANS.map((plan, index) => {
                   const selected = plan.id === selectedPlanId;
-                  const last = index === SOURCEWAVE_SUBSCRIPTION_PLANS.length - 1;
+                  const totalSaved = getPlanTotalSavingsGhs(plan);
+                  const isLast = index === SOURCEWAVE_SUBSCRIPTION_PLANS.length - 1;
                   return (
                     <TouchableOpacity
                       key={plan.id}
-                      style={[styles.planRow, !last && styles.planRowBorder, selected && styles.planRowSelected]}
+                      style={[styles.planRow, selected && styles.planRowSelected, isLast && styles.rowLast]}
                       onPress={() => setSelectedPlanId(plan.id)}
                       activeOpacity={0.75}
                     >
-                      <View style={styles.radioOuter}>{selected ? <View style={styles.radioInner} /> : null}</View>
-                      <View style={styles.planMain}>
-                        <Text style={styles.planTitle}>{plan.title}</Text>
-                        <Text style={styles.planDuration}>{plan.durationLabel}</Text>
-                        <Text style={styles.planDesc}>{plan.description}</Text>
+                      <Ionicons
+                        name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+                        size={22}
+                        color={selected ? Colors.WINE : Colors.MEDIUM_GRAY}
+                        style={styles.rowIcon}
+                      />
+                      <View style={styles.rowMain}>
+                        <View style={styles.planTitleRow}>
+                          <Text style={[styles.rowTitle, selected && styles.rowTitleSelected]}>
+                            {plan.durationLabel}
+                          </Text>
+                          {plan.isTestPlan ? (
+                            <View style={styles.tagPill}>
+                              <Text style={styles.tagPillText}>{t('subscriptionPage.testPlanBadge')}</Text>
+                            </View>
+                          ) : null}
+                          {plan.isBestValue ? (
+                            <View style={[styles.tagPill, styles.tagPillBest]}>
+                              <Text style={styles.tagPillText}>{t('subscriptionPage.bestValue')}</Text>
+                            </View>
+                          ) : null}
+                        </View>
+                        {!plan.isTestPlan ? (
+                          <Text style={styles.rowSubtitle}>
+                            {t('subscriptionPage.planPerMonth', {
+                              amount: formatSubscriptionMonthlyRate(plan.monthlyRateGhs),
+                            })}
+                          </Text>
+                        ) : null}
+                        {plan.savingsPercent ? (
+                          <Text style={styles.rowMeta}>
+                            {t('subscriptionPage.planSave', { percent: plan.savingsPercent })}
+                            {totalSaved > 0
+                              ? ` · ${t('subscriptionPage.planSaveAmount', { amount: formatGhanaCedis(totalSaved) })}`
+                              : ''}
+                          </Text>
+                        ) : plan.isTestPlan ? null : (
+                          <Text style={styles.rowMeta}>{t('subscriptionPage.planBaseline')}</Text>
+                        )}
                       </View>
-                      <Text style={styles.planPrice}>{formatGhanaCedis(plan.priceGhs)}</Text>
+                      <Text style={[styles.planRowPrice, selected && styles.rowTitleSelected]}>
+                        {formatGhanaCedis(plan.priceGhs)}
+                      </Text>
                     </TouchableOpacity>
                   );
                 })}
               </View>
 
-              <Text style={styles.sectionLabel}>{t('subscriptionPage.sectionPay')}</Text>
+              <Text style={styles.sectionLabel}>{t('subscriptionPage.sectionPromo')}</Text>
+              <Text style={styles.sectionHint}>{t('subscriptionPage.promoSubtitle')}</Text>
               <View style={styles.group}>
-                <View style={styles.payRow}>
-                  <TouchableOpacity
-                    style={[styles.payOption, selectedPayment === 'mtn' && styles.payOptionSelected]}
-                    onPress={() => setSelectedPayment('mtn')}
-                    activeOpacity={0.85}
-                  >
-                    <Image source={mtnMomoImage} style={styles.payLogo} resizeMode="contain" />
-                    <Text style={styles.payLabel}>MTN</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.payOption, selectedPayment === 'telecel' && styles.payOptionSelected]}
-                    onPress={() => setSelectedPayment('telecel')}
-                    activeOpacity={0.85}
-                  >
-                    <Image source={telecelCashImage} style={styles.payLogo} resizeMode="contain" />
-                    <Text style={styles.payLabel}>Telecel</Text>
-                  </TouchableOpacity>
-                </View>
-                <View style={[styles.fieldPad, styles.fieldPadLast]}>
-                  <Text style={styles.label}>{t('subscriptionPage.walletLabel')}</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    placeholder={t('subscriptionPage.walletPlaceholder')}
-                    placeholderTextColor={Colors.TEXT_SECONDARY}
-                    keyboardType="phone-pad"
-                    value={paymentNumber}
-                    onChangeText={setPaymentNumber}
-                  />
+                {appliedPromo ? (
+                  <>
+                    <View style={styles.row}>
+                      <Ionicons name="pricetag" size={22} color={Colors.SUCCESS} style={styles.rowIcon} />
+                      <View style={styles.rowMain}>
+                        <Text style={styles.rowTitle}>
+                          {t('subscriptionPage.promoApplied', { code: appliedPromo.code })}
+                        </Text>
+                        <Text style={styles.rowSubtitle}>
+                          {t('subscriptionPage.promoDiscountLine', {
+                            percent: appliedPromo.discountPercent,
+                            amount: formatGhanaCedis(appliedPromo.discountAmountGhs),
+                          })}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        onPress={handleClearPromo}
+                        disabled={promoValidating || paying}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Ionicons name="close-circle-outline" size={22} color={Colors.TEXT_SECONDARY} />
+                      </TouchableOpacity>
+                    </View>
+                    <View style={styles.summaryRow}>
+                      <Text style={styles.summaryLabel}>{t('subscriptionPage.checkoutSubtotal')}</Text>
+                      <Text style={styles.summaryMuted}>{formatGhanaCedis(selectedPlan.priceGhs)}</Text>
+                    </View>
+                    <View style={styles.summaryRow}>
+                      <Text style={styles.summaryLabel}>{t('subscriptionPage.checkoutDiscount')}</Text>
+                      <Text style={styles.summaryDiscount}>
+                        -{formatGhanaCedis(appliedPromo.discountAmountGhs)}
+                      </Text>
+                    </View>
+                    <View style={[styles.summaryRow, styles.rowLast]}>
+                      <Text style={styles.summaryTotalLabel}>{t('subscriptionPage.checkoutTotal')}</Text>
+                      <Text style={styles.summaryTotal}>{formatGhanaCedis(checkoutPriceGhs)}</Text>
+                    </View>
+                  </>
+                ) : (
+                  <>
+                    <View style={styles.fieldPad}>
+                      <Text style={styles.fieldLabel}>{t('subscriptionPage.sectionPromo')}</Text>
+                      <TextInput
+                        style={styles.textInput}
+                        placeholder={t('subscriptionPage.promoPlaceholder')}
+                        placeholderTextColor={Colors.TEXT_SECONDARY}
+                        autoCapitalize="characters"
+                        autoCorrect={false}
+                        value={promoCodeInput}
+                        onChangeText={(text) => {
+                          setPromoCodeInput(text);
+                          if (promoError) setPromoError(null);
+                        }}
+                        editable={!promoValidating && !paying}
+                        returnKeyType="done"
+                        onSubmitEditing={handleApplyPromo}
+                      />
+                      {promoError ? (
+                        <View style={styles.promoErrorRow}>
+                          <Ionicons name="alert-circle" size={16} color={Colors.ERROR} />
+                          <Text style={styles.promoError}>{promoError}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                    <TouchableOpacity
+                      style={[styles.inlineActionRow, styles.rowLast, promoValidating && styles.btnDisabled]}
+                      onPress={handleApplyPromo}
+                      disabled={promoValidating || paying || !promoCodeInput.trim()}
+                      activeOpacity={0.75}
+                    >
+                      {promoValidating ? (
+                        <ActivityIndicator color={Colors.WINE} />
+                      ) : (
+                        <Text style={styles.inlineActionText}>{t('subscriptionPage.promoApply')}</Text>
+                      )}
+                    </TouchableOpacity>
+                  </>
+                )}
+              </View>
+
+              <Text style={styles.sectionLabel}>{t('subscriptionPage.sectionPay')}</Text>
+              <Text style={styles.sectionHint}>{t('subscriptionPage.paySubtitle')}</Text>
+              <View style={styles.group}>
+                {(['mtn', 'telecel'] as const).map((provider) => {
+                  const selected = selectedPayment === provider;
+                  return (
+                    <TouchableOpacity
+                      key={provider}
+                      style={[styles.payProviderRow, selected && styles.planRowSelected]}
+                      onPress={() => setSelectedPayment(provider)}
+                      activeOpacity={0.75}
+                    >
+                      <Image
+                        source={provider === 'mtn' ? mtnMomoImage : telecelCashImage}
+                        style={styles.payLogo}
+                        resizeMode="contain"
+                      />
+                      <Text style={[styles.rowTitle, styles.payProviderLabel]}>
+                        {provider === 'mtn' ? 'MTN MoMo' : 'Telecel Cash'}
+                      </Text>
+                      <Ionicons
+                        name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+                        size={22}
+                        color={selected ? Colors.WINE : Colors.MEDIUM_GRAY}
+                      />
+                    </TouchableOpacity>
+                  );
+                })}
+                <View style={[styles.fieldPad, styles.rowLast]}>
+                  <Text style={styles.fieldLabel}>{t('subscriptionPage.walletLabel')}</Text>
+                  <View style={styles.walletInputRow}>
+                    <View style={styles.walletPrefix}>
+                      <Text style={styles.walletPrefixText}>+233</Text>
+                    </View>
+                    <TextInput
+                      style={styles.walletInput}
+                      placeholder={t('subscriptionPage.walletShortPlaceholder')}
+                      placeholderTextColor={Colors.TEXT_SECONDARY}
+                      keyboardType="phone-pad"
+                      value={paymentNumber}
+                      onChangeText={setPaymentNumber}
+                      maxLength={15}
+                    />
+                  </View>
+                  <Text style={styles.fieldHint}>{t('subscriptionPage.walletHint')}</Text>
                 </View>
               </View>
 
-              <Text style={styles.footnote}>{t('subscriptionPage.footnote')}</Text>
+              {!pendingPayment ? (
+                <Text style={styles.footnote}>{t('subscriptionPage.footnote')}</Text>
+              ) : null}
+
+              {pendingPayment ? (
+                <SubscriptionPaystackPending
+                  pending={pendingPayment}
+                  otp={paymentOtp}
+                  onOtpChange={setPaymentOtp}
+                  onSubmitOtp={handleSubmitPaymentOtp}
+                  submittingOtp={submittingOtp}
+                  verifying={verifying}
+                  onVerify={() => handleVerify(pendingPayment.reference, pendingPromoRef.current)}
+                  onCancel={() => {
+                    setPendingPayment(null);
+                    setPaymentOtp('');
+                    setLastReference(null);
+                  }}
+                />
+              ) : null}
             </>
           ) : null}
 
@@ -334,33 +725,25 @@ export const SubscriptionScreen: React.FC = () => {
         {showPurchaseFooter ? (
           <View style={styles.footer}>
             <TouchableOpacity
-              style={[styles.payBtn, paying && styles.payBtnDisabled]}
+              style={[styles.payBtn, (paying || promoValidating) && styles.payBtnDisabled]}
               onPress={handlePay}
-              disabled={paying}
+              disabled={paying || promoValidating}
               activeOpacity={0.85}
             >
               {paying ? (
                 <ActivityIndicator color={Colors.WHITE} />
               ) : (
-                <Text style={styles.payBtnText}>
-                  {t('subscriptionPage.payCta', { amount: formatGhanaCedis(selectedPlan.priceGhs) })}
-                </Text>
+                <>
+                  <Ionicons name="lock-closed-outline" size={20} color={Colors.WHITE} />
+                  <Text style={styles.payBtnText}>
+                    {t('subscriptionPage.payCtaShort', { amount: formatGhanaCedis(checkoutPriceGhs) })}
+                  </Text>
+                </>
               )}
             </TouchableOpacity>
-            {lastReference ? (
-              <TouchableOpacity
-                style={styles.verifyBtn}
-                onPress={() => handleVerify()}
-                disabled={verifying}
-                activeOpacity={0.75}
-              >
-                {verifying ? (
-                  <ActivityIndicator color={Colors.WINE} />
-                ) : (
-                  <Text style={styles.verifyBtnText}>{t('subscriptionPage.verifyCompleted')}</Text>
-                )}
-              </TouchableOpacity>
-            ) : null}
+            <Text style={styles.footerHint}>
+              {selectedPlan.durationLabel} · {formatGhanaCedis(checkoutPriceGhs)}
+            </Text>
           </View>
         ) : null}
       </KeyboardAvoidingView>
@@ -394,7 +777,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.DARK_GRAY,
     lineHeight: 21,
-    marginBottom: Spacing.MD,
     paddingHorizontal: Spacing.SCREEN_PADDING,
     marginTop: 4,
   },
@@ -404,7 +786,15 @@ const styles = StyleSheet.create({
     color: Colors.TEXT_SECONDARY,
     letterSpacing: 0.8,
     textTransform: 'uppercase',
-    marginTop: 18,
+    marginTop: 22,
+    marginBottom: 8,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+  },
+  sectionHint: {
+    fontSize: 13,
+    color: Colors.TEXT_SECONDARY,
+    lineHeight: 18,
+    marginTop: -4,
     marginBottom: 8,
     paddingHorizontal: Spacing.SCREEN_PADDING,
   },
@@ -414,88 +804,118 @@ const styles = StyleSheet.create({
     borderBottomWidth: hairline,
     borderColor: Colors.BORDER,
   },
-  statusBlock: {
+  row: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    paddingVertical: 14,
     paddingHorizontal: Spacing.SCREEN_PADDING,
-    paddingVertical: 16,
-    gap: 12,
+    borderBottomWidth: hairline,
+    borderBottomColor: Colors.BORDER,
+    backgroundColor: Colors.WHITE,
   },
-  statusText: { flex: 1, minWidth: 0 },
-  statusTitle: { fontWeight: '700', fontSize: 16, color: Colors.BLACK },
-  statusSub: { fontSize: 14, color: Colors.TEXT_SECONDARY, marginTop: 6, lineHeight: 20 },
+  rowLast: {
+    borderBottomWidth: 0,
+  },
+  rowIcon: {
+    marginRight: 12,
+  },
+  rowMain: {
+    flex: 1,
+    minWidth: 0,
+  },
+  rowTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: Colors.BLACK,
+    letterSpacing: -0.2,
+  },
+  rowTitleSelected: {
+    color: Colors.WINE,
+  },
+  rowSubtitle: {
+    fontSize: 13,
+    color: Colors.TEXT_SECONDARY,
+    marginTop: 3,
+    fontWeight: '500',
+  },
+  rowMeta: {
+    fontSize: 12,
+    color: Colors.TEXT_SECONDARY,
+    marginTop: 4,
+    lineHeight: 17,
+  },
+  priceCol: {
+    alignItems: 'flex-end',
+    marginLeft: 12,
+  },
+  priceWas: {
+    fontSize: 13,
+    color: Colors.TEXT_SECONDARY,
+    textDecorationLine: 'line-through',
+    fontWeight: '500',
+  },
+  priceNow: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: Colors.WINE,
+  },
   planRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    paddingHorizontal: Spacing.SCREEN_PADDING,
     paddingVertical: 14,
-  },
-  planRowBorder: {
+    paddingHorizontal: Spacing.SCREEN_PADDING,
     borderBottomWidth: hairline,
     borderBottomColor: Colors.BORDER,
+    backgroundColor: Colors.WHITE,
   },
   planRowSelected: {
-    backgroundColor: 'rgba(230, 0, 18, 0.05)',
+    backgroundColor: 'rgba(230, 0, 18, 0.04)',
   },
-  radioOuter: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: Colors.WINE,
+  planTitleRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  planRowPrice: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.BLACK,
+    marginLeft: 8,
     marginTop: 2,
   },
-  radioInner: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: Colors.WINE,
+  tagPill: {
+    backgroundColor: Colors.PROMO_ORANGE,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
   },
-  planMain: { flex: 1, minWidth: 0 },
-  planTitle: { fontSize: 16, fontWeight: '700', color: Colors.BLACK },
-  planDuration: { fontSize: 13, color: Colors.TEXT_SECONDARY, marginTop: 2 },
-  planDesc: { fontSize: 13, color: Colors.DARK_GRAY, marginTop: 6, lineHeight: 18 },
-  planPrice: { fontSize: 15, fontWeight: '800', color: Colors.WINE, marginLeft: 8 },
-  payRow: {
-    flexDirection: 'row',
-    gap: 10,
-    paddingHorizontal: Spacing.SCREEN_PADDING,
-    paddingTop: 14,
-    paddingBottom: 14,
-    borderBottomWidth: hairline,
-    borderBottomColor: Colors.BORDER,
+  tagPillBest: {
+    backgroundColor: Colors.SUCCESS,
   },
-  payOption: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    borderRadius: 10,
-    borderWidth: hairline,
-    borderColor: Colors.BORDER,
-    backgroundColor: Colors.OFF_WHITE,
+  tagPillText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Colors.WHITE,
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
   },
-  payOptionSelected: {
-    borderColor: Colors.WINE,
-    backgroundColor: 'rgba(230, 0, 18, 0.06)',
-  },
-  payLogo: { width: 32, height: 32 },
-  payLabel: { fontWeight: '700', fontSize: 14, color: Colors.BLACK },
   fieldPad: {
     paddingHorizontal: Spacing.SCREEN_PADDING,
     paddingVertical: 14,
+    borderBottomWidth: hairline,
+    borderBottomColor: Colors.BORDER,
   },
-  fieldPadLast: {},
-  label: {
+  fieldLabel: {
     fontSize: 13,
     fontWeight: '500',
     color: Colors.BLACK,
     marginBottom: 8,
+  },
+  fieldHint: {
+    fontSize: 12,
+    color: Colors.TEXT_SECONDARY,
+    marginTop: 8,
+    lineHeight: 17,
   },
   textInput: {
     borderWidth: 1,
@@ -504,15 +924,119 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 15,
+    fontWeight: '600',
+    letterSpacing: 1,
     color: Colors.BLACK,
     backgroundColor: Colors.OFF_WHITE,
   },
-  footnote: {
-    fontSize: 12,
-    color: Colors.TEXT_SECONDARY,
-    lineHeight: 17,
-    marginTop: Spacing.MD,
+  promoErrorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+  },
+  promoError: {
+    flex: 1,
+    fontSize: 13,
+    color: Colors.ERROR,
+    fontWeight: '500',
+  },
+  inlineActionRow: {
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderBottomWidth: hairline,
+    borderBottomColor: Colors.BORDER,
+  },
+  inlineActionText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: Colors.WINE,
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
     paddingHorizontal: Spacing.SCREEN_PADDING,
+    borderBottomWidth: hairline,
+    borderBottomColor: Colors.BORDER,
+  },
+  summaryLabel: {
+    fontSize: 14,
+    color: Colors.TEXT_SECONDARY,
+  },
+  summaryMuted: {
+    fontSize: 14,
+    color: Colors.TEXT_SECONDARY,
+    textDecorationLine: 'line-through',
+  },
+  summaryDiscount: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.SUCCESS,
+  },
+  summaryTotalLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.BLACK,
+  },
+  summaryTotal: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.WINE,
+  },
+  payProviderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    borderBottomWidth: hairline,
+    borderBottomColor: Colors.BORDER,
+    backgroundColor: Colors.WHITE,
+  },
+  payLogo: {
+    width: 32,
+    height: 32,
+    marginRight: 12,
+  },
+  payProviderLabel: {
+    flex: 1,
+  },
+  walletInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.BORDER,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: Colors.OFF_WHITE,
+  },
+  walletPrefix: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: Colors.LIGHT_GRAY,
+    borderRightWidth: hairline,
+    borderRightColor: Colors.BORDER,
+  },
+  walletPrefixText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.DARK_GRAY,
+  },
+  walletInput: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '500',
+    color: Colors.BLACK,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  footnote: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: Colors.TEXT_SECONDARY,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    marginTop: 20,
   },
   footer: {
     paddingHorizontal: Spacing.SCREEN_PADDING,
@@ -521,22 +1045,25 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.WHITE,
     borderTopWidth: hairline,
     borderTopColor: Colors.BORDER,
-    gap: 10,
+  },
+  footerHint: {
+    marginTop: 8,
+    fontSize: 12,
+    color: Colors.TEXT_SECONDARY,
+    textAlign: 'center',
   },
   payBtn: {
     backgroundColor: Colors.SUCCESS,
     borderRadius: 12,
     paddingVertical: 14,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 8,
   },
   payBtnDisabled: { opacity: 0.65 },
+  btnDisabled: { opacity: 0.55 },
   payBtnText: { color: Colors.WHITE, fontSize: 16, fontWeight: '600' },
-  verifyBtn: {
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  verifyBtnText: { color: Colors.WINE, fontWeight: '700', fontSize: 15 },
   doneBtn: {
     backgroundColor: Colors.SUCCESS,
     borderRadius: 12,

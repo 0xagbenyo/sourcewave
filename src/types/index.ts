@@ -317,6 +317,9 @@ export type RootStackParamList = {
 export type AuthStackParamList = {
   Login: undefined;
   Register: undefined;
+  RegisterConsent: undefined;
+  PrivacyPolicy: undefined;
+  TermsAndConditions: undefined;
   ForgotPassword: undefined;
 };
 

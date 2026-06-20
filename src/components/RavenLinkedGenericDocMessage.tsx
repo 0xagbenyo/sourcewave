@@ -43,7 +43,7 @@ export const RavenLinkedGenericDocMessage: React.FC<Props> = ({ linkDoctype, lin
       onPress={openInDesk}
       activeOpacity={0.85}
       accessibilityRole="button"
-      accessibilityLabel={`Open ${dt} ${dn} in ERPNext`}
+      accessibilityLabel={`Open ${dt} ${dn}`}
     >
       <View style={styles.head}>
         <Ionicons name="document-text-outline" size={22} color={RavenLight.accent} style={{ marginRight: 8 }} />
@@ -55,7 +55,7 @@ export const RavenLinkedGenericDocMessage: React.FC<Props> = ({ linkDoctype, lin
         {dn}
       </Text>
       <View style={styles.row}>
-        <Text style={styles.hint}>Open in ERPNext</Text>
+        <Text style={styles.hint}>View document</Text>
         <Ionicons name="open-outline" size={18} color={RavenLight.accent} />
       </View>
     </TouchableOpacity>

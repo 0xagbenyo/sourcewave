@@ -63,7 +63,7 @@ export const LanguageSelectScreen: React.FC = () => {
       if (!ok) {
         Alert.alert(
           'Chinese unavailable',
-          'Online translation for Chinese could not be reached. The app will use English. You can add a Google Cloud Translation API key (EXPO_PUBLIC_GOOGLE_TRANSLATE_API_KEY) for offline-free Chinese UI later.'
+          'Online translation for Chinese could not be reached. The app will use English for now.'
         );
       }
       afterLanguageChosen();
