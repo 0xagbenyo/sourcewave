@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Alert,
   ActivityIndicator,
   RefreshControl,
 } from 'react-native';
@@ -19,6 +18,7 @@ import { Header } from '../components/Header';
 import { useUserSession } from '../context/UserContext';
 import { getERPNextClient } from '../services/erpnext';
 import type { RootStackParamList, ErpCustomerAddressRow } from '../types';
+import { appAlert as Alert } from '../services/appAlert';
 
 const hairline = StyleSheet.hairlineWidth;
 

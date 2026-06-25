@@ -30,7 +30,8 @@ import {
 } from '../utils/itemGroup';
 import { Category } from '../types';
 import { SearchableSelect } from '../components/SearchableSelect';
-import { withOtherItemOption, SourcingItemOption } from '../utils/sourcingItems';
+import { withOtherItemOption, SourcingItemOption, resolveSubcategorySourcingItem, prependSourcingItemOption } from '../utils/sourcingItems';
+import { buildSourcingSalesOrderLines } from '../utils/sourcingSubmit';
 
 const hairline = StyleSheet.hairlineWidth;
 
@@ -126,7 +127,11 @@ export const SourcingRequestMultiScreen: React.FC = () => {
     setForms((prev) => prev.map((f) => (f.id === formId ? { ...f, ...updates } : f)));
   };
 
-  const fetchItemsForForm = async (formId: string, categoryId: string) => {
+  const fetchItemsForForm = async (
+    formId: string,
+    categoryId: string,
+    prefillSubcategory?: { name?: string; item_group_name?: string } | null
+  ) => {
     try {
       updateForm(formId, { loadingProducts: true });
       const client = getERPNextClient();
@@ -136,7 +141,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
       items.forEach((item: any) => {
         if (item?.name) unique.set(item.name, item);
       });
-      const dropdownItems: DropdownItem[] = withOtherItemOption(
+      let dropdownItems: DropdownItem[] = withOtherItemOption(
         Array.from(unique.values())
           .filter((item: any) => Number(item?.disabled) !== 1)
           .map((item: any) => ({
@@ -145,6 +150,18 @@ export const SourcingRequestMultiScreen: React.FC = () => {
             itemCode: item.name,
           }))
       );
+
+      if (prefillSubcategory) {
+        const subItem = resolveSubcategorySourcingItem(prefillSubcategory, dropdownItems);
+        dropdownItems = withOtherItemOption(
+          prependSourcingItemOption(
+            dropdownItems.filter((item) => item.id !== 'Other'),
+            subItem
+          )
+        );
+        updateForm(formId, { selectedProductId: subItem.id });
+      }
+
       setProductsByFormId((prev) => ({ ...prev, [formId]: dropdownItems }));
     } catch (error) {
       console.error('Error fetching items for form:', error);
@@ -204,9 +221,33 @@ export const SourcingRequestMultiScreen: React.FC = () => {
       return;
     }
 
-    const categoryId = matchedSubcategoryRaw.name;
+    let parentGroupRaw = parentIdParam
+      ? allGroups.find((group: any) => group.name === parentIdParam)
+      : undefined;
+
+    if (!parentGroupRaw) {
+      const parentFromChild = String(matchedSubcategoryRaw.parent_item_group || '').trim();
+      if (parentFromChild) {
+        parentGroupRaw = allGroups.find((group: any) => group.name === parentFromChild);
+      }
+    }
+
+    if (!parentGroupRaw && parentParam) {
+      parentGroupRaw = allGroups.find((group: any) => {
+        const label = String(group?.item_group_name || '').trim().toLowerCase();
+        const name = String(group?.name || '').trim().toLowerCase();
+        return label === parentParam || name === parentParam;
+      });
+    }
+
+    if (!parentGroupRaw) {
+      setDidAutoPrefill(true);
+      return;
+    }
+
+    const categoryId = String(parentGroupRaw.name || '').trim();
     const categoryName =
-      matchedSubcategoryRaw.item_group_name || matchedSubcategoryRaw.name;
+      parentGroupRaw.item_group_name || parentGroupRaw.name || parentParam || categoryId;
 
     updateForm(firstForm.id, {
       selectedCategoryId: categoryId,
@@ -214,7 +255,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
       selectedProductId: '',
     });
 
-    fetchItemsForForm(firstForm.id, categoryId);
+    void fetchItemsForForm(firstForm.id, categoryId, matchedSubcategoryRaw);
 
     setDidAutoPrefill(true);
   }, [didAutoPrefill, loadingGroups, allGroups, forms, route?.params]);
@@ -308,20 +349,18 @@ export const SourcingRequestMultiScreen: React.FC = () => {
       const deliveryDate = new Date(transactionDate);
       deliveryDate.setDate(deliveryDate.getDate() + 21);
 
-      const items = expandedForms.map((form) => {
+      const orderLines = expandedForms.map((form) => {
         const product = selectedProductFor(form) as DropdownItem;
-        const qty = parseInt(form.quantity, 10);
-        const rate = parseFloat(form.expectedRate);
-        const description = form.itemDescription.trim();
-
         return {
-          item_code: product.itemCode || product.id,
-          qty,
-          rate,
-          amount: qty * rate,
-          description,
+          product,
+          selectedCategoryId: form.selectedCategoryId,
+          quantity: parseInt(form.quantity, 10),
+          rate: parseFloat(form.expectedRate),
+          description: form.itemDescription.trim(),
         };
       });
+
+      const items = await buildSourcingSalesOrderLines(client, orderLines, allGroups);
 
       const createdOrder = await client.createSalesOrder({
         customer: customerId,

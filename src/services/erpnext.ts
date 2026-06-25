@@ -2435,6 +2435,77 @@ class ERPNextClient {
     }
   }
 
+  /** True when an Item document exists for `itemCode`. */
+  async itemExists(itemCode: string): Promise<boolean> {
+    const code = String(itemCode || '').trim();
+    if (!code) return false;
+    try {
+      const response = await this.client.get(
+        `${API_VERSION}/Item/${encodeURIComponent(code)}?fields=${encodeURIComponent(JSON.stringify(['name']))}`
+      );
+      return Boolean(response.data?.data?.name);
+    } catch (error: unknown) {
+      const axiosError = error as AxiosError<{ message?: string; exc_type?: string }>;
+      const status = axiosError.response?.status;
+      const msg = String(axiosError.response?.data?.message || axiosError.message || '').toLowerCase();
+      if (status === 404 || msg.includes('does not exist') || msg.includes('not found')) {
+        return false;
+      }
+      throw this.handleError(error);
+    }
+  }
+
+  /** Find Item code by exact name within an Item Group (sourcing de-dupe). */
+  async findItemCodeByNameAndGroup(itemName: string, itemGroup: string): Promise<string | null> {
+    const name = String(itemName || '').trim();
+    const group = String(itemGroup || '').trim();
+    if (!name || !group) return null;
+    try {
+      const filters = [
+        ['Item', 'item_name', '=', name],
+        ['Item', 'item_group', '=', group],
+      ];
+      let url = `${API_VERSION}/Item?fields=${encodeURIComponent(JSON.stringify(['name']))}`;
+      url += `&filters=${encodeURIComponent(JSON.stringify(filters))}`;
+      url += '&limit_page_length=1';
+      const response = await this.client.get(url);
+      const row = response.data?.data?.[0];
+      return row?.name ? String(row.name) : null;
+    } catch (error) {
+      throw this.handleError(error);
+    }
+  }
+
+  /**
+   * Create a stock Item for sourcing when the picker value is not yet in ERPNext.
+   * `stock_uom` defaults to Nos.
+   */
+  async createSourcingItem(payload: {
+    item_code: string;
+    item_name: string;
+    item_group: string;
+    stock_uom?: string;
+  }): Promise<any> {
+    const itemCode = String(payload.item_code || '').trim();
+    const itemName = String(payload.item_name || itemCode).trim();
+    const itemGroup = String(payload.item_group || '').trim();
+    if (!itemCode || !itemName || !itemGroup) {
+      throw new Error('Item code, name, and item group are required to create an item.');
+    }
+    try {
+      const response = await this.client.post(`${API_VERSION}/Item`, {
+        item_code: itemCode,
+        item_name: itemName,
+        item_group: itemGroup,
+        stock_uom: payload.stock_uom || 'Nos',
+        is_stock_item: 1,
+      });
+      return response.data.data;
+    } catch (error) {
+      throw this.handleError(error);
+    }
+  }
+
   async searchItems(query: string, company?: string): Promise<any[]> {
     // Use Website Item for better eCommerce search
     return this.searchWebsiteItems(query, company);
@@ -3835,9 +3906,9 @@ class ERPNextClient {
   async getItemGroups(): Promise<any[]> {
     try {
       const response = await this.client.get(
-        `${API_VERSION}/Item Group?fields=["name","item_group_name","image","is_group","parent_item_group"]`
+        `${API_VERSION}/Item Group?fields=["name","item_group_name","image","is_group","parent_item_group"]&limit_page_length=0`
       );
-      return response.data.data;
+      return response.data.data || [];
     } catch (error) {
       throw this.handleError(error);
     }

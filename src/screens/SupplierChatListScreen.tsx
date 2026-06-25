@@ -11,7 +11,8 @@ import { useUserSession } from '../context/UserContext';
 import { useSubscription } from '../context/SubscriptionContext';
 import { SourceWaveStackHeader } from '../components/SourceWaveStackHeader';
 import { NativeRavenChat } from '../components/NativeRavenChat';
-import { SuppliersPremiumGateContent } from '../components/SuppliersPremiumGateContent';
+import { useAutoNavigateToSubscriptionWhenInactive } from '../hooks/useAutoNavigateToSubscriptionWhenInactive';
+import { resetToAuthScreen } from '../navigation/rootNavigation';
 import type { RootStackParamList } from '../types';
 
 export const SupplierChatListScreen: React.FC = () => {
@@ -19,6 +20,12 @@ export const SupplierChatListScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const { user } = useUserSession();
   const { isActive, isLoading, refresh } = useSubscription();
+
+  useAutoNavigateToSubscriptionWhenInactive(navigation, {
+    email: user?.email,
+    isLoading,
+    isActive,
+  });
 
   useFocusEffect(
     useCallback(() => {
@@ -35,7 +42,7 @@ export const SupplierChatListScreen: React.FC = () => {
             <Ionicons name="chatbubbles-outline" size={48} color={Colors.TEXT_SECONDARY} />
             <Text style={styles.emptyTitle}>{t('suppliersPremium.signInTitle')}</Text>
             <Text style={styles.emptySub}>{t('suppliersPremium.signInBody')}</Text>
-            <TouchableOpacity style={styles.primaryCta} onPress={() => navigation.navigate('Auth')}>
+            <TouchableOpacity style={styles.primaryCta} onPress={() => resetToAuthScreen()}>
               <Text style={styles.primaryCtaText}>{t('suppliersPremium.signInCta')}</Text>
             </TouchableOpacity>
           </View>
@@ -67,11 +74,14 @@ export const SupplierChatListScreen: React.FC = () => {
       <View style={styles.root}>
         <SourceWaveStackHeader
           title="Messages"
-          subtitle={t('suppliersPremium.subtitle')}
+          subtitle={t('subscriptionPage.loading')}
           onBack={() => navigation.goBack()}
         />
         <SafeAreaView style={styles.bodySafe} edges={['bottom']}>
-          <SuppliersPremiumGateContent onSubscribe={() => navigation.navigate('Subscription')} />
+          <View style={styles.centered}>
+            <ActivityIndicator size="large" color={Colors.WINE} />
+            <Text style={styles.loadingLabel}>{t('subscriptionPage.loading')}</Text>
+          </View>
         </SafeAreaView>
       </View>
     );

@@ -46,6 +46,7 @@ import {
 } from '../constants/appPreferencesKeys';
 import { ensureChineseMachineLocale, applyEnglishLocale } from '../i18n/machineChineseLocale';
 import { RootMainNavigator } from './RootMainNavigator';
+import { rootNavigationRef } from './rootNavigation';
 
 const Stack = createStackNavigator<RootStackParamList>();
 const AuthStack = createStackNavigator<AuthStackParamList>();
@@ -118,7 +119,7 @@ export const AppNavigator = () => {
   }
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={rootNavigationRef}>
       <Stack.Navigator
         initialRouteName={initialRouteName}
         screenOptions={{

@@ -4,22 +4,26 @@
     "slug": "SourcewaveApp",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./src/assets/images/Amoura_20260203_115921_0000.png",
+    "icon": "./src/assets/images/sourcewave logo.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "scheme": "sourcewave",
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./src/assets/images/sourcewave logo.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "CFBundleDisplayName": "SOURCEWAVE"
+      }
     },
     "android": {
       "package": "com.agbenyo.sourcewaveapp",
+      "label": "SOURCEWAVE",
       "adaptiveIcon": {
-        "foregroundImage": "./src/assets/images/Amoura_20260203_115921_0000.png",
+        "foregroundImage": "./src/assets/images/sourcewave logo.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,

@@ -42,7 +42,7 @@ export const AgentSupplierChatScreen: React.FC = () => {
     };
   }, [route.params.supplierId]);
 
-  const [accessGate, setAccessGate] = useState<'checking' | 'denied' | 'allowed'>('checking');
+  const [accessGate, setAccessGate] = useState<'checking' | 'allowed'>('checking');
 
   useFocusEffect(
     useCallback(() => {
@@ -51,12 +51,16 @@ export const AgentSupplierChatScreen: React.FC = () => {
         setAccessGate('checking');
         const { isActive: ok } = await refresh();
         if (cancelled) return;
-        setAccessGate(ok ? 'allowed' : 'denied');
+        if (!ok) {
+          navigation.navigate('Subscription');
+          return;
+        }
+        setAccessGate('allowed');
       })();
       return () => {
         cancelled = true;
       };
-    }, [refresh])
+    }, [refresh, navigation])
   );
 
   if (resolvingSupplier) {
@@ -110,28 +114,6 @@ export const AgentSupplierChatScreen: React.FC = () => {
           <View style={styles.centered}>
             <ActivityIndicator size="large" color={Colors.WINE} />
             <Text style={styles.loadingLabel}>Checking subscription…</Text>
-          </View>
-        </SafeAreaView>
-      </View>
-    );
-  }
-
-  if (accessGate === 'denied') {
-    return (
-      <View style={styles.root}>
-        <SourceWaveStackHeader title="Chat" subtitle="Subscription required" onBack={() => navigation.goBack()} />
-        <SafeAreaView style={styles.bodySafe} edges={['bottom']}>
-          <View style={styles.blocked}>
-            <Text style={styles.blockedTitle}>Subscription required</Text>
-            <Text style={styles.blockedText}>
-              Subscribe to SourceWave supplier access to open in-app chat.
-            </Text>
-            <TouchableOpacity
-              style={styles.primaryCta}
-              onPress={() => navigation.navigate('Subscription')}
-            >
-              <Text style={styles.primaryCtaText}>View plans</Text>
-            </TouchableOpacity>
           </View>
         </SafeAreaView>
       </View>

@@ -8,7 +8,6 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -17,7 +16,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { getERPNextClient } from '../services/erpnext';
 import { OTP_PURPOSE_RESET_PASSWORD } from '../constants/otpPurposes';
+import { appAlert as Alert } from '../services/appAlert';
 import { userFacingError } from '../utils/userFacingError';
+import { useOtpResendCooldown } from '../hooks/useOtpResendCooldown';
 
 interface RouteParams {
   email?: string;
@@ -27,6 +28,7 @@ export const ForgotPasswordScreen: React.FC = () => {
   const route = useRoute();
   const navigation = useNavigation();
   const { t } = useTranslation();
+  const { secondsLeft, canResend, startCooldown, resetCooldown } = useOtpResendCooldown();
   const { email: initialEmail } = (route.params || {}) as RouteParams;
   const [email, setEmail] = useState(initialEmail || '');
   const [step, setStep] = useState<'email' | 'otp'>('email');
@@ -36,6 +38,7 @@ export const ForgotPasswordScreen: React.FC = () => {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [resendingOtp, setResendingOtp] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
 
   useEffect(() => {
@@ -68,6 +71,7 @@ export const ForgotPasswordScreen: React.FC = () => {
       }
       await client.sendOtp({ email: trimmedEmail, purpose: OTP_PURPOSE_RESET_PASSWORD });
       setStep('otp');
+      startCooldown();
     } catch (error: unknown) {
       const msg = userFacingError(error, t('forgot.alerts.otpSendFailed'));
       Alert.alert(t('forgot.alerts.errorTitle'), msg);
@@ -101,6 +105,25 @@ export const ForgotPasswordScreen: React.FC = () => {
       Alert.alert(t('forgot.alerts.errorTitle'), msg);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail || !canResend || resendingOtp) return;
+
+    setResendingOtp(true);
+    try {
+      const client = getERPNextClient();
+      await client.sendOtp({ email: trimmedEmail, purpose: OTP_PURPOSE_RESET_PASSWORD });
+      setOtpCode('');
+      startCooldown();
+      Alert.alert(t('forgot.alerts.otpResentTitle'), t('forgot.alerts.otpResentBody'));
+    } catch (error: unknown) {
+      const msg = userFacingError(error, t('forgot.alerts.otpSendFailed'));
+      Alert.alert(t('forgot.alerts.errorTitle'), msg);
+    } finally {
+      setResendingOtp(false);
     }
   };
 
@@ -297,8 +320,33 @@ export const ForgotPasswordScreen: React.FC = () => {
                   </Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity onPress={() => setStep('email')} disabled={isLoading}>
+                <TouchableOpacity
+                  onPress={() => {
+                    resetCooldown();
+                    setStep('email');
+                  }}
+                  disabled={isLoading || resendingOtp}
+                >
                   <Text style={styles.backEditLink}>{t('forgot.backEditEmail')}</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={handleResendOtp}
+                  disabled={isLoading || resendingOtp || !canResend}
+                  style={styles.resendOtpWrap}
+                >
+                  <Text
+                    style={[
+                      styles.resendOtpLink,
+                      (isLoading || resendingOtp || !canResend) && styles.resendOtpLinkDisabled,
+                    ]}
+                  >
+                    {resendingOtp
+                      ? t('forgot.sending')
+                      : canResend
+                        ? t('forgot.resendOtp')
+                        : t('forgot.resendOtpIn', { seconds: secondsLeft })}
+                  </Text>
                 </TouchableOpacity>
               </>
             )}
@@ -449,7 +497,20 @@ const styles = StyleSheet.create({
     color: Colors.WINE,
     textDecorationLine: 'underline',
     textAlign: 'center',
+    marginBottom: 8,
+  },
+  resendOtpWrap: {
+    alignItems: 'center',
     marginBottom: 12,
+  },
+  resendOtpLink: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.ELECTRIC_BLUE,
+    textAlign: 'center',
+  },
+  resendOtpLinkDisabled: {
+    opacity: 0.5,
   },
   backToLoginContainer: {
     flexDirection: 'row',

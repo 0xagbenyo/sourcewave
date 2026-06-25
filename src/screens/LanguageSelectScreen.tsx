@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Platform,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CommonActions, useNavigation, useRoute, RouteProp } from '@react-navigation/native';
@@ -14,6 +13,7 @@ import { RootStackParamList } from '../types';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { appStorage } from '../services/appStorage';
+import { appAlert as Alert } from '../services/appAlert';
 import { STORAGE_APP_LANGUAGE } from '../constants/appPreferencesKeys';
 import { ensureChineseMachineLocale, applyEnglishLocale } from '../i18n/machineChineseLocale';
 

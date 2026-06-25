@@ -6,7 +6,6 @@ import {
   ScrollView,
   TouchableOpacity,
   Switch,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,6 +15,7 @@ import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { Header } from '../components/Header';
 import { useUserSession } from '../context/UserContext';
+import { appAlert as Alert } from '../services/appAlert';
 
 const hairline = StyleSheet.hairlineWidth;
 
@@ -81,6 +81,7 @@ export const SettingsScreen: React.FC = () => {
   const navigation = useNavigation();
   const { t, i18n } = useTranslation();
   const { user, clearUser } = useUserSession();
+  const isSupplierUser = user?.appMode === 'supplier' || !!user?.supplierId?.trim();
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [emailNotifications, setEmailNotifications] = useState(true);
 
@@ -98,10 +99,6 @@ export const SettingsScreen: React.FC = () => {
         style: 'destructive',
         onPress: () => {
           clearUser();
-          (navigation as any).reset({
-            index: 0,
-            routes: [{ name: 'Auth' }],
-          });
         },
       },
     ]);
@@ -125,12 +122,14 @@ export const SettingsScreen: React.FC = () => {
             subtitle={t('settings.profileSub')}
             onPress={() => nav.navigate('EditProfile')}
           />
-          <RowNav
-            icon="location-outline"
-            title={t('settings.addresses')}
-            subtitle={t('settings.addressesSub')}
-            onPress={() => nav.navigate('AddressBook')}
-          />
+          {!isSupplierUser ? (
+            <RowNav
+              icon="location-outline"
+              title={t('settings.addresses')}
+              subtitle={t('settings.addressesSub')}
+              onPress={() => nav.navigate('AddressBook')}
+            />
+          ) : null}
         </View>
 
         <Text style={styles.sectionLabel}>{t('settings.sectionPreferences')}</Text>

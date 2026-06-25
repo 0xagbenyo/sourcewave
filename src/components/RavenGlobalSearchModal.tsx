@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTranslation } from 'react-i18next';
 import { RavenLight } from '../constants/ravenLightTheme';
 import { Spacing } from '../constants/spacing';
 import { useUserSession } from '../context/UserContext';
@@ -54,11 +55,12 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
   visible,
   onClose,
   inChannelId,
-  inChannelLabel,
   onChannelPicked,
   title = 'Search',
   userDisplayProfiles,
 }) => {
+  const { t } = useTranslation();
+  const modalTitle = title === 'Search' ? t('ravenSearch.title') : title;
   const { user } = useUserSession();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchTab, setSearchTab] = useState<RavenSearchFilterType>('Message');
@@ -351,20 +353,17 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
         <SafeAreaView style={styles.searchModalSafe} edges={['top', 'bottom']}>
         <View style={styles.searchModalTop}>
           <TouchableOpacity onPress={onClose} hitSlop={12} style={styles.searchModalCancelWrap}>
-            <Text style={styles.searchModalCancel}>Cancel</Text>
+            <Text style={styles.searchModalCancel}>{t('ravenSearch.cancel')}</Text>
           </TouchableOpacity>
-          <Text style={styles.searchModalTitle}>{title}</Text>
+          <Text style={styles.searchModalTitle}>{modalTitle}</Text>
           <View style={styles.searchModalTopSpacer} />
         </View>
-        {inChannelId ? (
-          <Text style={styles.searchScopedHint} numberOfLines={2}>
-            Searching messages and files in {inChannelLabel?.trim() || 'this channel'} only.
-          </Text>
-        ) : null}
         <TextInput
           ref={searchInputRef}
           style={styles.searchInput}
-          placeholder={inChannelId ? 'Search in this channel…' : 'Search messages, channels, files…'}
+          placeholder={
+            inChannelId ? t('ravenSearch.placeholderInChannel') : t('ravenSearch.placeholderGlobal')
+          }
           placeholderTextColor={RavenLight.textSubtle}
           value={searchQuery}
           onChangeText={setSearchQuery}
@@ -398,12 +397,9 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
           contentContainerStyle={styles.searchListContent}
           ListEmptyComponent={
             searchQuery.trim().length < 2 ? (
-              <Text style={styles.searchEmpty}>
-                Type at least 2 characters. Results use the same Raven server search as the web app (up to 20
-                matches).
-              </Text>
+              <Text style={styles.searchEmpty}>{t('ravenSearch.typeToSearch')}</Text>
             ) : !searchLoading && !searchError ? (
-              <Text style={styles.searchEmpty}>No results</Text>
+              <Text style={styles.searchEmpty}>{t('ravenSearch.noResults')}</Text>
             ) : null
           }
         />
@@ -429,14 +425,6 @@ const styles = StyleSheet.create({
   searchModalCancel: { fontSize: 17, color: RavenLight.accent, fontWeight: '600' },
   searchModalTitle: { fontSize: 17, fontWeight: '800', color: RavenLight.text },
   searchModalTopSpacer: { width: 56 },
-  searchScopedHint: {
-    fontSize: 13,
-    color: RavenLight.textMuted,
-    fontWeight: '600',
-    paddingHorizontal: Spacing.MD,
-    paddingTop: 8,
-    paddingBottom: 4,
-  },
   searchInput: {
     marginHorizontal: Spacing.MD,
     marginTop: 10,

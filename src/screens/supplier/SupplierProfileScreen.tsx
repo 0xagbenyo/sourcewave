@@ -4,17 +4,17 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Alert,
   ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { CommonActions, useNavigation } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { Colors } from '../../constants/colors';
 import { Spacing } from '../../constants/spacing';
 import { useUserSession } from '../../context/UserContext';
 import { useSupplierDocumentId } from '../../hooks/useSupplierDocumentId';
+import { appAlert as Alert } from '../../services/appAlert';
 
 const hairline = StyleSheet.hairlineWidth;
 
@@ -32,12 +32,6 @@ export const SupplierProfileScreen: React.FC = () => {
         style: 'destructive',
         onPress: () => {
           clearUser();
-          navigation.dispatch(
-            CommonActions.reset({
-              index: 0,
-              routes: [{ name: 'Auth' as never }],
-            })
-          );
         },
       },
     ]);

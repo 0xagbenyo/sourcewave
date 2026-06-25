@@ -8,7 +8,6 @@ import {
   TextInput,
   Image,
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
@@ -18,12 +17,15 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NavigationProp } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { Colors } from '../constants/colors';
+import { appAlert as Alert } from '../services/appAlert';
 import { Spacing } from '../constants/spacing';
 import { Header } from '../components/Header';
 import {
   SubscriptionPaystackPending,
   type PendingPaystackPayment,
 } from '../components/SubscriptionPaystackPending';
+import { SubscriptionPaystackCardCheckout } from '../components/SubscriptionPaystackCardCheckout';
+import { PaystackSecureBadge } from '../components/PaystackSecureBadge';
 import {
   SOURCEWAVE_SUBSCRIPTION_PLANS,
   DEFAULT_SUBSCRIPTION_PLAN_ID,
@@ -37,6 +39,7 @@ import { useUserSession } from '../context/UserContext';
 import { useSubscription } from '../context/SubscriptionContext';
 import {
   initializePaystackCharge,
+  initializePaystackCardTransaction,
   mapProviderToPaystack,
   convertToPesewas,
   verifyPaystackPayment,
@@ -80,7 +83,7 @@ export const SubscriptionScreen: React.FC = () => {
   const { subscription, isActive, isLoading, refresh } = useSubscription();
 
   const [selectedPlanId, setSelectedPlanId] = useState<SubscriptionPlanId>(DEFAULT_SUBSCRIPTION_PLAN_ID);
-  const [selectedPayment, setSelectedPayment] = useState<'mtn' | 'telecel' | null>(null);
+  const [selectedPayment, setSelectedPayment] = useState<'mtn' | 'telecel' | 'card' | null>(null);
   const [paymentNumber, setPaymentNumber] = useState('');
   const [paying, setPaying] = useState(false);
   const [lastReference, setLastReference] = useState<string | null>(null);
@@ -90,9 +93,28 @@ export const SubscriptionScreen: React.FC = () => {
   const [promoValidating, setPromoValidating] = useState(false);
   const [promoError, setPromoError] = useState<string | null>(null);
   const [pendingPayment, setPendingPayment] = useState<PendingPaystackPayment | null>(null);
+  const [cardCheckout, setCardCheckout] = useState<{
+    authorizationUrl: string;
+    reference: string;
+    amountGhs: number;
+  } | null>(null);
+  const [cardCheckoutLoading, setCardCheckoutLoading] = useState(false);
+  const [cardCheckoutError, setCardCheckoutError] = useState<string | null>(null);
+  const [cardInitKey, setCardInitKey] = useState(0);
   const [paymentOtp, setPaymentOtp] = useState('');
   const [submittingOtp, setSubmittingOtp] = useState(false);
   const pendingPromoRef = useRef<string | null>(null);
+  const cardPromoRef = useRef<string | null>(null);
+  const cardSessionCacheRef = useRef<{
+    key: string;
+    promoCode: string | null;
+    session: { authorizationUrl: string; reference: string; amountGhs: number };
+  } | null>(null);
+  const cardInitPromiseRef = useRef<Promise<{
+    authorizationUrl: string;
+    reference: string;
+    amountGhs: number;
+  } | null> | null>(null);
 
   const selectedPlan = SOURCEWAVE_SUBSCRIPTION_PLANS.find((p) => p.id === selectedPlanId)!;
 
@@ -170,6 +192,110 @@ export const SubscriptionScreen: React.FC = () => {
       if (intervalId) clearInterval(intervalId);
     };
   }, [pendingPayment?.reference]);
+
+  const loadCardCheckout = useCallback(async (): Promise<{
+    authorizationUrl: string;
+    reference: string;
+    amountGhs: number;
+  } | null> => {
+    if (!user?.email) return null;
+
+    const sessionKey = `${selectedPlanId}-${checkoutPriceGhs}`;
+    const cached = cardSessionCacheRef.current;
+    if (cached?.key === sessionKey) {
+      return cached.session;
+    }
+
+    if (cardInitPromiseRef.current) {
+      return cardInitPromiseRef.current;
+    }
+
+    const promise = (async () => {
+      const reference = `SW-SUB-${selectedPlan.id}-${Date.now()}`;
+      try {
+        const init = await initializePaystackCardTransaction({
+          email: user.email,
+          amount: convertToPesewas(checkoutPriceGhs),
+          currency: 'GHS',
+          reference,
+          channels: ['card'],
+          metadata: {
+            plan_id: selectedPlan.id,
+            ...(appliedPromo?.code ? { promo_code: appliedPromo.code } : {}),
+          },
+        });
+        const ref = init.data.reference || reference;
+        const session = {
+          authorizationUrl: init.data.authorization_url,
+          reference: ref,
+          amountGhs: checkoutPriceGhs,
+        };
+        cardSessionCacheRef.current = {
+          key: sessionKey,
+          promoCode: appliedPromo?.code ?? null,
+          session,
+        };
+        cardPromoRef.current = appliedPromo?.code ?? null;
+        setLastReference(ref);
+        return session;
+      } catch {
+        return null;
+      } finally {
+        cardInitPromiseRef.current = null;
+      }
+    })();
+
+    cardInitPromiseRef.current = promise;
+    return promise;
+  }, [user?.email, selectedPlan.id, selectedPlanId, checkoutPriceGhs, appliedPromo?.code]);
+
+  useEffect(() => {
+    if (isActive || isLoading || !user?.email) return;
+    void loadCardCheckout();
+  }, [isActive, isLoading, user?.email, selectedPlanId, checkoutPriceGhs, loadCardCheckout]);
+
+  useEffect(() => {
+    if (selectedPayment !== 'card') {
+      setCardCheckoutError(null);
+      if (!cardCheckoutLoading) {
+        setCardCheckoutLoading(false);
+      }
+      return;
+    }
+    if (!user?.email) return;
+
+    let cancelled = false;
+    const sessionKey = `${selectedPlanId}-${checkoutPriceGhs}`;
+    const cached = cardSessionCacheRef.current;
+
+    if (cached?.key === sessionKey) {
+      setCardCheckout(cached.session);
+      setCardCheckoutLoading(false);
+      setCardCheckoutError(null);
+      cardPromoRef.current = cached.promoCode;
+      return;
+    }
+
+    setCardCheckoutLoading(true);
+    setCardCheckoutError(null);
+
+    void (async () => {
+      const session = await loadCardCheckout();
+      if (cancelled) return;
+      if (!session) {
+        setCardCheckout(null);
+        setCardCheckoutError(t('subscriptionPage.cardLoadFailed'));
+      } else {
+        setCardCheckout(session);
+        setCardCheckoutError(null);
+      }
+      setCardCheckoutLoading(false);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPayment, user?.email, selectedPlanId, checkoutPriceGhs, cardInitKey, loadCardCheckout, t]);
 
   const processPaystackChargeResponse = async (
     paystackResponse: PaystackChargeResponse,
@@ -290,6 +416,34 @@ export const SubscriptionScreen: React.FC = () => {
     Alert.alert(t('subscriptionPage.welcomeTitle'), body, [{ text: t('contactUs.ok'), onPress: () => navigation.goBack() }]);
   };
 
+  const resolvePromoForCheckout = async (): Promise<{
+    amountGhs: number;
+    promoCodeForErp: string | null;
+  } | null> => {
+    let promoForCheckout = appliedPromo;
+    const pendingCode = normalizePromoCode(promoCodeInput);
+    if (pendingCode && !appliedPromo) {
+      setPromoValidating(true);
+      try {
+        const client = getERPNextClient();
+        promoForCheckout = await client.resolveSubscriptionPromoCode(pendingCode, selectedPlan.priceGhs);
+        if (!promoForCheckout) {
+          Alert.alert(t('subscriptionPage.promoInvalidTitle'), t('subscriptionPage.promoInvalid'));
+          return null;
+        }
+        setAppliedPromo(promoForCheckout);
+      } catch {
+        Alert.alert(t('subscriptionPage.promoInvalidTitle'), t('subscriptionPage.promoInvalid'));
+        return null;
+      } finally {
+        setPromoValidating(false);
+      }
+    }
+
+    const amountGhs = promoForCheckout?.finalPriceGhs ?? selectedPlan.priceGhs;
+    return { amountGhs, promoCodeForErp: promoForCheckout?.code ?? null };
+  };
+
   const handlePay = async () => {
     if (!user?.email) {
       Alert.alert(t('subscriptionPage.signInRequired'), t('subscriptionPage.signInBody'));
@@ -299,6 +453,12 @@ export const SubscriptionScreen: React.FC = () => {
       Alert.alert(t('subscriptionPage.choosePayment'), t('subscriptionPage.choosePaymentBody'));
       return;
     }
+
+    const checkout = await resolvePromoForCheckout();
+    if (!checkout) return;
+
+    const { amountGhs, promoCodeForErp } = checkout;
+
     if (!paymentNumber.trim()) {
       Alert.alert(t('subscriptionPage.enterWallet'), t('subscriptionPage.enterWalletBody'));
       return;
@@ -310,28 +470,6 @@ export const SubscriptionScreen: React.FC = () => {
       return;
     }
 
-    let promoForCheckout = appliedPromo;
-    const pendingCode = normalizePromoCode(promoCodeInput);
-    if (pendingCode && !appliedPromo) {
-      setPromoValidating(true);
-      try {
-        const client = getERPNextClient();
-        promoForCheckout = await client.resolveSubscriptionPromoCode(pendingCode, selectedPlan.priceGhs);
-        if (!promoForCheckout) {
-          Alert.alert(t('subscriptionPage.promoInvalidTitle'), t('subscriptionPage.promoInvalid'));
-          return;
-        }
-        setAppliedPromo(promoForCheckout);
-      } catch {
-        Alert.alert(t('subscriptionPage.promoInvalidTitle'), t('subscriptionPage.promoInvalid'));
-        return;
-      } finally {
-        setPromoValidating(false);
-      }
-    }
-
-    const amountGhs = promoForCheckout?.finalPriceGhs ?? selectedPlan.priceGhs;
-    const promoCodeForErp = promoForCheckout?.code ?? null;
     const provider = selectedPayment;
 
     setPaying(true);
@@ -357,6 +495,26 @@ export const SubscriptionScreen: React.FC = () => {
       Alert.alert(t('subscriptionPage.paymentFailed'), msg);
     } finally {
       setPaying(false);
+    }
+  };
+
+  const handleCardPaymentRedirect = async (reference: string) => {
+    setVerifying(true);
+    try {
+      const v = await verifyPaystackPayment(reference);
+      if (v.data?.status === 'success') {
+        setCardCheckout(null);
+        await finishActivation(v.data.reference || reference, cardPromoRef.current);
+        setLastReference(null);
+        cardPromoRef.current = null;
+      } else {
+        Alert.alert(t('subscriptionPage.notCompleted'), v.data?.gateway_response || 'Status is not success yet.');
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Verification failed.';
+      Alert.alert(t('subscriptionPage.verifyFailed'), msg);
+    } finally {
+      setVerifying(false);
     }
   };
 
@@ -412,7 +570,8 @@ export const SubscriptionScreen: React.FC = () => {
     }
   };
 
-  const showPurchaseFooter = !isLoading && !isActive && !pendingPayment;
+  const showPurchaseFooter =
+    !isLoading && !isActive && !pendingPayment && selectedPayment !== 'card';
   const showActiveFooter = !isLoading && isActive && !!subscription;
 
   return (
@@ -464,7 +623,10 @@ export const SubscriptionScreen: React.FC = () => {
           ) : null}
 
           {!isLoading && !isActive ? (
-            <Text style={styles.mutedLead}>{t('subscriptionPage.inactiveLead')}</Text>
+            <>
+              <PaystackSecureBadge />
+              <Text style={styles.mutedLead}>{t('subscriptionPage.inactiveLead')}</Text>
+            </>
           ) : null}
 
           {!isLoading && !isActive ? (
@@ -641,8 +803,31 @@ export const SubscriptionScreen: React.FC = () => {
               </View>
 
               <Text style={styles.sectionLabel}>{t('subscriptionPage.sectionPay')}</Text>
-              <Text style={styles.sectionHint}>{t('subscriptionPage.paySubtitle')}</Text>
+              <Text style={styles.sectionHint}>
+                {selectedPayment === 'card'
+                  ? t('subscriptionPage.cardHint')
+                  : selectedPayment === 'mtn' || selectedPayment === 'telecel'
+                    ? t('subscriptionPage.paySubtitle')
+                    : t('subscriptionPage.choosePaymentBody')}
+              </Text>
               <View style={styles.group}>
+                <TouchableOpacity
+                  style={[styles.payProviderRow, selectedPayment === 'card' && styles.planRowSelected]}
+                  onPress={() => setSelectedPayment('card')}
+                  activeOpacity={0.75}
+                >
+                  <View style={styles.cardIconWrap}>
+                    <Ionicons name="card-outline" size={22} color={Colors.WINE} />
+                  </View>
+                  <Text style={[styles.rowTitle, styles.payProviderLabel]}>
+                    {t('subscriptionPage.cardLabel')}
+                  </Text>
+                  <Ionicons
+                    name={selectedPayment === 'card' ? 'checkmark-circle' : 'ellipse-outline'}
+                    size={22}
+                    color={selectedPayment === 'card' ? Colors.WINE : Colors.MEDIUM_GRAY}
+                  />
+                </TouchableOpacity>
                 {(['mtn', 'telecel'] as const).map((provider) => {
                   const selected = selectedPayment === provider;
                   return (
@@ -668,29 +853,62 @@ export const SubscriptionScreen: React.FC = () => {
                     </TouchableOpacity>
                   );
                 })}
-                <View style={[styles.fieldPad, styles.rowLast]}>
-                  <Text style={styles.fieldLabel}>{t('subscriptionPage.walletLabel')}</Text>
-                  <View style={styles.walletInputRow}>
-                    <View style={styles.walletPrefix}>
-                      <Text style={styles.walletPrefixText}>+233</Text>
+                {selectedPayment === 'mtn' || selectedPayment === 'telecel' ? (
+                  <View style={[styles.fieldPad, styles.rowLast]}>
+                    <Text style={styles.fieldLabel}>{t('subscriptionPage.walletLabel')}</Text>
+                    <View style={styles.walletInputRow}>
+                      <View style={styles.walletPrefix}>
+                        <Text style={styles.walletPrefixText}>+233</Text>
+                      </View>
+                      <TextInput
+                        style={styles.walletInput}
+                        placeholder={t('subscriptionPage.walletShortPlaceholder')}
+                        placeholderTextColor={Colors.TEXT_SECONDARY}
+                        keyboardType="phone-pad"
+                        value={paymentNumber}
+                        onChangeText={setPaymentNumber}
+                        maxLength={15}
+                      />
                     </View>
-                    <TextInput
-                      style={styles.walletInput}
-                      placeholder={t('subscriptionPage.walletShortPlaceholder')}
-                      placeholderTextColor={Colors.TEXT_SECONDARY}
-                      keyboardType="phone-pad"
-                      value={paymentNumber}
-                      onChangeText={setPaymentNumber}
-                      maxLength={15}
-                    />
+                    <Text style={styles.fieldHint}>{t('subscriptionPage.walletHint')}</Text>
                   </View>
-                  <Text style={styles.fieldHint}>{t('subscriptionPage.walletHint')}</Text>
-                </View>
+                ) : selectedPayment === 'card' ? (
+                  <View style={styles.rowLast}>
+                    {!user?.email ? (
+                      <View style={styles.fieldPad}>
+                        <Text style={styles.fieldHint}>{t('subscriptionPage.signInBody')}</Text>
+                      </View>
+                    ) : (
+                      <SubscriptionPaystackCardCheckout
+                        authorizationUrl={cardCheckout?.authorizationUrl}
+                        reference={cardCheckout?.reference}
+                        preparing={cardCheckoutLoading && !cardCheckout}
+                        error={cardCheckoutError}
+                        onRetry={
+                          cardCheckoutError
+                            ? () => {
+                                cardSessionCacheRef.current = null;
+                                cardInitPromiseRef.current = null;
+                                setCardInitKey((key) => key + 1);
+                              }
+                            : undefined
+                        }
+                        onPaymentRedirect={handleCardPaymentRedirect}
+                      />
+                    )}
+                  </View>
+                ) : (
+                  <View style={[styles.fieldPad, styles.rowLast]}>
+                    <Text style={styles.fieldHint}>{t('subscriptionPage.choosePaymentBody')}</Text>
+                  </View>
+                )}
               </View>
 
-              {!pendingPayment ? (
+              {!pendingPayment && selectedPayment !== 'card' ? (
                 <Text style={styles.footnote}>{t('subscriptionPage.footnote')}</Text>
               ) : null}
+
+              <PaystackSecureBadge />
 
               {pendingPayment ? (
                 <SubscriptionPaystackPending
@@ -747,6 +965,13 @@ export const SubscriptionScreen: React.FC = () => {
           </View>
         ) : null}
       </KeyboardAvoidingView>
+
+      {verifying ? (
+        <View style={styles.verifyingOverlay} pointerEvents="none">
+          <ActivityIndicator size="large" color={Colors.WINE} />
+          <Text style={styles.verifyingText}>{t('subscriptionPage.cardVerifying')}</Text>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 };
@@ -999,6 +1224,13 @@ const styles = StyleSheet.create({
     height: 32,
     marginRight: 12,
   },
+  cardIconWrap: {
+    width: 32,
+    height: 32,
+    marginRight: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   payProviderLabel: {
     flex: 1,
   },
@@ -1071,4 +1303,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   doneBtnText: { color: Colors.WHITE, fontSize: 16, fontWeight: '600' },
+  verifyingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    zIndex: 10,
+  },
+  verifyingText: {
+    fontSize: 15,
+    color: Colors.TEXT_SECONDARY,
+    fontWeight: '500',
+  },
 });

@@ -18,9 +18,10 @@ import { Spacing } from '../constants/spacing';
 import { useTranslation } from 'react-i18next';
 import { useUserSession } from '../context/UserContext';
 import { useSubscription } from '../context/SubscriptionContext';
+import { resetToAuthScreen } from '../navigation/rootNavigation';
 import { SUPPLIERS, fetchSuppliersFromErp, type Supplier } from '../data/suppliers';
 import { SourceWaveStackHeader } from '../components/SourceWaveStackHeader';
-import { SuppliersPremiumGateContent } from '../components/SuppliersPremiumGateContent';
+import { useAutoNavigateToSubscriptionWhenInactive } from '../hooks/useAutoNavigateToSubscriptionWhenInactive';
 import type { RootStackParamList } from '../types';
 
 export const SuppliersScreen: React.FC = () => {
@@ -33,6 +34,12 @@ export const SuppliersScreen: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useAutoNavigateToSubscriptionWhenInactive(navigation, {
+    email: user?.email,
+    isLoading: subscriptionLoading,
+    isActive,
+  });
 
   const load = useCallback(async () => {
     setError(null);
@@ -124,7 +131,7 @@ export const SuppliersScreen: React.FC = () => {
         <SafeAreaView style={[styles.safe, styles.gateSafe]} edges={['bottom']}>
           <Text style={styles.gateTitle}>{t('suppliersPremium.signInTitle')}</Text>
           <Text style={styles.gateBody}>{t('suppliersPremium.signInBody')}</Text>
-          <TouchableOpacity style={styles.gateCta} onPress={() => navigation.navigate('Auth')} activeOpacity={0.85}>
+          <TouchableOpacity style={styles.gateCta} onPress={() => resetToAuthScreen()} activeOpacity={0.85}>
             <Text style={styles.gateCtaText}>{t('suppliersPremium.signInCta')}</Text>
           </TouchableOpacity>
         </SafeAreaView>
@@ -161,7 +168,7 @@ export const SuppliersScreen: React.FC = () => {
       <View style={styles.root}>
         <SourceWaveStackHeader
           title={t('tabs.suppliers')}
-          subtitle={t('suppliersPremium.subtitle')}
+          subtitle={t('subscriptionPage.loading')}
           onBack={() => {
             if (navigation.canGoBack()) {
               navigation.goBack();
@@ -171,7 +178,10 @@ export const SuppliersScreen: React.FC = () => {
           }}
         />
         <SafeAreaView style={styles.safe} edges={['bottom']}>
-          <SuppliersPremiumGateContent onSubscribe={() => navigation.navigate('Subscription')} />
+          <View style={styles.centered}>
+            <ActivityIndicator size="large" color={Colors.WINE} />
+            <Text style={styles.loadingLabel}>{t('subscriptionPage.loading')}</Text>
+          </View>
         </SafeAreaView>
       </View>
     );
@@ -394,7 +404,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 8,
   },
-  tagDisabledText: { fontSize: 11, fontWeight: '700', color: '#B91C1C' },
+  tagDisabledText: { fontSize: 11, fontWeight: '700', color: Colors.WINE },
   markup: {
     marginTop: Spacing.SM,
     fontSize: 12,

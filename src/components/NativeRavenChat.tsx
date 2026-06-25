@@ -50,6 +50,8 @@ import {
   getRavenDmPeerUserId,
   enrichRavenChannelsWithPeerProfiles,
   fetchRavenUserProfilesByIds,
+  fetchRavenUsersDirectory,
+  mergeRavenUserProfileMaps,
   type RavenChannelRow,
   type RavenMessageRow,
   ravenMessageShowsReplyQuoteRow,
@@ -108,15 +110,15 @@ function formatTime(iso?: string): string {
   }
 }
 
-function channelListPeerSubtitle(c: RavenChannelRow, currentEmail?: string | null): string {
+function channelListPeerSubtitle(
+  c: RavenChannelRow,
+  currentEmail?: string | null,
+  profiles?: Record<string, { full_name?: string; user_image?: string | null }>
+): string {
   if (!isDmChannel(c)) return (c.type || '').trim();
   const peer = getRavenDmPeerUserId(c, currentEmail);
   if (!peer) return 'Direct message';
-  if (peer.includes('@')) {
-    const local = peer.split('@')[0];
-    if (local) return local.replace(/[._]/g, ' ').replace(/\b\w/g, (x: string) => x.toUpperCase());
-  }
-  return peer;
+  return resolveRavenUserDisplayName(peer, profiles);
 }
 
 export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp }) => {
@@ -325,6 +327,17 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   }, [messages]);
 
   useEffect(() => {
+    let cancelled = false;
+    void fetchRavenUsersDirectory().then((dir) => {
+      if (cancelled || Object.keys(dir).length === 0) return;
+      setRavenUserProfilesById((prev) => mergeRavenUserProfileMaps(dir, prev));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const owners = new Set<string>();
     for (const m of messages) {
       const o = (m.owner || '').trim();
@@ -336,25 +349,9 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       try {
         const profiles = await fetchRavenUserProfilesByIds([...owners]);
         if (cancelled) return;
-        setRavenUserProfilesById((prev) => {
-          const next = { ...prev };
-          for (const [id, p] of profiles) {
-            const lo = id.toLowerCase();
-            const prevP = next[id] ?? next[lo] ?? {};
-            const fn =
-              p.full_name != null && String(p.full_name).trim()
-                ? String(p.full_name).trim()
-                : prevP.full_name;
-            const img =
-              p.user_image != null && String(p.user_image).trim()
-                ? String(p.user_image).trim()
-                : prevP.user_image ?? null;
-            const entry = { full_name: fn, user_image: img };
-            next[id] = entry;
-            if (lo !== id) next[lo] = entry;
-          }
-          return next;
-        });
+        const patch: Record<string, { full_name?: string; user_image?: string | null }> = {};
+        for (const [id, p] of profiles) patch[id] = p;
+        setRavenUserProfilesById((prev) => mergeRavenUserProfileMaps(prev, patch));
       } catch {
         /* ignore */
       }
@@ -799,7 +796,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
               <RavenChannelPeerAvatar channel={channel} currentUserEmail={user?.email} size={32} variant="wine" />
             ) : null}
             <Text style={styles.channelBtnText} numberOfLines={1}>
-              {channel ? getRavenChannelDisplayLabel(channel, user?.email) : 'Channel'}
+              {channel ? getRavenChannelDisplayLabel(channel, user?.email, ravenUserProfilesById) : 'Channel'}
             </Text>
             <Ionicons name="chevron-down" size={18} color={Colors.WINE} />
           </TouchableOpacity>
@@ -1085,7 +1082,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     paddingHorizontal: 10,
     paddingVertical: 8,
-    backgroundColor: '#FCE4EC',
+    backgroundColor: Colors.BRAND_SOFT,
     borderRadius: 12,
   },
   replyStripText: { flex: 1 },
@@ -1192,7 +1189,7 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   channelUnreadBadgeText: { fontSize: 11, fontWeight: '800', color: Colors.WHITE },
-  channelRowActive: { backgroundColor: '#FAF0F2' },
+  channelRowActive: { backgroundColor: Colors.BRAND_SOFT },
   channelRowName: { fontSize: 16, fontWeight: '700', color: Colors.BLACK },
   channelRowMeta: { fontSize: 12, color: Colors.TEXT_SECONDARY, marginTop: 2 },
 });

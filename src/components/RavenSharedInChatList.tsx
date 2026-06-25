@@ -118,7 +118,7 @@ export const RavenSharedInChatList: React.FC<Props> = ({
               onPress={() => onRowPress(row)}
               activeOpacity={0.7}
             >
-              <View style={[styles.iconCircle, { backgroundColor: wine ? '#FCE4EC' : RavenLight.accentSoft }]}>
+              <View style={[styles.iconCircle, { backgroundColor: wine ? Colors.BRAND_SOFT : RavenLight.accentSoft }]}>
                 <Ionicons name={attachmentIconName(kind)} size={20} color={accent} />
               </View>
               <View style={styles.rowMain}>

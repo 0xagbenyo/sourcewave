@@ -29,6 +29,7 @@ import {
 import { Category } from '../types';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { withOtherItemOption, SourcingItemOption } from '../utils/sourcingItems';
+import { buildSourcingSalesOrderLines } from '../utils/sourcingSubmit';
 
 const hairline = StyleSheet.hairlineWidth;
 
@@ -254,18 +255,18 @@ export const SourcingRequestScreen: React.FC = () => {
       const deliveryDate = new Date(transactionDate);
       deliveryDate.setDate(deliveryDate.getDate() + 21);
 
-      const items = forms.map((form) => {
+      const orderLines = forms.map((form) => {
         const product = selectedProductFor(form) as SourcingItemOption;
-        const qty = parseInt(form.quantity, 10);
-        const rate = parseFloat(form.expectedRate);
         return {
-          item_code: product.itemCode || product.id,
-          qty,
-          rate,
-          amount: qty * rate,
+          product,
+          selectedCategoryId: form.selectedCategoryId,
+          quantity: parseInt(form.quantity, 10),
+          rate: parseFloat(form.expectedRate),
           description: form.itemDescription.trim(),
         };
       });
+
+      const items = await buildSourcingSalesOrderLines(client, orderLines, allGroups);
 
       const createdOrder = await client.createSalesOrder({
         customer: customerId,

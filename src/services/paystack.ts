@@ -1,23 +1,22 @@
 /**
  * Paystack Integration Service
  * 
- * This service handles Paystack mobile money payment integration.
- * Supports MTN Mobile Money and Vodafone Cash (Telecel) payments.
+ * This service handles Paystack payment integration.
+ * Supports card, MTN Mobile Money, and Vodafone Cash (Telecel) payments.
  */
 
 import axios, { AxiosError } from 'axios';
 
-// Paystack Configuration
+// Paystack Configuration — keys from env (see .env.example). Never commit live keys.
 const PAYSTACK_BASE_URL = 'https://api.paystack.co';
-const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || process.env.EXPO_PUBLIC_PAYSTACK_SECRET_KEY || '';
-const PAYSTACK_PUBLIC_KEY = process.env.PAYSTACK_PUBLIC_KEY || process.env.EXPO_PUBLIC_PAYSTACK_PUBLIC_KEY || '';
-
-if (!PAYSTACK_SECRET_KEY) {
-  console.warn('Warning: PAYSTACK_SECRET_KEY is not set. Payment processing will not work.');
-}
-if (!PAYSTACK_PUBLIC_KEY) {
-  console.warn('Warning: PAYSTACK_PUBLIC_KEY is not set.');
-}
+const PAYSTACK_SECRET_KEY =
+  process.env.EXPO_PUBLIC_PAYSTACK_SECRET_KEY?.trim() ||
+  process.env.PAYSTACK_SECRET_KEY?.trim() ||
+  '';
+const PAYSTACK_PUBLIC_KEY =
+  process.env.EXPO_PUBLIC_PAYSTACK_PUBLIC_KEY?.trim() ||
+  process.env.PAYSTACK_PUBLIC_KEY?.trim() ||
+  '';
 
 /** Sent on every charge so Paystack transactions can be filtered by app. */
 export const PAYSTACK_PAYMENT_SOURCE = 'sourcewave';
@@ -153,6 +152,111 @@ export interface PaystackVerifyResponse {
     reference: string;
     gateway_response: string;
   };
+}
+
+export interface PaystackInitializeRequest {
+  email: string;
+  amount: number;
+  currency: string;
+  reference?: string;
+  channels?: string[];
+  /** Where Paystack redirects after card payment (detected in WebView). */
+  callback_url?: string;
+  metadata?: Record<string, string>;
+}
+
+export interface PaystackInitializeResponse {
+  status: boolean;
+  message: string;
+  data: {
+    authorization_url: string;
+    access_code: string;
+    reference: string;
+  };
+}
+
+/**
+ * Initialize a Paystack card checkout (opens hosted payment page in WebView).
+ */
+export const initializePaystackCardTransaction = async (
+  request: PaystackInitializeRequest
+): Promise<PaystackInitializeResponse> => {
+  try {
+    const { metadata: extraMetadata, ...body } = request;
+    const payload = {
+      ...body,
+      channels: request.channels ?? ['card'],
+      callback_url: request.callback_url ?? 'https://standard.paystack.co/close',
+      metadata: {
+        source: PAYSTACK_PAYMENT_SOURCE,
+        ...extraMetadata,
+      },
+    };
+
+    const response = await axios.post<PaystackInitializeResponse>(
+      `${PAYSTACK_BASE_URL}/transaction/initialize`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 30000,
+      }
+    );
+
+    if (!response.data?.status) {
+      throw new Error(response.data?.message || 'Could not start card checkout.');
+    }
+    if (!response.data.data?.authorization_url) {
+      throw new Error('Paystack did not return a checkout URL.');
+    }
+
+    return response.data;
+  } catch (error) {
+    const axiosError = error as AxiosError<PaystackInitializeResponse | { message?: string }>;
+    if (error instanceof Error && !axiosError.response && !axiosError.request) {
+      throw error;
+    }
+    if (axiosError.response?.data && typeof axiosError.response.data === 'object') {
+      const data = axiosError.response.data as PaystackInitializeResponse | { message?: string };
+      if ('message' in data && data.message) {
+        throw new Error(data.message);
+      }
+    }
+    if (axiosError.request) {
+      throw new Error('Network error: Unable to reach Paystack. Please check your internet connection.');
+    }
+    throw new Error(axiosError.message || 'Failed to initialize card payment');
+  }
+};
+
+/** Extract payment reference from Paystack redirect URLs. */
+export function extractPaystackReferenceFromUrl(url: string): string | null {
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.searchParams.get('reference') || parsed.searchParams.get('trxref');
+  } catch {
+    const match = trimmed.match(/[?&](?:reference|trxref)=([^&]+)/i);
+    return match?.[1] ? decodeURIComponent(match[1]) : null;
+  }
+}
+
+/** True only for Paystack post-payment redirects — not the hosted checkout entry page. */
+export function isPaystackCheckoutCompleteUrl(url: string): boolean {
+  const lower = url.trim().toLowerCase();
+  if (!lower) return false;
+  if (lower.includes('standard.paystack.co/close')) return true;
+  if (lower.includes('checkout.paystack.com/close')) return true;
+  if (lower.includes('checkout.paystack.com/success')) return true;
+
+  const ref = extractPaystackReferenceFromUrl(url);
+  if (!ref) return false;
+  if (lower.includes('/callback')) return true;
+  if (lower.includes('trxref=')) return true;
+  return false;
 }
 
 /**

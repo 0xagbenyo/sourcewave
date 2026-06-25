@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, ReactNode } from 'react';
 import { clearFrappeWebCredentials } from '../services/sessionCredentials';
 import { clearFrappeRavenSession } from '../services/frappeRavenSession';
 import { clearRavenMessagingLocalCache } from '../utils/ravenMessagingLocalCache';
+import { resetToAuthScreen } from '../navigation/rootNavigation';
 
 /** Buyer = retail customer flow; Supplier = linked Supplier portal (buying docs + chat). */
 export type AppMode = 'buyer' | 'supplier';
@@ -40,6 +41,7 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     clearFrappeRavenSession();
     void clearFrappeWebCredentials();
     void clearRavenMessagingLocalCache(email);
+    resetToAuthScreen();
   };
 
   return (

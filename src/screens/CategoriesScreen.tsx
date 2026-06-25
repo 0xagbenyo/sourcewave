@@ -22,21 +22,9 @@ import { useTranslation } from 'react-i18next';
 import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 import { getERPNextClient } from '../services/erpnext';
 import { mapERPItemToProduct } from '../services/mappers';
-import { collectDescendantItemGroupIds, isReservedItemGroupName } from '../utils/itemGroup';
+import { collectDescendantItemGroupIds, isItemGroupTopLevelParentRow, isReservedItemGroupRow } from '../utils/itemGroup';
 
 const { width } = Dimensions.get('window');
-
-const isTopLevelParentGroup = (category: any): boolean => {
-  const id = String(category?.id ?? '').trim();
-  const label = String(category?.name ?? '').trim();
-  if (isReservedItemGroupName(id) || isReservedItemGroupName(label)) return false;
-  const isGroup = Number(category?.isGroup ?? category?.is_group) === 1;
-  const parent = String(category?.parentItemGroup ?? category?.parent_item_group ?? '').trim();
-  return (
-    isGroup &&
-    (parent === '' || parent === 'All Item Groups' || parent === 'All Items Group')
-  );
-};
 
 // Subcategory row: flat horizontal image bar + title (no circles).
 const AnimatedCategoryItem: React.FC<{
@@ -125,10 +113,23 @@ export const CategoriesScreen: React.FC = () => {
   const [childImages, setChildImages] = useState<Record<string, string>>({});
   const preselectedParent = route?.params?.selectedParent;
 
-  const parentOnly = useMemo(
-    () => parentCategories?.filter(isTopLevelParentGroup) || [],
-    [parentCategories]
-  );
+  const parentOnly = useMemo(() => {
+    const all = parentCategories || [];
+    return all.filter((category) =>
+      isItemGroupTopLevelParentRow(
+        {
+          name: category.id,
+          item_group_name: category.name,
+          is_group: category.isGroup,
+          parent_item_group: category.parentId,
+        },
+        all.map((cat) => ({
+          name: cat.id,
+          parent_item_group: cat.parentId,
+        }))
+      )
+    );
+  }, [parentCategories]);
 
   const selectedParentName = useMemo(() => {
     if (!selectedParentId) return '';
@@ -167,11 +168,9 @@ export const CategoriesScreen: React.FC = () => {
       const response = await client.getItemGroups();
 
       const children = response.filter((group: any) => {
+        if (isReservedItemGroupRow(group)) return false;
         const parent = String(group.parent_item_group || '').trim();
-        return (
-          (parent === parentId || (!!parentName && parent === parentName)) &&
-          group.name !== 'All Items Group'
-        );
+        return parent === parentId || (!!parentName && parent === parentName);
       });
       setChildCategories(children);
 

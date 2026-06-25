@@ -1,11 +1,12 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { ErpAuthenticatedImage } from './ErpAuthenticatedImage';
-import { getRavenChannelDisplayLabel, type RavenChannelRow } from '../services/ravenNativeApi';
-import { isDmChannel, initialsFromUserId, pastelAvatarBg } from '../utils/ravenChatUi';
-import { RavenLight } from '../constants/ravenLightTheme';
 import { Colors } from '../constants/colors';
+import { ErpAuthenticatedImage } from './ErpAuthenticatedImage';
+import { getRavenChannelDisplayLabel, getRavenDmPeerUserId, type RavenChannelRow } from '../services/ravenNativeApi';
+import { isDmChannel, initialsFromUserId, pastelAvatarBg } from '../utils/ravenChatUi';
+import type { RavenUserDisplayProfiles } from '../utils/ravenSearchPreview';
+import { RavenLight } from '../constants/ravenLightTheme';
 
 export type RavenChannelPeerAvatarProps = {
   channel: RavenChannelRow;
@@ -13,6 +14,7 @@ export type RavenChannelPeerAvatarProps = {
   size?: number;
   /** `raven` = light Raven UI; `wine` = NativeRavenChat bar. */
   variant?: 'raven' | 'wine';
+  userDisplayProfiles?: RavenUserDisplayProfiles;
 };
 
 /**
@@ -23,12 +25,23 @@ export const RavenChannelPeerAvatar: React.FC<RavenChannelPeerAvatarProps> = ({
   currentUserEmail,
   size = 36,
   variant = 'raven',
+  userDisplayProfiles,
 }) => {
   const s = size;
   const dm = isDmChannel(channel);
-  const label = getRavenChannelDisplayLabel(channel, currentUserEmail);
+  const label = getRavenChannelDisplayLabel(channel, currentUserEmail, userDisplayProfiles);
   const seed = (channel.peer_user_id || channel.channel_name || channel.name || label || '?').trim();
-  const img = channel.peer_user_image != null ? String(channel.peer_user_image).trim() : '';
+  const peerId = dm ? getRavenDmPeerUserId(channel, currentUserEmail) : null;
+  const profileRecord = userDisplayProfiles as
+    | Record<string, { user_image?: string | null }>
+    | undefined;
+  const profileImg =
+    peerId && profileRecord
+      ? profileRecord[peerId]?.user_image ?? profileRecord[peerId.toLowerCase()]?.user_image
+      : null;
+  const img =
+    (channel.peer_user_image != null ? String(channel.peer_user_image).trim() : '') ||
+    (profileImg != null ? String(profileImg).trim() : '');
 
   if (dm) {
     const initialsSource = label || seed;
@@ -66,7 +79,7 @@ export const RavenChannelPeerAvatar: React.FC<RavenChannelPeerAvatarProps> = ({
           width: s,
           height: s,
           borderRadius: s / 2,
-          backgroundColor: isWine ? '#FAF0F2' : RavenLight.canvas,
+          backgroundColor: isWine ? Colors.BRAND_SOFT : RavenLight.canvas,
         },
       ]}
     >

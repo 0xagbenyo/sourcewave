@@ -3,6 +3,7 @@ import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppNavigator } from './src/navigation/AppNavigator';
+import { AppAlertHost } from './src/components/AppAlertHost';
 import { initializeERPNext, initializeNetworkAwareTimeout } from './src/services/erpnext';
 import { UserProvider } from './src/context/UserContext';
 import { RavenUnreadProvider } from './src/context/RavenUnreadContext';
@@ -27,6 +28,7 @@ export default function App() {
           <SafeAreaProvider>
             <StatusBar style="dark" />
             <AppNavigator />
+            <AppAlertHost />
           </SafeAreaProvider>
         </SubscriptionProvider>
       </RavenUnreadProvider>

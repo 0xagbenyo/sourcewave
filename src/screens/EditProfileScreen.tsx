@@ -36,6 +36,7 @@ export const EditProfileScreen: React.FC = () => {
   const { t } = useTranslation();
   const navigation = useNavigation();
   const { user } = useUserSession();
+  const isSupplierUser = user?.appMode === 'supplier' || !!user?.supplierId?.trim();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
@@ -338,21 +339,25 @@ export const EditProfileScreen: React.FC = () => {
             </View>
           </View>
 
-          <Text style={styles.sectionLabel}>{t('editProfile.sectionAddresses')}</Text>
-          <View style={styles.group}>
-            <TouchableOpacity
-              style={styles.rowNav}
-              onPress={() => nav.navigate('AddressBook')}
-              activeOpacity={0.75}
-            >
-              <Ionicons name="location-outline" size={22} color={Colors.WINE} style={styles.rowIcon} />
-              <View style={styles.rowMain}>
-                <Text style={styles.rowTitle}>{t('editProfile.addressesTitle')}</Text>
-                <Text style={styles.rowSubtitle}>{t('editProfile.addressesSub')}</Text>
+          {!isSupplierUser ? (
+            <>
+              <Text style={styles.sectionLabel}>{t('editProfile.sectionAddresses')}</Text>
+              <View style={styles.group}>
+                <TouchableOpacity
+                  style={styles.rowNav}
+                  onPress={() => nav.navigate('AddressBook')}
+                  activeOpacity={0.75}
+                >
+                  <Ionicons name="location-outline" size={22} color={Colors.WINE} style={styles.rowIcon} />
+                  <View style={styles.rowMain}>
+                    <Text style={styles.rowTitle}>{t('editProfile.addressesTitle')}</Text>
+                    <Text style={styles.rowSubtitle}>{t('editProfile.addressesSub')}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={Colors.TEXT_SECONDARY} />
+                </TouchableOpacity>
               </View>
-              <Ionicons name="chevron-forward" size={18} color={Colors.TEXT_SECONDARY} />
-            </TouchableOpacity>
-          </View>
+            </>
+          ) : null}
 
           <View style={{ height: 24 }} />
         </ScrollView>

@@ -17,8 +17,27 @@ export function isReservedItemGroupRow(group: any): boolean {
 
 export const isTopLevelItemGroupParent = (parent: string | undefined | null): boolean => {
 	const p = String(parent ?? '').trim();
-	return p === '' || p === 'All Item Groups' || p === 'All Items Group';
+	if (!p) return true;
+	return isReservedItemGroupName(p);
 };
+
+/** Top-level parents for the Categories sidebar (and similar browse UIs). */
+export function isItemGroupTopLevelParentRow(group: any, allGroups?: any[]): boolean {
+	if (isReservedItemGroupRow(group)) return false;
+
+	const parent = String(group?.parent_item_group ?? group?.parentItemGroup ?? '').trim();
+	if (!isTopLevelItemGroupParent(parent)) return false;
+
+	if (Number(group?.is_group ?? group?.isGroup) === 1) return true;
+
+	const id = String(group?.name ?? group?.id ?? '').trim();
+	if (!id || !allGroups?.length) return false;
+
+	return allGroups.some((row) => {
+		if (isReservedItemGroupRow(row)) return false;
+		return String(row?.parent_item_group || '').trim() === id;
+	});
+}
 
 /** Parents and their subcategories for sourcing item-category picker. */
 export const buildSourcingCategoryOptions = (allGroups: any[]): ItemGroupOption[] => {

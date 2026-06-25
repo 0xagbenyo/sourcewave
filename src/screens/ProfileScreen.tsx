@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,6 +21,7 @@ import { useSubscription } from '../context/SubscriptionContext';
 import { useOrders } from '../hooks/erpnext';
 import { getERPNextClient } from '../services/erpnext';
 import { encodeErpFileUrl } from '../utils/erpImageUrl';
+import { appAlert as Alert } from '../services/appAlert';
 
 const hairline = StyleSheet.hairlineWidth;
 
@@ -142,10 +142,6 @@ export const ProfileScreen: React.FC = () => {
         style: 'destructive',
         onPress: () => {
           clearUser();
-          (navigation as any).reset({
-            index: 0,
-            routes: [{ name: 'Auth' }],
-          });
         },
       },
     ]);

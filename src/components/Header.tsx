@@ -9,7 +9,6 @@ import {
   Pressable,
   ScrollView,
   Dimensions,
-  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -107,12 +106,9 @@ export const Header: React.FC<HeaderProps> = ({
     [closeMenu]
   );
 
-  const showSuppliersPremiumMenuAlert = useCallback(() => {
-    Alert.alert(t('suppliersPremium.menuBlockedTitle'), t('suppliersPremium.menuBlockedBody'), [
-      { text: t('settings.cancel'), style: 'cancel' },
-      { text: t('suppliersPremium.subscribeCta'), onPress: () => nav.navigate('Subscription') },
-    ]);
-  }, [nav, t]);
+  const goSubscriptionForPremium = useCallback(() => {
+    nav.navigate('Subscription');
+  }, [nav]);
 
   const toggleGroup = useCallback((key: string) => {
     setOpenGroups((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -168,7 +164,7 @@ export const Header: React.FC<HeaderProps> = ({
                 return;
               }
               if (!subscriptionLoading && !subscriptionActive) {
-                showSuppliersPremiumMenuAlert();
+                goSubscriptionForPremium();
                 return;
               }
               nav.navigate('Main', { screen: 'Suppliers' });
@@ -184,7 +180,7 @@ export const Header: React.FC<HeaderProps> = ({
                 return;
               }
               if (!subscriptionLoading && !subscriptionActive) {
-                showSuppliersPremiumMenuAlert();
+                goSubscriptionForPremium();
                 return;
               }
               nav.navigate('RavenChatInbox');
@@ -211,7 +207,7 @@ export const Header: React.FC<HeaderProps> = ({
         onPress: () => nav.navigate('Main', { screen: 'Profile' }),
       },
     ],
-    [nav, t, user?.email, subscriptionActive, subscriptionLoading, showSuppliersPremiumMenuAlert]
+    [nav, t, user?.email, subscriptionActive, subscriptionLoading, goSubscriptionForPremium]
   );
 
   const menuItems = useMemo(() => {
@@ -234,7 +230,7 @@ export const Header: React.FC<HeaderProps> = ({
       return;
     }
     if (!subscriptionLoading && !subscriptionActive) {
-      showSuppliersPremiumMenuAlert();
+      goSubscriptionForPremium();
       return;
     }
     nav.navigate('RavenChatInbox');

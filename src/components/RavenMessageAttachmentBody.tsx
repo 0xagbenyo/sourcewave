@@ -118,7 +118,7 @@ function themeOf(mine: boolean, variant: RavenMessageAttachmentVariant): Theme {
         border: 'rgba(255,255,255,0.35)',
       }
     : {
-        extBg: '#FCE4EC',
+        extBg: Colors.BRAND_SOFT,
         extText: Colors.WINE,
         name: Colors.BLACK,
         border: '#E8E8E8',

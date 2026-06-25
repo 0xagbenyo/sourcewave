@@ -8,7 +8,6 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -18,8 +17,10 @@ import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { getERPNextClient } from '../services/erpnext';
 import { OTP_PURPOSE_SIGN_UP } from '../constants/otpPurposes';
+import { appAlert as Alert } from '../services/appAlert';
 import { userFacingError } from '../utils/userFacingError';
 import { hasAcceptedLegalTerms } from '../legal/legalAcceptance';
+import { useOtpResendCooldown } from '../hooks/useOtpResendCooldown';
 
 export const RegisterScreen: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -34,9 +35,11 @@ export const RegisterScreen: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [resendingOtp, setResendingOtp] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const navigation = useNavigation();
   const { t } = useTranslation();
+  const { secondsLeft, canResend, startCooldown, resetCooldown } = useOtpResendCooldown();
 
   useFocusEffect(
     useCallback(() => {
@@ -117,11 +120,31 @@ export const RegisterScreen: React.FC = () => {
       const client = getERPNextClient();
       await client.sendOtp({ email: email.trim(), purpose: OTP_PURPOSE_SIGN_UP });
       setOtpStep('verify');
+      startCooldown();
     } catch (error: unknown) {
       const msg = userFacingError(error, t('register.alerts.otpSendFailed'));
       Alert.alert(t('register.alerts.registrationError'), msg);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleResendOtp = async () => {
+    if (!canResend || resendingOtp) return;
+
+    setResendingOtp(true);
+    setErrors({});
+    try {
+      const client = getERPNextClient();
+      await client.sendOtp({ email: email.trim(), purpose: OTP_PURPOSE_SIGN_UP });
+      setOtpCode('');
+      startCooldown();
+      Alert.alert(t('register.alerts.otpResentTitle'), t('register.alerts.otpResentBody'));
+    } catch (error: unknown) {
+      const msg = userFacingError(error, t('register.alerts.otpSendFailed'));
+      Alert.alert(t('register.alerts.registrationError'), msg);
+    } finally {
+      setResendingOtp(false);
     }
   };
 
@@ -209,6 +232,7 @@ export const RegisterScreen: React.FC = () => {
       setShowPassword(false);
       setShowConfirmPassword(false);
       setErrors({});
+      resetCooldown();
       return;
     }
     navigation.goBack();
@@ -406,8 +430,33 @@ export const RegisterScreen: React.FC = () => {
                   </Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity onPress={() => setOtpStep('details')} style={styles.textLinkWrap}>
+                <TouchableOpacity
+                  onPress={() => {
+                    resetCooldown();
+                    setOtpStep('details');
+                  }}
+                  style={styles.textLinkWrap}
+                >
                   <Text style={styles.textLink}>{t('register.backEditDetails')}</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={handleResendOtp}
+                  style={styles.textLinkWrap}
+                  disabled={isLoading || resendingOtp || !canResend}
+                >
+                  <Text
+                    style={[
+                      styles.textLink,
+                      (isLoading || resendingOtp || !canResend) && styles.textLinkDisabled,
+                    ]}
+                  >
+                    {resendingOtp
+                      ? t('register.sending')
+                      : canResend
+                        ? t('register.resendOtp')
+                        : t('register.resendOtpIn', { seconds: secondsLeft })}
+                  </Text>
                 </TouchableOpacity>
               </>
             )}
@@ -559,6 +608,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.ELECTRIC_BLUE,
     fontWeight: '500',
+  },
+  textLinkDisabled: {
+    opacity: 0.5,
   },
   signinSection: {
     flexDirection: 'row',

@@ -18,6 +18,69 @@ import { plainTextFromMaybeHtml } from '../utils/chatPlainText';
 import { sanitizeRavenWebMessageFileUrl } from '../utils/ravenFileUrl';
 import { prepareLocalFileUriForUpload } from '../utils/ravenUploadFilePrep';
 import { getERPNextClient } from './erpnext';
+import {
+  resolveRavenUserDisplayName,
+  type RavenUserDisplayProfiles,
+} from '../utils/ravenSearchPreview';
+
+export type RavenUserProfileRecord = {
+  full_name?: string;
+  user_image?: string | null;
+};
+
+export type RavenUserProfileMap = Record<string, RavenUserProfileRecord>;
+
+/** Merge profile maps (later maps do not wipe earlier `full_name` / `user_image`). */
+export function mergeRavenUserProfileMaps(...maps: RavenUserProfileMap[]): RavenUserProfileMap {
+  const out: RavenUserProfileMap = {};
+  const put = (id: string, patch: RavenUserProfileRecord) => {
+    const k = id.trim();
+    if (!k) return;
+    const prev = out[k] ?? out[k.toLowerCase()] ?? {};
+    const fn =
+      patch.full_name != null && String(patch.full_name).trim()
+        ? String(patch.full_name).trim()
+        : prev.full_name;
+    const img =
+      patch.user_image != null && String(patch.user_image).trim()
+        ? String(patch.user_image).trim()
+        : prev.user_image ?? null;
+    const entry = { full_name: fn, user_image: img };
+    out[k] = entry;
+    const lo = k.toLowerCase();
+    if (lo !== k) out[lo] = entry;
+  };
+  for (const map of maps) {
+    for (const [id, p] of Object.entries(map)) put(id, p);
+  }
+  return out;
+}
+
+/**
+ * Same source as Raven web `UserListProvider` — `raven.api.raven_users.get_list`.
+ * Keys are **Raven User.name** (also used as `peer_user_id` on DM channels).
+ */
+export async function fetchRavenUsersDirectory(): Promise<RavenUserProfileMap> {
+  const out: RavenUserProfileMap = {};
+  try {
+    const data = await ravenCallFrappeMethod('raven.api.raven_users.get_list');
+    const rows = Array.isArray(data?.message) ? data.message : [];
+    for (const r of rows as { name?: string; full_name?: string; user_image?: string | null }[]) {
+      const name = r?.name != null ? String(r.name).trim() : '';
+      if (!name) continue;
+      const entry: RavenUserProfileRecord = {
+        full_name: r.full_name != null ? String(r.full_name).trim() : undefined,
+        user_image: r.user_image ?? null,
+      };
+      out[name] = entry;
+      const nl = name.toLowerCase();
+      if (nl !== name) out[nl] = entry;
+    }
+  } catch (e) {
+    console.warn(LOG, 'fetchRavenUsersDirectory', e);
+  }
+  return out;
+}
 
 const LOG = '[ravenNativeApi]';
 
@@ -688,9 +751,15 @@ function peerFromDmChannelName(channelName: string | undefined, meLower: string)
 }
 
 /**
- * Show a person-friendly title for DMs (full name or email local-part); keep real channel names for groups.
+ * DM / group channel title — mirrors Raven web:
+ * - DMs: **Raven User.full_name** (user directory), then enriched channel field, then id fallback
+ * - Groups: `channel_name`
  */
-export function getRavenChannelDisplayLabel(c: RavenChannelRow, currentUserEmail?: string | null): string {
+export function getRavenChannelDisplayLabel(
+  c: RavenChannelRow,
+  currentUserEmail?: string | null,
+  profiles?: RavenUserDisplayProfiles
+): string {
   const me = (currentUserEmail || '').trim().toLowerCase();
 
   if (isTruthy(c.is_self_message)) {
@@ -698,14 +767,25 @@ export function getRavenChannelDisplayLabel(c: RavenChannelRow, currentUserEmail
   }
 
   if (isDMChannelRow(c)) {
+    const peer =
+      getRavenDmPeerUserId(c, currentUserEmail) ||
+      (c.peer_user_id != null ? String(c.peer_user_id).trim() : '') ||
+      peerFromDmChannelName(c.channel_name, me) ||
+      '';
+
+    if (peer && peer.toLowerCase() !== me) {
+      const fromDirectory = resolveRavenUserDisplayName(peer, profiles);
+      const shortPeer = userIdToShortLabel(peer);
+      if (fromDirectory !== shortPeer) return fromDirectory;
+
+      const fn = c.full_name != null ? String(c.full_name).trim() : '';
+      if (fn) return fn;
+
+      return resolveRavenUserDisplayName(peer, profiles);
+    }
+
     const fn = c.full_name != null ? String(c.full_name).trim() : '';
     if (fn) return fn;
-    const peer = c.peer_user_id != null ? String(c.peer_user_id).trim() : '';
-    if (peer && peer.toLowerCase() !== me) {
-      return userIdToShortLabel(peer);
-    }
-    const fromName = peerFromDmChannelName(c.channel_name, me);
-    if (fromName) return userIdToShortLabel(fromName);
     return userIdToShortLabel(c.channel_name || c.name || 'DM');
   }
 
@@ -770,15 +850,29 @@ export async function fetchRavenUserProfilesByIds(
   for (let i = 0; i < unique.length; i += chunkSize) {
     const chunk = unique.slice(i, i + chunkSize);
     try {
-      const ravenRows = await ravenListResourceRows('Raven User', {
-        filters: [['user', 'in', chunk]],
-        fields: ['user', 'full_name', 'user_image'],
-        limit_page_length: chunk.length,
-      });
-      for (const r of ravenRows as { user?: string; full_name?: string; user_image?: string | null }[]) {
-        const u = r?.user != null ? String(r.user).trim() : '';
-        if (!u) continue;
-        putEntry(u, { full_name: r.full_name, user_image: r.user_image });
+      const [byUser, byName] = await Promise.all([
+        ravenListResourceRows('Raven User', {
+          filters: [['user', 'in', chunk]],
+          fields: ['name', 'user', 'full_name', 'user_image'],
+          limit_page_length: chunk.length,
+        }),
+        ravenListResourceRows('Raven User', {
+          filters: [['name', 'in', chunk]],
+          fields: ['name', 'user', 'full_name', 'user_image'],
+          limit_page_length: chunk.length,
+        }),
+      ]);
+      for (const r of [...byUser, ...byName] as {
+        name?: string;
+        user?: string;
+        full_name?: string;
+        user_image?: string | null;
+      }[]) {
+        const docName = r?.name != null ? String(r.name).trim() : '';
+        const linkedUser = r?.user != null ? String(r.user).trim() : '';
+        const patch = { full_name: r.full_name, user_image: r.user_image };
+        if (docName) putEntry(docName, patch);
+        if (linkedUser) putEntry(linkedUser, patch);
       }
     } catch (e) {
       console.warn(LOG, 'fetchRavenUserProfilesByIds Raven User', e);
@@ -833,7 +927,7 @@ export async function enrichRavenChannelsWithPeerProfiles(
     const img = p.user_image != null ? String(p.user_image).trim() : '';
     return {
       ...c,
-      full_name: existingName || fetchedName || c.full_name,
+      full_name: fetchedName || existingName || c.full_name,
       peer_user_image: img || c.peer_user_image,
     };
   });
@@ -963,8 +1057,10 @@ async function resolveRavenSessionUserNameHint(hint?: string | null): Promise<st
  * Falls back to `Raven Channel Member` → `Raven Channel` when those methods are unavailable.
  */
 export async function listRavenChannelsForSessionUser(
-  currentUserEmail?: string | null
+  currentUserEmail?: string | null,
+  opts?: { enrichProfiles?: boolean }
 ): Promise<RavenChannelRow[]> {
+  const enrichProfiles = opts?.enrichProfiles !== false;
   try {
     let data = await ravenCallFrappeMethod('raven.api.raven_channel.get_channels', {
       hide_archived: true,
@@ -976,7 +1072,10 @@ export async function listRavenChannelsForSessionUser(
       });
       list = channelsFromMethodResponse(data);
     }
-    if (list.length > 0) return finalizeChannelListWithProfiles(list, currentUserEmail);
+    if (list.length > 0) {
+      if (!enrichProfiles) return list;
+      return finalizeChannelListWithProfiles(list, currentUserEmail);
+    }
   } catch (e) {
     console.warn(LOG, 'listRavenChannelsForSessionUser get_channels failed', e);
   }
@@ -1024,7 +1123,7 @@ export async function listRavenChannelsForSessionUser(
       });
       out.push(...(rows as RavenChannelRow[]));
     }
-    return finalizeChannelListWithProfiles(out, currentUserEmail);
+    return enrichProfiles ? finalizeChannelListWithProfiles(out, currentUserEmail) : out;
   } catch (e2) {
     console.warn(LOG, 'listRavenChannelsForSessionUser Raven Channel Member fallback', e2);
     return [];

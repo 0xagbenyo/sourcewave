@@ -460,7 +460,7 @@ const styles = StyleSheet.create({
     borderColor: '#E8E8E8',
     marginRight: 6,
   },
-  filterChipOn: { backgroundColor: 'rgba(128,0,32,0.1)', borderColor: Colors.WINE },
+  filterChipOn: { backgroundColor: Colors.BRAND_SOFT, borderColor: Colors.WINE },
   filterChipText: { fontSize: 11, fontWeight: '700', color: '#546E7A' },
   filterChipTextOn: { color: Colors.WINE },
   flat: { flex: 1 },

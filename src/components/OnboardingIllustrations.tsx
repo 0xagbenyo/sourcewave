@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { Colors } from '../constants/colors';
 
 interface IllustrationProps {
   size?: number;
@@ -9,7 +10,7 @@ interface IllustrationProps {
 
 export const FindFavoriteItemsIllustration: React.FC<IllustrationProps> = ({ 
   size = 200, 
-  color = '#FF6B6B' 
+  color = Colors.WINE_LIGHT
 }) => (
   <View style={[styles.container, { width: size, height: size }]}>
     {/* Main Shopping Cart */}
@@ -44,7 +45,7 @@ export const FindFavoriteItemsIllustration: React.FC<IllustrationProps> = ({
 
 export const EasyPaymentIllustration: React.FC<IllustrationProps> = ({ 
   size = 200, 
-  color = '#FF6B6B' 
+  color = Colors.WINE_LIGHT
 }) => (
   <View style={[styles.container, { width: size, height: size }]}>
     {/* Main Woman */}
@@ -82,7 +83,7 @@ export const EasyPaymentIllustration: React.FC<IllustrationProps> = ({
 
 export const ProductDeliveryIllustration: React.FC<IllustrationProps> = ({ 
   size = 200, 
-  color = '#FF6B6B' 
+  color = Colors.WINE_LIGHT
 }) => (
   <View style={[styles.container, { width: size, height: size }]}>
     {/* Main Scooter */}

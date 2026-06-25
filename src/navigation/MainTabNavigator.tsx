@@ -1,5 +1,4 @@
 import React, { useCallback, useMemo } from 'react';
-import { Alert } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -13,6 +12,7 @@ import { SourcingRequestScreen } from '../screens/SourcingRequestScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 import { RavenUIMessagesScreen } from '../screens/RavenUIMessagesScreen';
 import { getMainTabBarStyle } from './mainTabBarStyle';
+import { Colors } from '../constants/colors';
 import type { MainTabParamList } from '../types';
 
 const MainTab = createBottomTabNavigator<MainTabParamList>();
@@ -30,13 +30,7 @@ export const MainTabNavigator: React.FC = () => {
         if (!user?.email) return;
         if (!subscriptionLoading && !subscriptionActive) {
           e.preventDefault?.();
-          Alert.alert(t('suppliersPremium.menuBlockedTitle'), t('suppliersPremium.menuBlockedBody'), [
-            { text: t('settings.cancel'), style: 'cancel' },
-            {
-              text: t('suppliersPremium.subscribeCta'),
-              onPress: () => (navigation as { navigate: (name: string) => void }).navigate('Subscription'),
-            },
-          ]);
+          (navigation as { navigate: (name: string) => void }).navigate('Subscription');
         }
       },
     }),
@@ -65,7 +59,7 @@ export const MainTabNavigator: React.FC = () => {
 
         return <Ionicons name={iconName} size={22} color={color} />;
       },
-      tabBarActiveTintColor: '#B91C1C',
+      tabBarActiveTintColor: Colors.WINE,
       tabBarInactiveTintColor: '#9CA3AF',
       tabBarLabelStyle: {
         fontSize: 10,

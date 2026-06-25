@@ -11,7 +11,8 @@ import { getSupplierById, resolveSupplier, type Supplier } from '../data/supplie
 import { useSubscription } from '../context/SubscriptionContext';
 import { useUserSession } from '../context/UserContext';
 import { SourceWaveStackHeader } from '../components/SourceWaveStackHeader';
-import { SuppliersPremiumGateContent } from '../components/SuppliersPremiumGateContent';
+import { useAutoNavigateToSubscriptionWhenInactive } from '../hooks/useAutoNavigateToSubscriptionWhenInactive';
+import { resetToAuthScreen } from '../navigation/rootNavigation';
 import type { RootStackParamList } from '../types';
 
 function dash(v: string | null | undefined): string {
@@ -66,6 +67,12 @@ export const SupplierDetailScreen: React.FC = () => {
     }, [refresh])
   );
 
+  useAutoNavigateToSubscriptionWhenInactive(navigation, {
+    email: user?.email,
+    isLoading: subscriptionLoading,
+    isActive,
+  });
+
   if (loadingDoc) {
     return (
       <View style={styles.root}>
@@ -97,7 +104,7 @@ export const SupplierDetailScreen: React.FC = () => {
         <SafeAreaView style={[styles.safe, styles.gatePad]} edges={['bottom']}>
           <Text style={styles.gateTitle}>{t('suppliersPremium.signInTitle')}</Text>
           <Text style={styles.gateBody}>{t('suppliersPremium.signInBody')}</Text>
-          <TouchableOpacity style={styles.gateCta} onPress={() => navigation.navigate('Auth')} activeOpacity={0.85}>
+          <TouchableOpacity style={styles.gateCta} onPress={() => resetToAuthScreen()} activeOpacity={0.85}>
             <Text style={styles.gateCtaText}>{t('suppliersPremium.signInCta')}</Text>
           </TouchableOpacity>
         </SafeAreaView>
@@ -121,9 +128,11 @@ export const SupplierDetailScreen: React.FC = () => {
   if (!isActive) {
     return (
       <View style={styles.root}>
-        <SourceWaveStackHeader title="Supplier" subtitle={t('suppliersPremium.subtitle')} onBack={() => navigation.goBack()} />
+        <SourceWaveStackHeader title="Supplier" subtitle={t('subscriptionPage.loading')} onBack={() => navigation.goBack()} />
         <SafeAreaView style={styles.safe} edges={['bottom']}>
-          <SuppliersPremiumGateContent onSubscribe={() => navigation.navigate('Subscription')} />
+          <View style={styles.loadingWrap}>
+            <ActivityIndicator size="large" color={Colors.WINE} />
+          </View>
         </SafeAreaView>
       </View>
     );
@@ -138,14 +147,7 @@ export const SupplierDetailScreen: React.FC = () => {
       }
       const { isActive } = await refresh();
       if (!isActive) {
-        Alert.alert(
-          'Subscription required',
-          'Subscribe to SourceWave supplier access to open in-app chat.',
-          [
-            { text: 'Not now', style: 'cancel' },
-            { text: 'View plans', onPress: () => navigation.navigate('Subscription') },
-          ]
-        );
+        navigation.navigate('Subscription');
         return;
       }
       navigation.navigate('AgentSupplierChat', { supplierId: supplier.id });
@@ -334,7 +336,7 @@ const styles = StyleSheet.create({
   pillOn: { backgroundColor: '#DCFCE7' },
   pillOff: { backgroundColor: '#FEE2E2' },
   pillText: { fontSize: 12, fontWeight: '700', color: '#166534' },
-  pillTextOff: { color: '#B91C1C' },
+  pillTextOff: { color: Colors.WINE },
   pillNeutral: {
     flexDirection: 'row',
     alignItems: 'center',

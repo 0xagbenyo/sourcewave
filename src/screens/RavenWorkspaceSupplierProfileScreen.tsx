@@ -18,7 +18,6 @@ import { useRoute, useNavigation, useFocusEffect, type RouteProp } from '@react-
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
-import { WebView } from 'react-native-webview';
 import { RavenLight } from '../constants/ravenLightTheme';
 import { Spacing } from '../constants/spacing';
 import {
@@ -32,11 +31,13 @@ import { useSubscription } from '../context/SubscriptionContext';
 import type { RootStackParamList } from '../types';
 import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 import { ErpAuthenticatedPdfWebView } from '../components/ErpAuthenticatedPdfWebView';
-import { buildAuthenticatedErpImageSource, encodeErpFileUrl } from '../utils/erpImageUrl';
+import { ErpAuthenticatedCachedFileWebView } from '../components/ErpAuthenticatedCachedFileWebView';
+import { encodeErpFileUrl } from '../utils/erpImageUrl';
 import { initialsFromUserId } from '../utils/ravenChatUi';
 import { emitRavenOpenChatFromProfile } from '../utils/ravenOpenChatFromProfileBridge';
 import { userFacingError } from '../utils/userFacingError';
-import { SuppliersPremiumGateContent } from '../components/SuppliersPremiumGateContent';
+import { useAutoNavigateToSubscriptionWhenInactive } from '../hooks/useAutoNavigateToSubscriptionWhenInactive';
+import { resetToAuthScreen } from '../navigation/rootNavigation';
 import { useTranslation } from 'react-i18next';
 
 type IoniconsName = React.ComponentProps<typeof Ionicons>['name'];
@@ -48,16 +49,6 @@ const MEDIA_GAP = 8;
 const PDF_TOOLBAR_BASE_H = 52;
 
 type GalleryItem = { key: string; uri: string };
-
-function representativeDisplayName(user?: string): string {
-  const t = (user || '').trim();
-  if (!t) return '';
-  if (t.includes('@')) {
-    const local = t.split('@')[0];
-    if (local) return local.replace(/[._]/g, ' ').replace(/\b\w/g, (x) => x.toUpperCase());
-  }
-  return t;
-}
 
 function isPrivateAttachment(a: ErpSupplierFileAttachment): boolean {
   const v = a.is_private as unknown;
@@ -111,6 +102,11 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
   const { user } = useUserSession();
   const { isActive: subscriptionActive, isLoading: subscriptionLoading, refresh: refreshSubscription } =
     useSubscription();
+  useAutoNavigateToSubscriptionWhenInactive(navigation as { navigate: (name: string) => void }, {
+    email: user?.email,
+    isLoading: subscriptionLoading,
+    isActive: subscriptionActive,
+  });
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
   const { supplierDocName, workspaceAdminUser, ravenWorkspaceId } = route.params;
@@ -123,11 +119,6 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
   /** Any Supplier attachment (PDF, Office, etc.) — same authenticated WebView as PDFs so private `/private/files/` URLs work in-app. */
   const [fileWebPreview, setFileWebPreview] = useState<{ uri: string; title: string } | null>(null);
   const [openingChat, setOpeningChat] = useState(false);
-
-  const fileWebSource = useMemo(
-    () => (fileWebPreview ? buildAuthenticatedErpImageSource(fileWebPreview.uri) : null),
-    [fileWebPreview]
-  );
 
   const mediaTile = useMemo(() => {
     const pad = Spacing.MD * 2;
@@ -213,14 +204,13 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
     return profile.attachments.filter((a) => !isImageAttachment(a));
   }, [profile]);
 
-  const repName = representativeDisplayName(workspaceAdminUser);
   const viewerId = (user?.email || user?.user || '').trim().toLowerCase();
   const adminId = (workspaceAdminUser || '').trim();
   const adminIdLower = adminId.toLowerCase();
   const wsId = (ravenWorkspaceId || '').trim();
   const canMessageAdmin = !!adminId && !!wsId && adminIdLower !== viewerId;
 
-  const onMessageRepresentative = useCallback(async () => {
+  const onMessageSupplier = useCallback(async () => {
     if (!adminId) {
       Alert.alert('Chat', 'No representative user is linked to this profile.');
       return;
@@ -323,7 +313,7 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
               alignItems: 'center',
               width: '100%',
             }}
-            onPress={() => (navigation as { navigate: (n: string) => void }).navigate('Auth')}
+            onPress={() => resetToAuthScreen()}
             activeOpacity={0.85}
           >
             <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>{t('suppliersPremium.signInCta')}</Text>
@@ -349,9 +339,10 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
     return (
       <View style={styles.root}>
         {gateHeader}
-        <SuppliersPremiumGateContent
-          onSubscribe={() => (navigation as { navigate: (n: string) => void }).navigate('Subscription')}
-        />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator color={RavenLight.accent} size="large" />
+          <Text style={[styles.loadingText, { marginTop: 12 }]}>{t('subscriptionPage.loading')}</Text>
+        </View>
       </View>
     );
   }
@@ -435,6 +426,21 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
                     </View>
                   ) : null}
                 </View>
+
+                <TouchableOpacity
+                  style={[styles.chatBtn, (!canMessageAdmin || openingChat) && styles.chatBtnDisabled]}
+                  onPress={() => void onMessageSupplier()}
+                  disabled={openingChat}
+                  activeOpacity={0.85}
+                  accessibilityLabel="Chat with supplier"
+                >
+                  {openingChat ? (
+                    <ActivityIndicator size="small" color={RavenLight.accent} />
+                  ) : (
+                    <Ionicons name="chatbubble-ellipses-outline" size={20} color={RavenLight.accent} />
+                  )}
+                  <Text style={styles.chatBtnText}>Chat</Text>
+                </TouchableOpacity>
               </>
             ) : null}
           </View>
@@ -442,47 +448,6 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
 
           {profile ? (
             <>
-              {repName ? (
-                <View style={styles.card}>
-                  <View style={styles.cardHeader}>
-                    <Ionicons name="person-outline" size={18} color={RavenLight.textMuted} />
-                    <Text style={styles.cardTitle}>Representative</Text>
-                    {canMessageAdmin ? (
-                      <TouchableOpacity
-                        onPress={() => void onMessageRepresentative()}
-                        disabled={openingChat}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        accessibilityLabel="Message representative"
-                        style={styles.repChatBtn}
-                        activeOpacity={0.7}
-                      >
-                        {openingChat ? (
-                          <ActivityIndicator size="small" color={RavenLight.accent} />
-                        ) : (
-                          <Ionicons name="chatbubble-ellipses-outline" size={22} color={RavenLight.text} />
-                        )}
-                      </TouchableOpacity>
-                    ) : adminId && !wsId ? (
-                      <TouchableOpacity
-                        onPress={() =>
-                          Alert.alert(
-                            'Chat',
-                            'Open this supplier from the supplier group chat list so the app knows which supplier group to use.'
-                          )
-                        }
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        accessibilityLabel="Why chat is unavailable"
-                        style={styles.repChatBtn}
-                        activeOpacity={0.7}
-                      >
-                        <Ionicons name="chatbubble-ellipses-outline" size={22} color={RavenLight.textMuted} />
-                      </TouchableOpacity>
-                    ) : null}
-                  </View>
-                  <Text style={styles.repName}>{repName}</Text>
-                </View>
-              ) : null}
-
               <View style={styles.card}>
                 <View style={styles.cardHeader}>
                   <Ionicons name="reader-outline" size={18} color={RavenLight.textMuted} />
@@ -589,29 +554,21 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
         <View style={styles.pdfRoot}>
           <View style={[styles.pdfWebShell, { paddingTop: PDF_TOOLBAR_BASE_H + Math.max(insets.top, 12) }]}>
             {fileWebPreview?.uri ? (
-              isPdfFileName(fileWebPreview.title) ? (
-                <ErpAuthenticatedPdfWebView resourceUri={fileWebPreview.uri} style={styles.pdfWebView} />
-              ) : Platform.OS === 'android' ? (
-                <View style={[styles.pdfWebView, styles.filePreviewFallback]}>
-                  <Ionicons name="document-outline" size={44} color={RavenLight.textMuted} />
-                  <Text style={styles.filePreviewFallbackTitle}>No in-app preview on Android</Text>
-                  <Text style={styles.filePreviewFallbackSub}>
-                    This file type usually opens in your browser or an Office app instead of inside WebView.
-                  </Text>
-                  <TouchableOpacity style={styles.filePreviewFallbackBtn} onPress={onOpenFileInBrowser}>
-                    <Text style={styles.filePreviewFallbackBtnText}>Open in browser</Text>
-                  </TouchableOpacity>
-                </View>
-              ) : fileWebSource?.uri ? (
-                <WebView
-                  source={{
-                    uri: fileWebSource.uri,
-                    headers: fileWebSource.headers as Record<string, string> | undefined,
-                  }}
+              isImageFileName(fileWebPreview.title) ? (
+                <ErpAuthenticatedImage
+                  uri={fileWebPreview.uri}
                   style={styles.pdfWebView}
-                  originWhitelist={['*']}
+                  resizeMode="contain"
                 />
-              ) : null
+              ) : isPdfFileName(fileWebPreview.title) ? (
+                <ErpAuthenticatedPdfWebView resourceUri={fileWebPreview.uri} style={styles.pdfWebView} />
+              ) : (
+                <ErpAuthenticatedCachedFileWebView
+                  resourceUri={fileWebPreview.uri}
+                  fileName={fileWebPreview.title}
+                  style={styles.pdfWebView}
+                />
+              )
             ) : null}
           </View>
           <View
@@ -783,6 +740,26 @@ const styles = StyleSheet.create({
     backgroundColor: RavenLight.canvas,
   },
   chipText: { fontSize: 13, fontWeight: '600', color: RavenLight.text },
+  chatBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: RavenLight.accent,
+    backgroundColor: RavenLight.accentSoft,
+    alignSelf: 'stretch',
+  },
+  chatBtnDisabled: { opacity: 0.55 },
+  chatBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: RavenLight.accent,
+  },
   card: {
     marginTop: Spacing.SM,
     backgroundColor: RavenLight.panel,
@@ -807,14 +784,6 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 8,
   },
-  repChatBtn: {
-    padding: 4,
-    marginLeft: 4,
-    justifyContent: 'center',
-    alignItems: 'center',
-    minWidth: 32,
-    minHeight: 32,
-  },
   cardTitle: { flex: 1, fontSize: 15, fontWeight: '700', color: RavenLight.text },
   cardBadge: {
     fontSize: 12,
@@ -832,7 +801,6 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     marginTop: -4,
   },
-  repName: { fontSize: 16, fontWeight: '600', color: RavenLight.text },
   aboutText: {
     fontSize: 15,
     lineHeight: 22,
@@ -895,27 +863,6 @@ const styles = StyleSheet.create({
     backgroundColor: RavenLight.panel,
   },
   pdfWebView: { flex: 1, backgroundColor: RavenLight.panel },
-  filePreviewFallback: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    gap: 10,
-  },
-  filePreviewFallbackTitle: { fontSize: 17, fontWeight: '800', color: RavenLight.text, textAlign: 'center' },
-  filePreviewFallbackSub: {
-    fontSize: 14,
-    color: RavenLight.textMuted,
-    textAlign: 'center',
-    lineHeight: 20,
-    marginBottom: 8,
-  },
-  filePreviewFallbackBtn: {
-    backgroundColor: RavenLight.accent,
-    paddingVertical: 12,
-    paddingHorizontal: 22,
-    borderRadius: 10,
-  },
-  filePreviewFallbackBtnText: { color: '#fff', fontWeight: '800', fontSize: 15 },
   pdfToolbar: {
     position: 'absolute',
     left: 0,

@@ -10,7 +10,7 @@ import {
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation, CommonActions } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
@@ -19,13 +19,14 @@ import { joinAllPublicRavenWorkspacesAsSessionUser } from '../services/ravenNati
 import { useUserSession } from '../context/UserContext';
 import { saveFrappeWebCredentials } from '../services/sessionCredentials';
 import { detectSupplierPortalSession } from '../services/supplierPortal';
+import { resetToMainScreen } from '../navigation/rootNavigation';
 
 export const LoginScreen: React.FC = () => {
-  const [emailOrPhone, setEmailOrPhone] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [emailOrPhoneValid, setEmailOrPhoneValid] = useState<boolean | null>(null); // null = not validated yet, true/false = validation result
+  const [emailValid, setEmailValid] = useState<boolean | null>(null); // null = not validated yet, true/false = validation result
   const navigation = useNavigation();
   const { t } = useTranslation();
   const { setUser } = useUserSession();
@@ -35,21 +36,13 @@ export const LoginScreen: React.FC = () => {
     return emailRegex.test(email);
   };
 
-  const validatePhone = (phone: string) => {
-    // Ghana phone number validation (supports various formats)
-    const phoneRegex = /^(\+233|233|0)?[235679][0-9]{8}$/;
-    return phoneRegex.test(phone.replace(/\s/g, ''));
-  };
-
-  const handleEmailOrPhoneChange = (text: string) => {
-    setEmailOrPhone(text);
+  const handleEmailChange = (text: string) => {
+    setEmail(text);
     const trimmedText = text.trim();
     if (trimmedText.length > 0) {
-      const isEmail = trimmedText.includes('@');
-      const valid = isEmail ? validateEmail(trimmedText) : validatePhone(trimmedText);
-      setEmailOrPhoneValid(valid);
+      setEmailValid(validateEmail(trimmedText));
     } else {
-      setEmailOrPhoneValid(null); // Reset validation state when field is empty
+      setEmailValid(null);
     }
   };
 
@@ -58,12 +51,12 @@ export const LoginScreen: React.FC = () => {
   };
 
   // Check if form is valid (both email/phone and password are valid)
-  const isFormValid = emailOrPhoneValid === true && password.length > 0;
+  const isFormValid = emailValid === true && password.length > 0;
 
   const handleContinue = async () => {
-    const trimmedEmailOrPhone = emailOrPhone.trim();
-    
-    if (!trimmedEmailOrPhone) {
+    const trimmedEmail = email.trim();
+
+    if (!trimmedEmail) {
       alert(t('login.errors.noEmail'));
       return;
     }
@@ -73,40 +66,17 @@ export const LoginScreen: React.FC = () => {
       return;
     }
 
-    // Check if it's an email or phone number
-    const isEmail = trimmedEmailOrPhone.includes('@');
-    
-    if (isEmail && !validateEmail(trimmedEmailOrPhone)) {
+    if (!validateEmail(trimmedEmail)) {
       alert(t('login.invalidEmail'));
       return;
     }
 
-    if (!isEmail && !validatePhone(trimmedEmailOrPhone)) {
-      alert(t('login.invalidPhoneDetail'));
-      return;
-    }
-
     setIsLoading(true);
-    
+
     try {
       const client = getERPNextClient();
-      let loginIdentifier = trimmedEmailOrPhone;
-      
-      // If user entered phone number, look up their email first
-      if (!isEmail) {
-        console.log('Looking up user by phone:', trimmedEmailOrPhone);
-        const userByPhone = await client.getUserByPhone(trimmedEmailOrPhone);
-        if (userByPhone && userByPhone.email) {
-          loginIdentifier = userByPhone.email;
-          console.log('Found user email for phone:', loginIdentifier);
-        } else {
-          setIsLoading(false);
-          alert(t('login.errors.noAccountPhone'));
-          return;
-        }
-      }
-      
-      // Call ERPNext login API with email/username
+      const loginIdentifier = trimmedEmail;
+
       console.log('Attempting login with:', { loginIdentifier, passwordLength: password.length });
       const loginResult = await client.login(loginIdentifier, password);
       console.log('Login successful:', loginResult);
@@ -182,13 +152,7 @@ export const LoginScreen: React.FC = () => {
       console.log('User session stored:', { email: userEmail, customerId: customerId, customerDisplayName: customerDisplayName });
 
       setIsLoading(false);
-      // Reset navigation stack to prevent going back to login
-      navigation.dispatch(
-        CommonActions.reset({
-          index: 0,
-          routes: [{ name: 'Main' as never }],
-        })
-      );
+      resetToMainScreen();
     } catch (error: any) {
       setIsLoading(false);
       // Extract error message - the error should already have a meaningful message from extractLoginErrorMessage
@@ -232,23 +196,21 @@ export const LoginScreen: React.FC = () => {
           {/* Form */}
           <View style={styles.formContainer}>
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>{t('login.emailOrPhoneLabel')}</Text>
+              <Text style={styles.label}>{t('login.emailLabel')}</Text>
               <TextInput
                 style={[
                   styles.input,
-                  emailOrPhoneValid === false && styles.inputError
+                  emailValid === false && styles.inputError
                 ]}
-                placeholder={t('login.emailOrPhonePlaceholder')}
-                value={emailOrPhone}
-                onChangeText={handleEmailOrPhoneChange}
+                placeholder={t('login.emailPlaceholder')}
+                value={email}
+                onChangeText={handleEmailChange}
                 keyboardType="email-address"
                 autoCapitalize="none"
                 autoCorrect={false}
               />
-              {emailOrPhoneValid === false && (
-                <Text style={styles.errorText}>
-                  {emailOrPhone.includes('@') ? t('login.invalidEmail') : t('login.invalidPhone')}
-                </Text>
+              {emailValid === false && (
+                <Text style={styles.errorText}>{t('login.invalidEmail')}</Text>
               )}
             </View>
 
@@ -295,10 +257,8 @@ export const LoginScreen: React.FC = () => {
             <TouchableOpacity 
               style={styles.forgotPasswordButton}
               onPress={() => {
-                // Extract email if the input is an email, otherwise pass empty
-                const trimmedInput = emailOrPhone.trim();
-                const isEmail = trimmedInput.includes('@');
-                const emailToPass = isEmail && validateEmail(trimmedInput) ? trimmedInput : '';
+                const trimmedInput = email.trim();
+                const emailToPass = validateEmail(trimmedInput) ? trimmedInput : '';
                 navigation.navigate('ForgotPassword' as never, { email: emailToPass } as never);
               }}
             >

@@ -67,6 +67,8 @@ import {
   ravenRowIsSupplierQuotationDocLink,
   ravenMessageOwnerMatchesSession,
   fetchRavenUserProfilesByIds,
+  fetchRavenUsersDirectory,
+  mergeRavenUserProfileMaps,
   type RavenChannelRow,
   type RavenMessageRow,
   type RavenWorkspaceMemberRow,
@@ -79,9 +81,9 @@ import {
   pastelAvatarBg,
 } from '../utils/ravenChatUi';
 import {
-  getRavenMemberDirectoryView,
   ravenWorkspaceAdminsSorted,
   ravenWorkspaceMemberIsAdmin,
+  ravenWorkspaceSuppliersSorted,
   ravenWorkspaceMemberMatchesViewer,
 } from '../utils/ravenWorkspaceMemberVisibility';
 import { ravenMessageHasVisualMedia, ravenSameMessageOwner } from '../utils/ravenAttachment';
@@ -101,6 +103,7 @@ import {
   type RavenCachedGlobalInboxRow,
 } from '../utils/ravenMessagingLocalCache';
 import { setRavenOpenChatFromProfileSubscriber } from '../utils/ravenOpenChatFromProfileBridge';
+import { resetToAuthScreen } from '../navigation/rootNavigation';
 import { getMainTabBarStyle } from '../navigation/mainTabBarStyle';
 import { RavenGlobalSearchModal } from '../components/RavenGlobalSearchModal';
 import { RavenSharedInChatList } from '../components/RavenSharedInChatList';
@@ -114,7 +117,7 @@ import { resolveRavenErpAttachImageUri } from '../utils/ravenFileUrl';
 import { tryParseQuotationDraftFromMessage } from '../utils/chatQuotationDraftMessage';
 import { mergeRavenMessagesWithPendingDocInsert } from '../utils/ravenDocLinkMessageMergeBridge';
 import { getERPNextClient } from '../services/erpnext';
-import { SuppliersPremiumGateContent } from '../components/SuppliersPremiumGateContent';
+import { useAutoNavigateToSubscriptionWhenInactive } from '../hooks/useAutoNavigateToSubscriptionWhenInactive';
 import { buyerRavenRouteNeedsSubscription } from '../utils/buyerSuppliersPremium';
 import { userFacingError } from '../utils/userFacingError';
 
@@ -125,7 +128,9 @@ const RAVEN_CHAT_FIRST_PAGE_SIZE = 36;
 const RAVEN_CHAT_OLDER_PAGE_SIZE = 50;
 
 /** Global inbox: preview fetches run in parallel up to this limit; each row commits as soon as its fetch finishes (no batch wait). */
-const RAVEN_GLOBAL_INBOX_PREVIEW_CONCURRENCY = 10;
+const RAVEN_GLOBAL_INBOX_PREVIEW_CONCURRENCY = 12;
+/** Shown while a channel preview is still being fetched (replaced when the fetch completes). */
+const GLOBAL_INBOX_PREVIEW_PLACEHOLDER = '…';
 
 function sortRavenMessagesNewestFirst(rows: RavenMessageRow[]): RavenMessageRow[] {
   return [...rows].sort((a, b) => ravenMessageRowSortTimeMs(b) - ravenMessageRowSortTimeMs(a));
@@ -163,6 +168,135 @@ function workspaceListSecondaryLabel(w: RavenWorkspaceRow): string | null {
   if (!id) return null;
   if (primary && id !== primary) return id;
   return null;
+}
+
+function globalInboxWorkspaceMeta(ch: RavenChannelRow, wsRows: RavenWorkspaceRow[]) {
+  const id = ch.name?.trim() || '';
+  const wsKey = String(ch.workspace || '').trim();
+  const wsRow = wsRows.find(
+    (w) => String(w.name || '').trim().toLowerCase() === wsKey.toLowerCase()
+  );
+  const lbl = wsRow ? workspaceListPrimaryLabel(wsRow) : wsKey || 'Supplier group';
+  const wsLogo = wsRow?.logo != null && String(wsRow.logo).trim() ? String(wsRow.logo).trim() : null;
+  return {
+    id,
+    wsKey,
+    wsRow,
+    lbl,
+    wsLogo,
+    workspaceId: wsKey || String(wsRow?.name || '').trim() || id,
+  };
+}
+
+/** Instant inbox row from `get_channels` snapshot, or a lightweight placeholder when activity exists. */
+function globalInboxRowFromChannelFast(
+  ch: RavenChannelRow,
+  wsRows: RavenWorkspaceRow[],
+  allowPlaceholder: boolean
+): GlobalInboxRow | null {
+  const { id, wsKey, wsRow, lbl, wsLogo, workspaceId } = globalInboxWorkspaceMeta(ch, wsRows);
+  if (!id) return null;
+
+  const snapshotRow = ravenChannelLastMessagePreviewRow(ch);
+  if (snapshotRow && (snapshotRow.text?.trim() || snapshotRow.file?.trim())) {
+    const previewMeta = inboxPreviewFromLastMessage(snapshotRow);
+    const channelActivityMs = ravenChannelLastActivitySortTimeMs(ch);
+    const recencyMs = Math.max(previewMeta.timeMs, channelActivityMs);
+    return {
+      key: `${wsKey || 'ws'}:${id}`,
+      workspaceId,
+      workspaceLabel: lbl,
+      workspaceLogo: wsLogo,
+      channel: ch,
+      preview: previewMeta.preview,
+      timeLabel: previewMeta.timeLabel,
+      timeMs: recencyMs || previewMeta.timeMs,
+      hasMessages: true,
+    };
+  }
+
+  if (!allowPlaceholder) return null;
+  const channelActivityMs = ravenChannelLastActivitySortTimeMs(ch);
+  if (!channelActivityMs) return null;
+  const iso = ch.last_message_timestamp || ch.modified;
+  return {
+    key: `${wsKey || 'ws'}:${id}`,
+    workspaceId,
+    workspaceLabel: lbl,
+    workspaceLogo: wsLogo,
+    channel: ch,
+    preview: GLOBAL_INBOX_PREVIEW_PLACEHOLDER,
+    timeLabel: formatMessageHeaderTime(iso) || '',
+    timeMs: channelActivityMs,
+    hasMessages: true,
+  };
+}
+
+async function globalInboxRowFromChannelFetched(
+  ch: RavenChannelRow,
+  wsRows: RavenWorkspaceRow[]
+): Promise<GlobalInboxRow | null> {
+  const fast = globalInboxRowFromChannelFast(ch, wsRows, false);
+  if (fast) return fast;
+
+  const { id, wsKey, lbl, wsLogo, workspaceId } = globalInboxWorkspaceMeta(ch, wsRows);
+  if (!id) return null;
+
+  try {
+    const { latest, latestText } = await fetchChannelLatestAndMostRecentTextMessage(id);
+    const rowForPreview = latestText ?? latest;
+    if (!rowForPreview) return null;
+    const previewMeta = inboxPreviewFromLastMessage(rowForPreview);
+    const sortAnchor = latest ?? latestText ?? rowForPreview;
+    const sortMeta = inboxPreviewFromLastMessage(sortAnchor);
+    const tLatest = ravenMessageRowSortTimeMs(latest);
+    const tText = ravenMessageRowSortTimeMs(latestText);
+    const channelActivityMs = ravenChannelLastActivitySortTimeMs(ch);
+    const recencyMs = Math.max(tLatest, tText, sortMeta.timeMs, channelActivityMs);
+    return {
+      key: `${wsKey || 'ws'}:${id}`,
+      workspaceId,
+      workspaceLabel: lbl,
+      workspaceLogo: wsLogo,
+      channel: ch,
+      preview: previewMeta.preview,
+      timeLabel: sortMeta.timeLabel,
+      timeMs: recencyMs || sortMeta.timeMs,
+      hasMessages: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function mergeGlobalInboxChannel(
+  existing: RavenChannelRow,
+  incoming: RavenChannelRow
+): RavenChannelRow {
+  const existingImg = existing.peer_user_image != null ? String(existing.peer_user_image).trim() : '';
+  const incomingImg = incoming.peer_user_image != null ? String(incoming.peer_user_image).trim() : '';
+  const existingFn = existing.full_name != null ? String(existing.full_name).trim() : '';
+  const incomingFn = incoming.full_name != null ? String(incoming.full_name).trim() : '';
+  return {
+    ...incoming,
+    peer_user_image: incomingImg || existingImg || incoming.peer_user_image,
+    full_name: incomingFn || existingFn || incoming.full_name,
+  };
+}
+
+function mergeGlobalInboxRow(existing: GlobalInboxRow, incoming: GlobalInboxRow): GlobalInboxRow {
+  const keepPreview =
+    incoming.preview === GLOBAL_INBOX_PREVIEW_PLACEHOLDER && existing.preview !== GLOBAL_INBOX_PREVIEW_PLACEHOLDER
+      ? existing.preview
+      : incoming.preview;
+  return {
+    ...incoming,
+    preview: keepPreview,
+    timeLabel: incoming.timeLabel || existing.timeLabel,
+    timeMs: Math.max(incoming.timeMs, existing.timeMs),
+    workspaceLogo: incoming.workspaceLogo ?? existing.workspaceLogo,
+    channel: mergeGlobalInboxChannel(existing.channel, incoming.channel),
+  };
 }
 
 type InboxPreviewMeta = { preview: string; timeLabel: string; timeMs: number; hasMessages: boolean };
@@ -243,6 +377,12 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const { isActive: subscriptionActive, isLoading: subscriptionLoading, refresh: refreshSubscription } =
     useSubscription();
   const buyerPremiumGate = buyerRavenRouteNeedsSubscription(String(route.name));
+  useAutoNavigateToSubscriptionWhenInactive(navigation as { navigate: (name: string) => void }, {
+    email: user?.email,
+    isLoading: subscriptionLoading,
+    isActive: subscriptionActive,
+    enabled: buyerPremiumGate,
+  });
   const { setActiveChannelId, refreshUnreadCounts, unreadByChannelId } = useRavenUnread();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -253,6 +393,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const [messages, setMessages] = useState<RavenMessageRow[]>([]);
   const [loadingBoot, setLoadingBoot] = useState(true);
   const [loadingWorkspaceChannels, setLoadingWorkspaceChannels] = useState(false);
+  const [loadingWorkspaceMembers, setLoadingWorkspaceMembers] = useState(false);
   const [loadingMsgs, setLoadingMsgs] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [sending, setSending] = useState(false);
@@ -270,6 +411,10 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const [globalInboxRows, setGlobalInboxRows] = useState<GlobalInboxRow[]>([]);
   /** True on header Chats until the first inbox row paints or the current `loadGlobalInbox` run ends (`finally`). */
   const [loadingGlobalInbox, setLoadingGlobalInbox] = useState(isHeaderChatInbox);
+  /** False until the first inbox fetch finishes — avoids endless “loading” when there are zero chats. */
+  const [globalInboxSettled, setGlobalInboxSettled] = useState(false);
+  /** True only while the first-pass preview fetch runs (not on background polls). */
+  const [inboxPreviewEnriching, setInboxPreviewEnriching] = useState(false);
   /** Hub screen help: description shown in a modal from the header (i) button. */
   const [hubInfoModal, setHubInfoModal] = useState<null | 'supplier-groups' | 'suppliers'>(null);
   /** Buyer accept/reject for quotation draft messages keyed by Supplier Quotation name. */
@@ -304,6 +449,11 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const headerGlobalInboxSurfaceRef = useRef(false);
   /** Bumped on effect cleanup so overlapping global inbox fetches never commit stale rows. */
   const globalInboxLoadGenerationRef = useRef(0);
+  /** Avoid stale reads inside `loadGlobalInbox` (callback deps omit row state). */
+  const globalInboxRowsRef = useRef<GlobalInboxRow[]>([]);
+  const globalInboxSettledRef = useRef(false);
+  /** Per-user workspace bootstrap — avoid clearing supplier roster on subscription refresh. */
+  const workspacesBootstrappedForUserRef = useRef<string | null>(null);
 
   /** Latest hierarchy for back / swipe — refs avoid stale reads inside navigation gesture handlers. */
   const hierarchyForBackRef = useRef({
@@ -329,6 +479,14 @@ export const RavenUIMessagesScreen: React.FC = () => {
       if (buyerPremiumGate) void refreshSubscription();
     }, [buyerPremiumGate, refreshSubscription])
   );
+
+  useEffect(() => {
+    globalInboxRowsRef.current = globalInboxRows;
+  }, [globalInboxRows]);
+
+  useEffect(() => {
+    globalInboxSettledRef.current = globalInboxSettled;
+  }, [globalInboxSettled]);
 
   useEffect(() => {
     selectedWorkspaceRef.current = workspace?.trim() || null;
@@ -391,21 +549,20 @@ export const RavenUIMessagesScreen: React.FC = () => {
   /** Buyer Suppliers tab only — supplier portal Chat has no “suggested suppliers” block. */
   const showSuggestedSuppliersInMenu = route.name === 'Suppliers';
 
-  const { visibleMembers } = useMemo(
-    () => getRavenMemberDirectoryView(members, user?.email, user?.user),
+  /** Omit self — suggested supplier contacts (workspace admins only) you can open a DM with. */
+  const directoryMembers = useMemo(
+    () =>
+      ravenWorkspaceAdminsSorted(members).filter(
+        (m) => !ravenWorkspaceMemberMatchesViewer(m, user?.email, user?.user)
+      ),
     [members, user?.email, user?.user]
   );
 
-  /** Omit self — suggested supplier contacts you can open a DM with. */
-  const directoryMembers = useMemo(
-    () =>
-      visibleMembers.filter(
-        (m) => !ravenWorkspaceMemberMatchesViewer(m, user?.email, user?.user)
-      ),
-    [visibleMembers, user?.email, user?.user]
-  );
-
-  const workspaceAdminsSorted = useMemo(() => ravenWorkspaceAdminsSorted(members), [members]);
+  const workspaceSuppliersSorted = useMemo(() => {
+    const tagged = ravenWorkspaceSuppliersSorted(members);
+    if (tagged.length > 0) return tagged;
+    return ravenWorkspaceAdminsSorted(members);
+  }, [members]);
 
   const workspaceScreenTitle = useMemo(() => {
     if (!workspace?.trim()) return '';
@@ -645,12 +802,26 @@ export const RavenUIMessagesScreen: React.FC = () => {
 
   const resolveDisplayName = useCallback(
     (userId?: string | null, memberFullName?: string | null) => {
+      const fromDirectory = resolveRavenUserDisplayName(userId, ravenUserProfilesById);
+      const short = userId?.trim() ? resolveRavenUserDisplayName(userId, undefined) : 'Unknown';
+      if (userId?.trim() && fromDirectory !== short) return fromDirectory;
       const fromMember = memberFullName != null ? String(memberFullName).trim() : '';
       if (fromMember) return fromMember;
-      return resolveRavenUserDisplayName(userId, ravenUserProfilesById);
+      return fromDirectory;
     },
     [ravenUserProfilesById]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchRavenUsersDirectory().then((dir) => {
+      if (cancelled || Object.keys(dir).length === 0) return;
+      setRavenUserProfilesById((prev) => mergeRavenUserProfileMaps(dir, prev));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const owners = new Set<string>();
@@ -668,25 +839,9 @@ export const RavenUIMessagesScreen: React.FC = () => {
       try {
         const profiles = await fetchRavenUserProfilesByIds([...owners]);
         if (cancelled) return;
-        setRavenUserProfilesById((prev) => {
-          const next = { ...prev };
-          for (const [id, p] of profiles) {
-            const lo = id.toLowerCase();
-            const prevP = next[id] ?? next[lo] ?? {};
-            const fn =
-              p.full_name != null && String(p.full_name).trim()
-                ? String(p.full_name).trim()
-                : prevP.full_name;
-            const img =
-              p.user_image != null && String(p.user_image).trim()
-                ? String(p.user_image).trim()
-                : prevP.user_image ?? null;
-            const entry = { full_name: fn, user_image: img };
-            next[id] = entry;
-            if (lo !== id) next[lo] = entry;
-          }
-          return next;
-        });
+        const patch: Record<string, { full_name?: string; user_image?: string | null }> = {};
+        for (const [id, p] of profiles) patch[id] = p;
+        setRavenUserProfilesById((prev) => mergeRavenUserProfileMaps(prev, patch));
       } catch {
         /* ignore */
       }
@@ -757,6 +912,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
       if (!user?.email) {
         setLoadingBoot(false);
         setWorkspaceRows([]);
+        workspacesBootstrappedForUserRef.current = null;
         return;
       }
       if (subscriptionLoading) {
@@ -765,38 +921,43 @@ export const RavenUIMessagesScreen: React.FC = () => {
       if (!subscriptionActive) {
         setLoadingBoot(false);
         setWorkspaceRows([]);
+        workspacesBootstrappedForUserRef.current = null;
         return;
       }
     }
+    const userKey = (user?.email || '').trim().toLowerCase();
+    const isFirstBootstrap = workspacesBootstrappedForUserRef.current !== userKey;
     let cancelled = false;
     (async () => {
-      setLoadingBoot(true);
+      if (isFirstBootstrap) {
+        setLoadingBoot(true);
+      }
       setError(null);
       try {
         const wsList = await fetchRavenWorkspaces();
         if (cancelled) return;
         const list = Array.isArray(wsList) ? wsList : [];
         setWorkspaceRows(list);
-        setChannels([]);
-        setMembers([]);
-        setChannel(null);
-        let initialWs: string | null = null;
-        if (list.length > 0 && !isHeaderChatInbox) {
-          const last = await getRavenLastChat(user?.email);
-          if (last?.workspace?.trim()) {
-            const lw = last.workspace.trim().toLowerCase();
-            const match = list.find((row) => String(row.name || '').trim().toLowerCase() === lw);
-            if (match) initialWs = String(match.name).trim();
+        if (isFirstBootstrap) {
+          workspacesBootstrappedForUserRef.current = userKey;
+          let initialWs: string | null = null;
+          if (list.length > 0 && !isHeaderChatInbox) {
+            const last = await getRavenLastChat(user?.email);
+            if (last?.workspace?.trim()) {
+              const lw = last.workspace.trim().toLowerCase();
+              const match = list.find((row) => String(row.name || '').trim().toLowerCase() === lw);
+              if (match) initialWs = String(match.name).trim();
+            }
           }
-        }
-        setWorkspace(initialWs);
-        if (list.length === 0) {
-          setError('No supplier groups found. Ask your administrator to add you to a supplier group.');
+          setWorkspace(initialWs);
+          if (list.length === 0) {
+            setError('No supplier groups found. Ask your administrator to add you to a supplier group.');
+          }
         }
       } catch (e: any) {
         if (!cancelled) setError(userFacingError(e, 'Failed to load supplier groups'));
       } finally {
-        if (!cancelled) setLoadingBoot(false);
+        if (!cancelled && isFirstBootstrap) setLoadingBoot(false);
       }
     })();
     return () => {
@@ -916,12 +1077,12 @@ export const RavenUIMessagesScreen: React.FC = () => {
     return globalInboxRows.filter((row) => {
       const ch = row.channel;
       const titlePrefix = isDmChannel(ch) ? '' : channelPrefix(ch.type);
-      const title = `${titlePrefix}${getRavenChannelDisplayLabel(ch, user?.email)}`.toLowerCase();
+      const title = `${titlePrefix}${getRavenChannelDisplayLabel(ch, user?.email, ravenUserProfilesById)}`.toLowerCase();
       const ws = (row.workspaceLabel || '').toLowerCase();
       const prev = (row.preview || '').toLowerCase();
       return title.includes(listSearchQ) || ws.includes(listSearchQ) || prev.includes(listSearchQ);
     });
-  }, [globalInboxRows, listSearchQ, user?.email]);
+  }, [globalInboxRows, listSearchQ, user?.email, ravenUserProfilesById]);
 
   const filteredSortedWorkspaceRows = useMemo(() => {
     if (!listSearchQ) return sortedWorkspaceRows;
@@ -932,9 +1093,9 @@ export const RavenUIMessagesScreen: React.FC = () => {
     });
   }, [sortedWorkspaceRows, listSearchQ]);
 
-  const filteredWorkspaceAdminsSorted = useMemo(() => {
-    if (!listSearchQ) return workspaceAdminsSorted;
-    return workspaceAdminsSorted.filter((m) => {
+  const filteredWorkspaceSuppliersSorted = useMemo(() => {
+    if (!listSearchQ) return workspaceSuppliersSorted;
+    return workspaceSuppliersSorted.filter((m) => {
       const label = resolveDisplayName(m.user, m.full_name).toLowerCase();
       const uid = (m.user || '').trim().toLowerCase();
       const linked = (ravenWorkspaceMemberLinkedSupplierId(m) || '').trim().toLowerCase();
@@ -944,7 +1105,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
         (linked.length > 0 && linked.includes(listSearchQ))
       );
     });
-  }, [workspaceAdminsSorted, listSearchQ, resolveDisplayName]);
+  }, [workspaceSuppliersSorted, listSearchQ, resolveDisplayName]);
 
   useEffect(() => {
     setHubInfoModal(null);
@@ -979,6 +1140,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
           if (!silent) {
             setGlobalInboxRows([]);
             setLoadingGlobalInbox(false);
+            setGlobalInboxSettled(true);
           }
           return;
         }
@@ -990,30 +1152,39 @@ export const RavenUIMessagesScreen: React.FC = () => {
         isCancelled?.() === true || myGen !== globalInboxLoadGenerationRef.current;
 
       const wsRows = opts?.workspaceRowsSnapshot ?? workspaceRows;
+      const viewerId = (user?.user || user?.email || '').trim();
+
+      const channelsPromise = listRavenChannelsForSessionUser(viewerId, { enrichProfiles: false });
 
       if (!silent) {
-        const cachedInbox = await getRavenGlobalInboxSnapshot(user?.email);
-        if (stale()) return;
-        if (cachedInbox?.length) {
+        if (globalInboxRowsRef.current.length === 0) {
+          setLoadingGlobalInbox(true);
+          setGlobalInboxSettled(false);
+        }
+        void getRavenGlobalInboxSnapshot(user?.email).then((cachedInbox) => {
+          if (stale() || !cachedInbox?.length) return;
+          globalInboxRowsRef.current = cachedInbox as GlobalInboxRow[];
           setGlobalInboxRows(cachedInbox as GlobalInboxRow[]);
           setLoadingGlobalInbox(false);
-        } else {
-          setLoadingGlobalInbox(true);
-        }
+          setGlobalInboxSettled(true);
+        });
       }
+
       try {
         let chs: RavenChannelRow[] = [];
-        const viewerId = (user?.user || user?.email || '').trim();
         try {
-          chs = await listRavenChannelsForSessionUser(viewerId);
+          chs = await channelsPromise;
         } catch {
           chs = [];
         }
         if (stale()) return;
         if (chs.length === 0) {
           if (!stale()) {
+            globalInboxRowsRef.current = [];
             setGlobalInboxRows([]);
             void setRavenGlobalInboxSnapshot(user?.email, []);
+            if (!silent) setLoadingGlobalInbox(false);
+            setGlobalInboxSettled(true);
           }
           return;
         }
@@ -1042,7 +1213,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
           }
           const merged = Array.from(byChannelId.values());
           const chLabel = (r: GlobalInboxRow) =>
-            getRavenChannelDisplayLabel(r.channel, user?.email).toLowerCase();
+            getRavenChannelDisplayLabel(r.channel, user?.email, ravenUserProfilesById).toLowerCase();
           merged.sort((a, b) => {
             const d = rowScore(b) - rowScore(a);
             if (d !== 0) return d;
@@ -1051,90 +1222,122 @@ export const RavenUIMessagesScreen: React.FC = () => {
           return merged;
         };
 
-        const buildInboxRow = async (ch: RavenChannelRow): Promise<GlobalInboxRow | null> => {
-          const id = ch.name?.trim();
-          if (!id) return null;
-          const wsKey = String(ch.workspace || '').trim();
-          const wsRow = wsRows.find(
-            (w) => String(w.name || '').trim().toLowerCase() === wsKey.toLowerCase()
-          );
-          const lbl = wsRow ? workspaceListPrimaryLabel(wsRow) : wsKey || 'Supplier group';
-          const wsLogo =
-            wsRow?.logo != null && String(wsRow.logo).trim() ? String(wsRow.logo).trim() : null;
-
-          /**
-           * Fast path: preview straight from `get_channels`' last-message snapshot — no per-channel fetch.
-           * Doc-link-only messages have empty snapshot content; those fall through to the detailed fetch.
-           */
-          const snapshotRow = ravenChannelLastMessagePreviewRow(ch);
-          if (snapshotRow && (snapshotRow.text?.trim() || snapshotRow.file?.trim())) {
-            const previewMeta = inboxPreviewFromLastMessage(snapshotRow);
-            const channelActivityMs = ravenChannelLastActivitySortTimeMs(ch);
-            const recencyMs = Math.max(previewMeta.timeMs, channelActivityMs);
-            return {
-              key: `${wsKey || 'ws'}:${id}`,
-              workspaceId: wsKey || String(wsRow?.name || '').trim() || id,
-              workspaceLabel: lbl,
-              workspaceLogo: wsLogo,
-              channel: ch,
-              preview: previewMeta.preview,
-              timeLabel: previewMeta.timeLabel,
-              timeMs: recencyMs || previewMeta.timeMs,
-              hasMessages: true,
-            };
-          }
-
-          try {
-            const { latest, latestText } = await fetchChannelLatestAndMostRecentTextMessage(id);
-            /** Include threads whose newest activity is only a document link or attachment (no plain `text`). */
-            const rowForPreview = latestText ?? latest;
-            if (!rowForPreview) return null;
-            const previewMeta = inboxPreviewFromLastMessage(rowForPreview);
-            const sortAnchor = latest ?? latestText ?? rowForPreview;
-            const sortMeta = inboxPreviewFromLastMessage(sortAnchor);
-            const tLatest = ravenMessageRowSortTimeMs(latest);
-            const tText = ravenMessageRowSortTimeMs(latestText);
-            const channelActivityMs = ravenChannelLastActivitySortTimeMs(ch);
-            const recencyMs = Math.max(tLatest, tText, sortMeta.timeMs, channelActivityMs);
-            return {
-              key: `${wsKey || 'ws'}:${id}`,
-              workspaceId: wsKey || String(wsRow?.name || '').trim() || id,
-              workspaceLabel: lbl,
-              workspaceLogo: wsLogo,
-              channel: ch,
-              preview: previewMeta.preview,
-              timeLabel: sortMeta.timeLabel,
-              timeMs: recencyMs || sortMeta.timeMs,
-              hasMessages: true,
-            };
-          } catch {
-            return null;
-          }
+        const patchGlobalInboxRow = (channelId: string, row: GlobalInboxRow | null) => {
+          setGlobalInboxRows((prev) => {
+            const existing = prev.find((r) => r.channel.name?.trim() === channelId);
+            const without = prev.filter((r) => r.channel.name?.trim() !== channelId);
+            const mergedRow = row && existing ? mergeGlobalInboxRow(existing, row) : row;
+            const next = !mergedRow
+              ? finalizeGlobalInboxRows(without)
+              : finalizeGlobalInboxRows([...without, mergedRow]);
+            globalInboxRowsRef.current = next;
+            return next;
+          });
         };
 
-        /** Each channel preview commits on its own — first row clears the spinner; no waiting for peers in the same wave. */
-        let clearedSpinnerAfterFirstRow = false;
-        const tryClearLoadingAfterFirstRow = () => {
-          if (silent || clearedSpinnerAfterFirstRow || stale() || myGen !== globalInboxLoadGenerationRef.current) return;
-          clearedSpinnerAfterFirstRow = true;
-          setLoadingGlobalInbox(false);
-        };
+        const fastRows = chsSorted
+          .map((ch) => globalInboxRowFromChannelFast(ch, wsRows, true))
+          .filter((row): row is GlobalInboxRow => row != null);
 
-        await forEachWithConcurrency(chsSorted, RAVEN_GLOBAL_INBOX_PREVIEW_CONCURRENCY, async (ch) => {
-          if (stale()) return;
-          const row = await buildInboxRow(ch);
-          if (stale() || !row) return;
-          setGlobalInboxRows((prev) => finalizeGlobalInboxRows([...prev, row]));
-          tryClearLoadingAfterFirstRow();
+        if (!stale() && fastRows.length > 0) {
+          let nextRows: GlobalInboxRow[];
+          if (silent && globalInboxRowsRef.current.length > 0) {
+            const freshById = new Map(
+              fastRows.map((r) => [r.channel.name?.trim() || '', r] as const)
+            );
+            const seen = new Set<string>();
+            const merged: GlobalInboxRow[] = [];
+            for (const existing of globalInboxRowsRef.current) {
+              const cid = existing.channel.name?.trim() || '';
+              if (!cid) continue;
+              seen.add(cid);
+              const fresh = freshById.get(cid);
+              merged.push(fresh ? mergeGlobalInboxRow(existing, fresh) : existing);
+            }
+            for (const fresh of fastRows) {
+              const cid = fresh.channel.name?.trim() || '';
+              if (cid && !seen.has(cid)) merged.push(fresh);
+            }
+            nextRows = finalizeGlobalInboxRows(merged);
+          } else {
+            nextRows = finalizeGlobalInboxRows(fastRows);
+          }
+          globalInboxRowsRef.current = nextRows;
+          setGlobalInboxRows(nextRows);
+          if (!silent) setLoadingGlobalInbox(false);
+          setGlobalInboxSettled(true);
+        }
+
+        const channelsNeedingFetch = chsSorted.filter((ch) => {
+          const cid = ch.name?.trim();
+          if (cid) {
+            const existing = globalInboxRowsRef.current.find((r) => r.channel.name?.trim() === cid);
+            if (existing && existing.preview !== GLOBAL_INBOX_PREVIEW_PLACEHOLDER) return false;
+          }
+          const fast = globalInboxRowFromChannelFast(ch, wsRows, true);
+          return fast?.preview === GLOBAL_INBOX_PREVIEW_PLACEHOLDER;
         });
+
+        if (!stale() && fastRows.length === 0 && channelsNeedingFetch.length === 0) {
+          globalInboxRowsRef.current = [];
+          setGlobalInboxRows([]);
+          if (!silent) setLoadingGlobalInbox(false);
+          setGlobalInboxSettled(true);
+        }
+
+        if (channelsNeedingFetch.length > 0 && !silent) {
+          setInboxPreviewEnriching(true);
+        }
+
+        await forEachWithConcurrency(channelsNeedingFetch, RAVEN_GLOBAL_INBOX_PREVIEW_CONCURRENCY, async (ch) => {
+          if (stale()) return;
+          const cid = ch.name?.trim();
+          if (!cid) return;
+          const row = await globalInboxRowFromChannelFetched(ch, wsRows);
+          if (stale()) return;
+          patchGlobalInboxRow(cid, row);
+        });
+
+        if (!stale()) {
+          setInboxPreviewEnriching(false);
+        }
+
+        const dmNeedsProfileImage = (rows: GlobalInboxRow[]) =>
+          rows.some((row) => {
+            if (!isDmChannel(row.channel)) return false;
+            const img =
+              row.channel.peer_user_image != null ? String(row.channel.peer_user_image).trim() : '';
+            return !img;
+          });
+
+        if (dmNeedsProfileImage(globalInboxRowsRef.current)) {
+          void enrichRavenChannelsWithPeerProfiles(chsSorted, user?.email).then((enrichedChannels) => {
+            if (stale() || enrichedChannels.length === 0) return;
+            const byId = new Map(enrichedChannels.map((c) => [String(c.name || '').trim(), c]));
+            setGlobalInboxRows((prev) => {
+              const next = finalizeGlobalInboxRows(
+                prev.map((row) => {
+                  const cid = row.channel.name?.trim();
+                  const match = cid ? byId.get(cid) : undefined;
+                  if (!match) return row;
+                  return { ...row, channel: mergeGlobalInboxChannel(row.channel, match) };
+                })
+              );
+              globalInboxRowsRef.current = next;
+              return next;
+            });
+          });
+        }
       } catch {
         if (!stale()) {
           setGlobalInboxRows([]);
           void setRavenGlobalInboxSnapshot(user?.email, []);
         }
       } finally {
-        if (!silent && myGen === globalInboxLoadGenerationRef.current) {
-          setLoadingGlobalInbox(false);
+        if (myGen === globalInboxLoadGenerationRef.current) {
+          setGlobalInboxSettled(true);
+          setInboxPreviewEnriching(false);
+          if (!silent) setLoadingGlobalInbox(false);
         }
       }
     },
@@ -1179,6 +1382,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
     const onGlobalInboxList = isHeaderChatInbox && workspace == null;
     if (!onGlobalInboxList) {
       setLoadingGlobalInbox(false);
+      setGlobalInboxSettled(false);
       wasOnGlobalInboxListRef.current = false;
       return;
     }
@@ -1215,10 +1419,12 @@ export const RavenUIMessagesScreen: React.FC = () => {
       if (!subscriptionActive) return;
     }
     let cancelled = false;
-    void loadGlobalInbox({ silent: false, isCancelled: () => cancelled });
+    const silent = globalInboxSettledRef.current && globalInboxRowsRef.current.length > 0;
+    void loadGlobalInbox({ silent, isCancelled: () => cancelled });
     return () => {
       cancelled = true;
       globalInboxLoadGenerationRef.current++;
+      setInboxPreviewEnriching(false);
     };
   }, [
     isHeaderChatInbox,
@@ -1232,12 +1438,31 @@ export const RavenUIMessagesScreen: React.FC = () => {
     subscriptionActive,
   ]);
 
+  const reloadWorkspaceMembersIfNeeded = useCallback(async () => {
+    const ws = selectedWorkspaceRef.current;
+    if (!ws || channelIdRef.current) return;
+    if (membersPresenceRef.current.length > 0) return;
+    setLoadingWorkspaceMembers(true);
+    try {
+      const mem = await fetchWorkspaceMembers(ws);
+      if (selectedWorkspaceRef.current !== ws || channelIdRef.current) return;
+      setMembers(mem);
+    } catch {
+      /* keep existing list */
+    } finally {
+      setLoadingWorkspaceMembers(false);
+    }
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       screenFocusedRef.current = true;
       setActiveChannelId(channelIdRef.current);
       void refreshUnreadCounts();
-      if (workspace?.trim()) void loadPresence();
+      if (workspace?.trim()) {
+        void loadPresence();
+        void reloadWorkspaceMembersIfNeeded();
+      }
       const tick = () => {
         const id = channelIdRef.current;
         if (id) void loadMessages(id, { silent: true });
@@ -1271,6 +1496,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
       loadPresence,
       isHeaderChatInbox,
       loadGlobalInbox,
+      reloadWorkspaceMembersIfNeeded,
     ])
   );
 
@@ -1628,7 +1854,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
           ? resolveRavenUserDisplayName(peerLine, ravenUserProfilesById)
           : 'Direct message'
         : ch.type || '';
-      const titleText = `${titlePrefix}${getRavenChannelDisplayLabel(ch, user?.email)}`;
+      const titleText = `${titlePrefix}${getRavenChannelDisplayLabel(ch, user?.email, ravenUserProfilesById)}`;
       const subCore = item.preview?.trim() || metaLine || '';
       const subText = (item.workspaceLabel ? `${item.workspaceLabel} · ` : '') + (subCore || ' ');
       const wsLogoUri = resolveRavenErpAttachImageUri(item.workspaceLogo);
@@ -1644,7 +1870,13 @@ export const RavenUIMessagesScreen: React.FC = () => {
                 <ErpAuthenticatedImage uri={wsLogoUri} style={s.refListWorkspaceLogoImg} resizeMode="cover" />
               </View>
             ) : (
-              <RavenChannelPeerAvatar channel={ch} currentUserEmail={user?.email} size={52} variant="raven" />
+              <RavenChannelPeerAvatar
+                channel={ch}
+                currentUserEmail={user?.email}
+                size={52}
+                variant="raven"
+                userDisplayProfiles={ravenUserProfilesById}
+              />
             )}
             {peerLine &&
             ravenUserIsActiveLikeWeb(peerLine, viewerFrappeName, presenceActiveSet, presenceInvisibleSet) ? (
@@ -2121,7 +2353,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
             </Text>
             <Text style={[s.bootHint, { marginTop: 10 }]}>{t('suppliersPremium.signInBody')}</Text>
             <TouchableOpacity
-              onPress={() => (navigation as { navigate: (n: string) => void }).navigate('Auth')}
+              onPress={() => resetToAuthScreen()}
               style={{
                 marginTop: 22,
                 backgroundColor: RavenLight.accent,
@@ -2152,10 +2384,9 @@ export const RavenUIMessagesScreen: React.FC = () => {
       return (
         <View style={s.safe}>
           <StatusBar style="dark" backgroundColor={RavenLight.panel} translucent />
-          <View style={{ flex: 1, paddingTop: insets.top, width: '100%' }}>
-            <SuppliersPremiumGateContent
-              onSubscribe={() => (navigation as { navigate: (n: string) => void }).navigate('Subscription')}
-            />
+          <View style={[s.bootCenter, { paddingTop: insets.top }]}>
+            <ActivityIndicator size="large" color={RavenLight.accent} />
+            <Text style={s.bootHint}>{t('subscriptionPage.loading')}</Text>
           </View>
         </View>
       );
@@ -2174,7 +2405,20 @@ export const RavenUIMessagesScreen: React.FC = () => {
     );
   }
 
-  const chName = channel ? getRavenChannelDisplayLabel(channel, user?.email) : 'Select channel';
+  const chName = channel
+    ? getRavenChannelDisplayLabel(channel, user?.email, ravenUserProfilesById)
+    : 'Select channel';
+  const hubListHeaderTitle = !channel
+    ? !workspace?.trim()
+      ? isHeaderChatInbox
+        ? route.name === 'SupplierMessages'
+          ? 'Messages'
+          : 'Chats'
+        : route.name === 'SupplierMessages'
+          ? 'Workspaces'
+          : 'Supplier groups'
+      : workspaceScreenTitle || 'Supplier group'
+    : '';
   const headerDmPeerId = channel ? getRavenDmPeerUserId(channel, user?.email) : null;
   const headerPeerIsActive =
     !!headerDmPeerId &&
@@ -2199,22 +2443,24 @@ export const RavenUIMessagesScreen: React.FC = () => {
       >
         {/* Top bar — paddingTop pulls content below status bar; panel fills notch (see StatusBar). */}
         <View style={[s.header, { paddingTop: insets.top + 10 }]}>
-          <TouchableOpacity
-            onPress={performRavenMessagesBackAction}
-            style={s.headerIconBtn}
-            hitSlop={10}
-            accessibilityLabel={
-              channel
-                ? 'Back to all chats'
-                : workspace
-                  ? isHeaderChatInbox
-                    ? 'Back to all chats'
-                    : 'Back to supplier groups'
-                  : 'Go back'
-            }
-          >
-            <Ionicons name="chevron-back" size={22} color={RavenLight.text} />
-          </TouchableOpacity>
+          <View style={s.headerSide}>
+            <TouchableOpacity
+              onPress={performRavenMessagesBackAction}
+              style={s.headerIconBtn}
+              hitSlop={10}
+              accessibilityLabel={
+                channel
+                  ? 'Back to all chats'
+                  : workspace
+                    ? isHeaderChatInbox
+                      ? 'Back to all chats'
+                      : 'Back to supplier groups'
+                    : 'Go back'
+              }
+            >
+              <Ionicons name="chevron-back" size={22} color={RavenLight.text} />
+            </TouchableOpacity>
+          </View>
           {channel ? (
             <TouchableOpacity
               style={s.headerCenter}
@@ -2223,35 +2469,24 @@ export const RavenUIMessagesScreen: React.FC = () => {
               accessibilityLabel="Open messages menu"
             >
               <View style={s.headerAvatarCircleWrap}>
-                <RavenChannelPeerAvatar channel={channel} currentUserEmail={user?.email} size={40} variant="raven" />
+                <RavenChannelPeerAvatar
+                  channel={channel}
+                  currentUserEmail={user?.email}
+                  size={40}
+                  variant="raven"
+                  userDisplayProfiles={ravenUserProfilesById}
+                />
                 {headerPeerIsActive ? <View style={s.headerOnlineDot} /> : null}
               </View>
-              <Text style={s.headerPeerName} numberOfLines={1}>
+              <Text style={s.headerPeerName} numberOfLines={1} ellipsizeMode="tail">
                 {chName}
               </Text>
             </TouchableOpacity>
           ) : (
             <View style={[s.headerCenter, s.headerInboxCenter]} pointerEvents="none">
-              <Text style={s.headerInboxTitle} numberOfLines={1}>
-                {!workspace
-                  ? isHeaderChatInbox
-                    ? 'Chats'
-                    : route.name === 'SupplierMessages'
-                      ? 'Workspaces'
-                      : 'Supplier groups'
-                  : isHeaderChatInbox && !channel
-                    ? 'Chats'
-                    : workspaceScreenTitle || 'Supplier group'}
+              <Text style={s.headerInboxTitle} numberOfLines={1} ellipsizeMode="tail">
+                {hubListHeaderTitle}
               </Text>
-              {workspace && !channel ? (
-                <Text style={s.headerInboxSub} numberOfLines={1}>
-                  {isHeaderChatInbox
-                    ? workspaceScreenTitle || 'Supplier group'
-                    : route.name === 'SupplierMessages'
-                      ? 'Messages'
-                      : 'Suppliers'}
-                </Text>
-              ) : null}
             </View>
           )}
           <View style={s.headerRightActions}>
@@ -2296,7 +2531,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
                 <Ionicons name="menu-outline" size={24} color={RavenLight.text} />
               </TouchableOpacity>
             ) : (
-              <View style={{ width: 4 }} />
+              <View style={s.headerSide} />
             )}
           </View>
         </View>
@@ -2357,24 +2592,31 @@ export const RavenUIMessagesScreen: React.FC = () => {
                 refreshControl={
                   <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={RavenLight.accent} />
                 }
+                ListFooterComponent={
+                  inboxPreviewEnriching ? (
+                    <View style={s.inboxListFooter}>
+                      <ActivityIndicator color={RavenLight.accent} size="small" />
+                    </View>
+                  ) : null
+                }
                 ListEmptyComponent={
                   <View style={s.hubEmpty}>
-                    {loadingGlobalInbox ||
+                    {(!globalInboxSettled && loadingGlobalInbox) ||
                     (refreshing && filteredGlobalInboxRows.length === 0 && globalInboxRows.length === 0) ? (
                       <>
                         <ActivityIndicator color={RavenLight.accent} style={{ marginBottom: 12 }} />
                         <Text style={s.inboxEmptyText}>Loading your chats…</Text>
                       </>
-                    ) : globalInboxRows.length === 0 ? (
+                    ) : globalInboxSettled && globalInboxRows.length === 0 ? (
                       <>
                         <View style={s.hubEmptyIconCircle}>
                           <Ionicons name="chatbubbles-outline" size={36} color={RavenLight.accent} />
                         </View>
-                        <Text style={s.inboxEmptyText}>No text chats yet</Text>
+                        <Text style={s.inboxEmptyText}>You have no chats yet</Text>
                         <Text style={s.inboxEmptyHint}>
                           {route.name === 'SupplierMessages'
-                            ? 'When buyers message you or add you to a channel, conversations appear here.'
-                            : 'Please go to the supplier list and select a supplier to begin a conversation.'}
+                            ? 'When a buyer messages you or adds you to a channel, conversations will appear here.'
+                            : 'Go to Suppliers, open a supplier group, and start a conversation from a supplier profile.'}
                         </Text>
                       </>
                     ) : (
@@ -2439,7 +2681,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
               </View>
             ) : (
               <FlatList
-                data={filteredWorkspaceAdminsSorted}
+                data={filteredWorkspaceSuppliersSorted}
                 keyExtractor={(m) => `${workspace}-${m.name}-${m.user}`}
                 renderItem={renderWorkspaceAdminRow}
                 extraData={listSearchQuery}
@@ -2450,7 +2692,13 @@ export const RavenUIMessagesScreen: React.FC = () => {
                 }
                 ListEmptyComponent={
                   <View style={s.hubEmpty}>
-                    {workspaceAdminsSorted.length === 0 ? (
+                    {workspaceSuppliersSorted.length === 0 ? (
+                      loadingWorkspaceChannels || loadingWorkspaceMembers ? (
+                        <>
+                          <ActivityIndicator color={RavenLight.accent} style={{ marginBottom: 12 }} />
+                          <Text style={s.inboxEmptyText}>Loading suppliers…</Text>
+                        </>
+                      ) : (
                       <>
                         <View style={s.hubEmptyIconCircle}>
                           <Ionicons name="people-outline" size={36} color={RavenLight.accent} />
@@ -2461,6 +2709,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
                           chat for channels and direct messages.
                         </Text>
                       </>
+                      )
                     ) : (
                       <>
                         <View style={s.hubEmptyIconCircle}>
@@ -2673,7 +2922,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
                       <Text style={s.drawerSectionBold}>Suggested suppliers</Text>
                     </View>
                     <Text style={s.drawerMemberScopeHint}>
-                      People in this supplier group you can message for supplier conversations. Your own account is not listed. Switch
+                      Workspace administrators in this supplier group you can message. Your own account is not listed. Switch
                       to another supplier group to refresh this list.
                     </Text>
                     {members.length === 0 ? (
@@ -2682,7 +2931,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
                         supplier group.
                       </Text>
                     ) : directoryMembers.length === 0 ? (
-                      <Text style={s.drawerEmpty}>No other people to show for this supplier group yet.</Text>
+                      <Text style={s.drawerEmpty}>No other admins to show for this supplier group yet.</Text>
                     ) : (
                       directoryMembers.map((m) => {
                         const isAdmin = ravenWorkspaceMemberIsAdmin(m);
@@ -2798,7 +3047,9 @@ export const RavenUIMessagesScreen: React.FC = () => {
         onClose={() => setSearchOpen(false)}
         title="Search"
         inChannelId={channel?.name}
-        inChannelLabel={channel ? getRavenChannelDisplayLabel(channel, user?.email) : undefined}
+        inChannelLabel={
+          channel ? getRavenChannelDisplayLabel(channel, user?.email, ravenUserProfilesById) : undefined
+        }
         userDisplayProfiles={ravenUserProfilesById}
         onChannelPicked={(ws, chId) => {
           pendingOpenFromGlobalRef.current = { ws, channelId: chId };
@@ -2856,6 +3107,12 @@ const s = StyleSheet.create({
       default: {},
     }),
   },
+  headerSide: {
+    flexShrink: 0,
+    width: 76,
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+  },
   headerIconBtn: { paddingHorizontal: 8, paddingVertical: 6 },
   headerInfoCircle: {
     width: 22,
@@ -2874,13 +3131,20 @@ const s = StyleSheet.create({
     lineHeight: Platform.OS === 'android' ? 16 : 15,
     marginTop: Platform.OS === 'ios' ? -1 : 0,
   },
-  headerRightActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
+  headerRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexShrink: 0,
+    width: 76,
+  },
   headerCenter: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     minWidth: 0,
-    marginHorizontal: 4,
+    marginHorizontal: 2,
+    overflow: 'hidden',
   },
   headerAvatarCircleWrap: {
     position: 'relative',
@@ -2911,6 +3175,8 @@ const s = StyleSheet.create({
   },
   headerPeerName: {
     flex: 1,
+    minWidth: 0,
+    flexShrink: 1,
     fontSize: 17,
     fontWeight: '700',
     color: RavenLight.text,
@@ -2918,17 +3184,15 @@ const s = StyleSheet.create({
   headerInboxCenter: {
     justifyContent: 'center',
     alignItems: 'center',
+    alignSelf: 'stretch',
+    overflow: 'hidden',
   },
   headerInboxTitle: {
-    fontSize: 18,
+    width: '100%',
+    textAlign: 'center',
+    fontSize: 17,
     fontWeight: '800',
     color: RavenLight.text,
-  },
-  headerInboxSub: {
-    marginTop: 4,
-    fontSize: 13,
-    fontWeight: '600',
-    color: RavenLight.textMuted,
   },
   warnBanner: {
     flexDirection: 'row',
@@ -2975,6 +3239,11 @@ const s = StyleSheet.create({
     paddingTop: 0,
     paddingBottom: 32,
     flexGrow: 1,
+  },
+  inboxListFooter: {
+    paddingVertical: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   listSearchBarRow: {
     paddingHorizontal: Spacing.MD,

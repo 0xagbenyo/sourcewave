@@ -145,13 +145,7 @@ export const HomeScreen: React.FC = () => {
       return;
     }
     if (!subscriptionLoading && !subscriptionActive) {
-      Alert.alert(t('suppliersPremium.menuBlockedTitle'), t('suppliersPremium.menuBlockedBody'), [
-        { text: t('settings.cancel'), style: 'cancel' },
-        {
-          text: t('suppliersPremium.subscribeCta'),
-          onPress: () => (navigation as any).navigate('Subscription'),
-        },
-      ]);
+      (navigation as { navigate: (name: string) => void }).navigate('Subscription');
       return;
     }
     (navigation as any).navigate('RavenChatInbox');
