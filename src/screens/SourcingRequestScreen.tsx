@@ -219,7 +219,7 @@ export const SourcingRequestScreen: React.FC = () => {
         return;
       }
       if (!rate || rate <= 0) {
-        Alert.alert('Invalid Rate', `Line ${requestNum}: expected rate must be greater than 0.`);
+        Alert.alert('Invalid budget', `Line ${requestNum}: my budget must be greater than 0.`);
         return;
       }
     }

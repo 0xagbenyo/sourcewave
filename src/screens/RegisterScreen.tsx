@@ -21,6 +21,9 @@ import { appAlert as Alert } from '../services/appAlert';
 import { userFacingError } from '../utils/userFacingError';
 import { hasAcceptedLegalTerms } from '../legal/legalAcceptance';
 import { useOtpResendCooldown } from '../hooks/useOtpResendCooldown';
+import { useUserSession } from '../context/UserContext';
+import { completeAppSignIn } from '../utils/completeAppSignIn';
+import { resetToMainScreen } from '../navigation/rootNavigation';
 
 export const RegisterScreen: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -39,6 +42,7 @@ export const RegisterScreen: React.FC = () => {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const navigation = useNavigation();
   const { t } = useTranslation();
+  const { setUser } = useUserSession();
   const { secondsLeft, canResend, startCooldown, resetCooldown } = useOtpResendCooldown();
 
   useFocusEffect(
@@ -152,28 +156,29 @@ export const RegisterScreen: React.FC = () => {
     if (!validateVerifyForm()) return;
 
     setIsLoading(true);
+    const passwordTrim = password.trim();
+    const emailTrim = email.trim();
     try {
       const client = getERPNextClient();
       await client.validateOtp({
-        email: email.trim(),
+        email: emailTrim,
         purpose: OTP_PURPOSE_SIGN_UP,
         otpCode: otpCode.trim(),
       });
 
       const userData = {
-        email: email.trim(),
+        email: emailTrim,
         first_name: firstName.trim(),
         last_name: lastName.trim(),
         middle_name: middleName.trim() || undefined,
         phone: phone.trim(),
-        password: password.trim(),
+        password: passwordTrim,
         send_welcome_email: false,
         deferRavenCustomerLink: true,
       };
 
       const created = await client.createUser(userData);
-      const frappeUserName = String((created as { name?: string })?.name ?? email.trim()).trim();
-      const emailTrim = email.trim();
+      const frappeUserName = String((created as { name?: string })?.name ?? emailTrim).trim();
       const fullName = [firstName.trim(), middleName.trim(), lastName.trim()].filter(Boolean).join(' ');
 
       let customerId: string | null = null;
@@ -209,7 +214,16 @@ export const RegisterScreen: React.FC = () => {
         console.warn('Link Raven User → Customer skipped or failed:', e);
       }
 
-      navigation.navigate('Login' as never);
+      try {
+        const session = await completeAppSignIn(emailTrim, passwordTrim);
+        setUser(session);
+        resetToMainScreen();
+      } catch (signInError) {
+        console.warn('Registration succeeded but auto sign-in failed:', signInError);
+        Alert.alert(t('register.alerts.createdTitle'), t('register.alerts.createdSignInManually'), [
+          { text: t('contactUs.ok'), onPress: () => navigation.navigate('Login' as never) },
+        ]);
+      }
     } catch (error: unknown) {
       const raw = error instanceof Error ? error.message : '';
       const msg = userFacingError(raw, t('register.alerts.sendFailed'));
@@ -334,6 +348,14 @@ export const RegisterScreen: React.FC = () => {
               </>
             ) : (
               <>
+                <View style={styles.otpSentBanner}>
+                  <Ionicons name="mail-outline" size={20} color={Colors.ELECTRIC_BLUE} />
+                  <View style={styles.otpSentBannerTextWrap}>
+                    <Text style={styles.otpSentMessage}>{t('register.otpSentMessage')}</Text>
+                    <Text style={styles.otpSpamNote}>{t('register.otpSpamNote')}</Text>
+                  </View>
+                </View>
+
                 <Text style={styles.emailSummary}>{email.trim()}</Text>
 
                 <View style={styles.inputContainer}>
@@ -468,12 +490,12 @@ export const RegisterScreen: React.FC = () => {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.infoBanner}>
-              <Ionicons name="information-circle-outline" size={16} color={Colors.ELECTRIC_BLUE} />
-              <Text style={styles.infoText}>
-                {otpStep === 'details' ? t('register.infoBanner') : t('register.otpInfoBanner')}
-              </Text>
-            </View>
+            {otpStep === 'details' ? (
+              <View style={styles.infoBanner}>
+                <Ionicons name="information-circle-outline" size={16} color={Colors.ELECTRIC_BLUE} />
+                <Text style={styles.infoText}>{t('register.infoBanner')}</Text>
+              </View>
+            ) : null}
           </View>
 
           <Text style={styles.legalText}>
@@ -584,6 +606,31 @@ const styles = StyleSheet.create({
     color: Colors.BLACK,
     marginBottom: Spacing.MD,
     textAlign: 'center',
+  },
+  otpSentBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#E3F2FD',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginBottom: Spacing.MD,
+  },
+  otpSentBannerTextWrap: {
+    flex: 1,
+    marginLeft: 8,
+  },
+  otpSentMessage: {
+    fontSize: 13,
+    color: Colors.ELECTRIC_BLUE,
+    lineHeight: 19,
+    marginBottom: 8,
+  },
+  otpSpamNote: {
+    fontSize: 12,
+    color: Colors.TEXT_SECONDARY,
+    lineHeight: 17,
+    fontStyle: 'italic',
   },
   registerButton: {
     backgroundColor: Colors.BLACK,

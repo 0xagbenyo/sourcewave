@@ -3,6 +3,7 @@ import { clearFrappeWebCredentials } from '../services/sessionCredentials';
 import { clearFrappeRavenSession } from '../services/frappeRavenSession';
 import { clearRavenMessagingLocalCache } from '../utils/ravenMessagingLocalCache';
 import { resetToAuthScreen } from '../navigation/rootNavigation';
+import { setRavenLastChat } from '../utils/ravenLastChatStorage';
 
 /** Buyer = retail customer flow; Supplier = linked Supplier portal (buying docs + chat). */
 export type AppMode = 'buyer' | 'supplier';
@@ -41,6 +42,7 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     clearFrappeRavenSession();
     void clearFrappeWebCredentials();
     void clearRavenMessagingLocalCache(email);
+    void setRavenLastChat(email, null);
     resetToAuthScreen();
   };
 

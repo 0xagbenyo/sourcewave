@@ -56,13 +56,11 @@ export const SupplierChatListScreen: React.FC = () => {
       <View style={styles.root}>
         <SourceWaveStackHeader
           title="Messages"
-          subtitle={t('subscriptionPage.loading')}
           onBack={() => navigation.goBack()}
         />
         <SafeAreaView style={styles.bodySafe} edges={['bottom']}>
           <View style={styles.centered}>
             <ActivityIndicator size="large" color={Colors.WINE} />
-            <Text style={styles.loadingLabel}>{t('subscriptionPage.loading')}</Text>
           </View>
         </SafeAreaView>
       </View>
@@ -74,13 +72,11 @@ export const SupplierChatListScreen: React.FC = () => {
       <View style={styles.root}>
         <SourceWaveStackHeader
           title="Messages"
-          subtitle={t('subscriptionPage.loading')}
           onBack={() => navigation.goBack()}
         />
         <SafeAreaView style={styles.bodySafe} edges={['bottom']}>
           <View style={styles.centered}>
             <ActivityIndicator size="large" color={Colors.WINE} />
-            <Text style={styles.loadingLabel}>{t('subscriptionPage.loading')}</Text>
           </View>
         </SafeAreaView>
       </View>

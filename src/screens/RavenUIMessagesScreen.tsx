@@ -92,6 +92,7 @@ import {
   type RavenPendingAttachment,
 } from '../utils/ravenMediaPick';
 import { getRavenLastChat, setRavenLastChat } from '../utils/ravenLastChatStorage';
+import { subscribeSuppliersTabReset } from '../utils/suppliersTabReset';
 import {
   getRavenChannelMessagesSnapshot,
   getRavenGlobalInboxSnapshot,
@@ -369,6 +370,8 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const route = useRoute();
   /** Header stack Chats + supplier portal Chat tab: inbox of all channels first (no workspace picker). */
   const isHeaderChatInbox = route.name === 'RavenChatInbox' || route.name === 'SupplierMessages';
+  /** Buyer Suppliers tab — do not restore or persist last-open DM (tab should open the group list). */
+  const isSuppliersBuyerTab = route.name === 'Suppliers';
   const insets = useSafeAreaInsets();
   const tabBarHeight = useOptionalBottomTabBarHeight();
   const { open: keyboardOpen, height: keyboardHeight } = useKeyboardInsets();
@@ -384,6 +387,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
     enabled: buyerPremiumGate,
   });
   const { setActiveChannelId, refreshUnreadCounts, unreadByChannelId } = useRavenUnread();
+
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [workspace, setWorkspace] = useState<string | null>(null);
@@ -422,6 +426,28 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const [quotationActionBusy, setQuotationActionBusy] = useState<string | null>(null);
   /** Inline filter for the visible chat / supplier group / supplier list (header search bar). */
   const [listSearchQuery, setListSearchQuery] = useState('');
+
+  const persistLastChat = useCallback(
+    (value: Parameters<typeof setRavenLastChat>[1]) => {
+      if (isSuppliersBuyerTab) return;
+      void setRavenLastChat(user?.email, value);
+    },
+    [isSuppliersBuyerTab, user?.email]
+  );
+
+  const resetSuppliersTabToRoot = useCallback(() => {
+    setDrawerOpen(false);
+    setSearchOpen(false);
+    setHubInfoModal(null);
+    setListSearchQuery('');
+    setChannel(null);
+    setWorkspace(null);
+    setChannels([]);
+    setMembers([]);
+    setError(null);
+    void setRavenLastChat(user?.email, null);
+  }, [user?.email]);
+
   /** Same semantics as Raven `useIsUserActive` (get_active_users + Invisible on Raven User). */
   const [activeUserIds, setActiveUserIds] = useState<string[]>([]);
   const [invisibleUserIds, setInvisibleUserIds] = useState<string[]>([]);
@@ -454,6 +480,10 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const globalInboxSettledRef = useRef(false);
   /** Per-user workspace bootstrap — avoid clearing supplier roster on subscription refresh. */
   const workspacesBootstrappedForUserRef = useRef<string | null>(null);
+  /** Skip one focus-reset after opening profile / DM from supplier profile (root stack covers Main). */
+  const skipSuppliersFocusResetRef = useRef(false);
+  /** True after Suppliers tab loses focus (another tab selected). */
+  const suppliersTabWasBlurredRef = useRef(false);
 
   /** Latest hierarchy for back / swipe — refs avoid stale reads inside navigation gesture handlers. */
   const hierarchyForBackRef = useRef({
@@ -545,6 +575,29 @@ export const RavenUIMessagesScreen: React.FC = () => {
     });
     return () => cancelAnimationFrame(raf);
   }, [route.name, route.params, user?.email, navigation]);
+
+  useEffect(() => {
+    if (!isSuppliersBuyerTab) return;
+    return subscribeSuppliersTabReset(resetSuppliersTabToRoot);
+  }, [isSuppliersBuyerTab, resetSuppliersTabToRoot]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!isSuppliersBuyerTab) return;
+      if (skipSuppliersFocusResetRef.current) {
+        skipSuppliersFocusResetRef.current = false;
+        suppliersTabWasBlurredRef.current = false;
+        return;
+      }
+      if (suppliersTabWasBlurredRef.current) {
+        resetSuppliersTabToRoot();
+      }
+      suppliersTabWasBlurredRef.current = false;
+      return () => {
+        suppliersTabWasBlurredRef.current = true;
+      };
+    }, [isSuppliersBuyerTab, resetSuppliersTabToRoot])
+  );
 
   /** Buyer Suppliers tab only — supplier portal Chat has no “suggested suppliers” block. */
   const showSuggestedSuppliersInMenu = route.name === 'Suppliers';
@@ -941,7 +994,9 @@ export const RavenUIMessagesScreen: React.FC = () => {
         if (isFirstBootstrap) {
           workspacesBootstrappedForUserRef.current = userKey;
           let initialWs: string | null = null;
-          if (list.length > 0 && !isHeaderChatInbox) {
+          if (isSuppliersBuyerTab) {
+            void setRavenLastChat(user?.email, null);
+          } else if (list.length > 0 && !isHeaderChatInbox) {
             const last = await getRavenLastChat(user?.email);
             if (last?.workspace?.trim()) {
               const lw = last.workspace.trim().toLowerCase();
@@ -966,6 +1021,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
   }, [
     user?.email,
     isHeaderChatInbox,
+    isSuppliersBuyerTab,
     buyerPremiumGate,
     subscriptionLoading,
     subscriptionActive,
@@ -1018,7 +1074,12 @@ export const RavenUIMessagesScreen: React.FC = () => {
             setWorkspace(null);
             Alert.alert('Chat', 'That conversation is no longer available.');
           }
-        } else if (!isHeaderChatInbox && last?.workspace?.trim() && last.channelId?.trim()) {
+        } else if (
+          !isHeaderChatInbox &&
+          !isSuppliersBuyerTab &&
+          last?.workspace?.trim() &&
+          last.channelId?.trim()
+        ) {
           const lw = last.workspace.trim().toLowerCase();
           const tw = wsTarget.trim().toLowerCase();
           if (lw === tw) {
@@ -1042,7 +1103,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [workspace, user?.email, isHeaderChatInbox]);
+  }, [workspace, user?.email, isHeaderChatInbox, isSuppliersBuyerTab]);
 
   useEffect(() => {
     channelIdRef.current = channel?.name ?? null;
@@ -1828,20 +1889,20 @@ export const RavenUIMessagesScreen: React.FC = () => {
       setChannel(c);
       setDrawerOpen(false);
       if (workspace?.trim() && c?.name) {
-        void setRavenLastChat(user?.email, { workspace: workspace.trim(), channelId: c.name });
+        persistLastChat({ workspace: workspace.trim(), channelId: c.name });
       }
     },
-    [workspace, user?.email]
+    [workspace, persistLastChat]
   );
 
   const openGlobalInboxChat = useCallback((row: GlobalInboxRow) => {
-    void setRavenLastChat(user?.email, {
+    persistLastChat({
       workspace: row.workspaceId.trim(),
       channelId: row.channel.name.trim(),
     });
     pendingOpenFromGlobalRef.current = { ws: row.workspaceId.trim(), channelId: row.channel.name.trim() };
     setWorkspace(row.workspaceId.trim());
-  }, [user?.email]);
+  }, [persistLastChat]);
 
   const renderGlobalInboxRow = useCallback(
     ({ item }: { item: GlobalInboxRow }) => {
@@ -1932,7 +1993,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
       const enriched = await enrichRavenChannelsWithPeerProfiles([base], user?.email);
       const opened = enriched[0] ?? base;
       setChannel(opened);
-      void setRavenLastChat(user?.email, { workspace: workspace.trim(), channelId: opened.name });
+      persistLastChat({ workspace: workspace.trim(), channelId: opened.name });
       setDrawerOpen(false);
       await loadMessages(chId);
     } catch (e: any) {
@@ -1948,7 +2009,8 @@ export const RavenUIMessagesScreen: React.FC = () => {
       const chNorm = chRaw.trim();
       const peerNorm = (peerUserIdRaw || '').trim();
       if (!wsNorm || !chNorm) return;
-      void setRavenLastChat(user?.email, { workspace: wsNorm, channelId: chNorm });
+      skipSuppliersFocusResetRef.current = true;
+      persistLastChat({ workspace: wsNorm, channelId: chNorm });
       const sameWs = workspace?.trim().toLowerCase() === wsNorm.toLowerCase();
       if (sameWs) {
         try {
@@ -1990,7 +2052,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
         setWorkspace(wsNorm);
       }
     },
-    [workspace, user?.email, loadMessages]
+    [workspace, persistLastChat, loadMessages]
   );
 
   useEffect(() => {
@@ -2038,6 +2100,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
         );
         return;
       }
+      skipSuppliersFocusResetRef.current = true;
       (navigation as { navigate: (name: string, params: object) => void }).navigate('RavenWorkspaceSupplierProfile', {
         supplierDocName: linked,
         workspaceAdminUser: m.user,
@@ -2375,7 +2438,6 @@ export const RavenUIMessagesScreen: React.FC = () => {
           <StatusBar style="dark" backgroundColor={RavenLight.panel} translucent />
           <View style={[s.bootCenter, { paddingTop: insets.top }]}>
             <ActivityIndicator size="large" color={RavenLight.accent} />
-            <Text style={s.bootHint}>{t('subscriptionPage.loading')}</Text>
           </View>
         </View>
       );
@@ -2386,7 +2448,6 @@ export const RavenUIMessagesScreen: React.FC = () => {
           <StatusBar style="dark" backgroundColor={RavenLight.panel} translucent />
           <View style={[s.bootCenter, { paddingTop: insets.top }]}>
             <ActivityIndicator size="large" color={RavenLight.accent} />
-            <Text style={s.bootHint}>{t('subscriptionPage.loading')}</Text>
           </View>
         </View>
       );

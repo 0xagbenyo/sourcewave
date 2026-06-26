@@ -115,7 +115,7 @@ export const SupplierDetailScreen: React.FC = () => {
   if (subscriptionLoading) {
     return (
       <View style={styles.root}>
-        <SourceWaveStackHeader title="Supplier" subtitle={t('subscriptionPage.loading')} onBack={() => navigation.goBack()} />
+        <SourceWaveStackHeader title="Supplier" onBack={() => navigation.goBack()} />
         <SafeAreaView style={styles.safe} edges={['bottom']}>
           <View style={styles.loadingWrap}>
             <ActivityIndicator size="large" color={Colors.WINE} />
@@ -128,7 +128,7 @@ export const SupplierDetailScreen: React.FC = () => {
   if (!isActive) {
     return (
       <View style={styles.root}>
-        <SourceWaveStackHeader title="Supplier" subtitle={t('subscriptionPage.loading')} onBack={() => navigation.goBack()} />
+        <SourceWaveStackHeader title="Supplier" onBack={() => navigation.goBack()} />
         <SafeAreaView style={styles.safe} edges={['bottom']}>
           <View style={styles.loadingWrap}>
             <ActivityIndicator size="large" color={Colors.WINE} />
@@ -289,7 +289,7 @@ export const SupplierDetailScreen: React.FC = () => {
               </>
             )}
           </TouchableOpacity>
-          {subscriptionLoading ? <Text style={styles.footerHint}>Checking subscription status…</Text> : null}
+          {subscriptionLoading ? <ActivityIndicator size="small" color={Colors.WINE} /> : null}
         </View>
       </SafeAreaView>
     </View>

@@ -315,7 +315,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
         return;
       }
       if (!rate || rate <= 0) {
-        Alert.alert('Invalid Rate', `Item request #${requestNum}: expected rate must be greater than 0.`);
+        Alert.alert('Invalid budget', `Item request #${requestNum}: my budget must be greater than 0.`);
         return;
       }
     }
@@ -524,13 +524,13 @@ export const SourcingRequestMultiScreen: React.FC = () => {
                     placeholderTextColor={Colors.TEXT_SECONDARY}
                   />
 
-                  <Text style={styles.label}>Expected Rate (GH₵) *</Text>
+                  <Text style={styles.label}>{t('sourcing.fieldRate')} *</Text>
                   <TextInput
                     style={styles.input}
                     value={form.expectedRate}
                     onChangeText={(v) => updateForm(form.id, { expectedRate: v.replace(/[^0-9.]/g, '') })}
                     keyboardType="decimal-pad"
-                    placeholder="Enter expected rate"
+                    placeholder={t('sourcing.phRate')}
                     placeholderTextColor={Colors.TEXT_SECONDARY}
                   />
                 </>

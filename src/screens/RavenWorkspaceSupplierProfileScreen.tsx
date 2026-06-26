@@ -329,7 +329,6 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
         {gateHeader}
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator color={RavenLight.accent} size="large" />
-          <Text style={[styles.loadingText, { marginTop: 12 }]}>{t('subscriptionPage.loading')}</Text>
         </View>
       </View>
     );
@@ -341,7 +340,6 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
         {gateHeader}
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator color={RavenLight.accent} size="large" />
-          <Text style={[styles.loadingText, { marginTop: 12 }]}>{t('subscriptionPage.loading')}</Text>
         </View>
       </View>
     );

@@ -144,7 +144,6 @@ export const SuppliersScreen: React.FC = () => {
       <View style={styles.root}>
         <SourceWaveStackHeader
           title={t('tabs.suppliers')}
-          subtitle={t('subscriptionPage.loading')}
           onBack={() => {
             if (navigation.canGoBack()) {
               navigation.goBack();
@@ -156,7 +155,6 @@ export const SuppliersScreen: React.FC = () => {
         <SafeAreaView style={styles.safe} edges={['bottom']}>
           <View style={styles.centered}>
             <ActivityIndicator size="large" color={Colors.WINE} />
-            <Text style={styles.loadingLabel}>{t('subscriptionPage.loading')}</Text>
           </View>
         </SafeAreaView>
       </View>
@@ -168,7 +166,6 @@ export const SuppliersScreen: React.FC = () => {
       <View style={styles.root}>
         <SourceWaveStackHeader
           title={t('tabs.suppliers')}
-          subtitle={t('subscriptionPage.loading')}
           onBack={() => {
             if (navigation.canGoBack()) {
               navigation.goBack();
@@ -180,7 +177,6 @@ export const SuppliersScreen: React.FC = () => {
         <SafeAreaView style={styles.safe} edges={['bottom']}>
           <View style={styles.centered}>
             <ActivityIndicator size="large" color={Colors.WINE} />
-            <Text style={styles.loadingLabel}>{t('subscriptionPage.loading')}</Text>
           </View>
         </SafeAreaView>
       </View>

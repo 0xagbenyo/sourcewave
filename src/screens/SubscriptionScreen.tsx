@@ -585,15 +585,14 @@ export const SubscriptionScreen: React.FC = () => {
       >
         <ScrollView
           style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[styles.scrollContent, isLoading && styles.scrollContentLoading]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
         >
           {isLoading ? (
-            <View style={styles.loadingRow}>
-              <ActivityIndicator size="small" color={Colors.WINE} />
-              <Text style={styles.loadingText}>{t('subscriptionPage.loading')}</Text>
+            <View style={styles.loadingCenter}>
+              <ActivityIndicator size="large" color={Colors.WINE} />
             </View>
           ) : null}
 
@@ -986,17 +985,15 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingBottom: 12,
   },
-  loadingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: Spacing.SCREEN_PADDING,
-    paddingVertical: 16,
+  scrollContentLoading: {
+    flexGrow: 1,
+    justifyContent: 'center',
   },
-  loadingText: {
-    fontSize: 14,
-    color: Colors.TEXT_SECONDARY,
-    fontWeight: '500',
+  loadingCenter: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 48,
+    minHeight: 240,
   },
   mutedLead: {
     fontSize: 14,

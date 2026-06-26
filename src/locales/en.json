@@ -73,8 +73,9 @@
     "resendOtpIn": "Resend code in {{seconds}}s",
     "haveAccount": "Already have an account? ",
     "signIn": "Sign in",
-    "infoBanner": "We'll send you a verification code. Click it to set your password and complete registration.",
-    "otpInfoBanner": "Enter the code emailed to you, choose a password, then create your account.",
+    "infoBanner": "We'll send you a verification code. Use it on the next screen to set your password and complete registration.",
+    "otpSentMessage": "A verification code has been sent to your email address. Copy and paste it on the next screen to set up your password and complete your registration.",
+    "otpSpamNote": "NB: Check your SPAM messages if it doesn't show up in your primary message area.",
     "legalPrefix": "By registering, you agree to our",
     "privacy": "Privacy Policy",
     "and": "and",
@@ -98,7 +99,9 @@
       "otpSendFailed": "Could not send verification code. Try again later.",
       "otpInvalid": "Invalid or expired code. Request a new code and try again.",
       "otpResentTitle": "Code sent",
-      "otpResentBody": "A new verification code was sent to your email."
+      "otpResentBody": "A new verification code was sent to your email.",
+      "createdTitle": "Account created",
+      "createdSignInManually": "Your account is ready. Please sign in with your email and password."
     }
   },
   "legal": {
@@ -193,9 +196,9 @@
     "menuChat": "Chat",
     "menuSubscription": "Subscription",
     "menuInvoices": "Invoices",
-    "sourcewaveInfoTitle": "SourceWave",
-    "sourcewaveInfoLead": "SourceWave is your mobile front door to the business: browse supplier promos on the carousel, chat with teams in Messages, and review your orders—all in one place.",
-    "sourcewaveInfoMore": "Pull down on Home to refresh flyers and orders. Swipe the carousel to move between promos; it also advances on its own while you are on this screen.",
+    "sourcewaveInfoTitle": "Welcome to SourceWave",
+    "sourcewaveInfoLead": "Source products directly from trusted suppliers in China.\n\nBrowse deals, contact suppliers, place orders, and track your sourcing journey from one convenient platform.",
+    "sourcewaveInfoMore": "Swipe left or right to view promotions and pull down to refresh for new updates.",
     "infoModalClose": "Close"
   },
   "orderDetails": {
@@ -267,7 +270,7 @@
     "fieldDescription": "Description",
     "fieldImage": "Reference image",
     "fieldQty": "Quantity",
-    "fieldRate": "Budget (GH₵)",
+    "fieldRate": "My budget (GH₵)",
     "phCategory": "Select category",
     "searchCategory": "Search categories",
     "emptyCategories": "No categories available right now.",
@@ -278,7 +281,7 @@
     "phDescription": "What you need (specs, size, colour, etc.)",
     "changeImage": "Change image",
     "uploadImage": "Upload image",
-    "phRate": "0.00",
+    "phRate": "Enter my budget",
     "submittedTitle": "Request sent",
     "submittedBody": "Sales order {{name}} was created and submitted."
   },
@@ -362,7 +365,7 @@
   "subscriptionPage": {
     "title": "SourceWave access",
     "subtitle": "Choose a plan · pay with card or Mobile Money",
-    "loading": "Checking your subscription…",
+    "loading": "Loading…",
     "activeLead": "You already have an active plan. Supplier messaging is available — you do not need to purchase again until it ends.",
     "activeTitle": "Plan active",
     "activeEnds": "{{plan}} · ends {{date}}",

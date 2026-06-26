@@ -19,6 +19,7 @@ import { useUserSession } from '../context/UserContext';
 import { useSubscription } from '../context/SubscriptionContext';
 import { useRavenUnread } from '../context/RavenUnreadContext';
 import { useTranslation } from 'react-i18next';
+import { requestSuppliersTabReset } from '../utils/suppliersTabReset';
 
 const BAR_ROW_HEIGHT = 44;
 
@@ -167,6 +168,7 @@ export const Header: React.FC<HeaderProps> = ({
                 goSubscriptionForPremium();
                 return;
               }
+              requestSuppliersTabReset();
               nav.navigate('Main', { screen: 'Suppliers' });
             },
           },

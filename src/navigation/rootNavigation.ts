@@ -3,24 +3,34 @@ import type { RootStackParamList } from '../types';
 
 export const rootNavigationRef = createNavigationContainerRef<RootStackParamList>();
 
-/** Reset the root stack to the login flow (works from any nested tab or stack). */
-export function resetToAuthScreen(): void {
-  if (!rootNavigationRef.isReady()) return;
+function dispatchRootReset(routeName: keyof RootStackParamList): boolean {
+  if (!rootNavigationRef.isReady()) return false;
   rootNavigationRef.dispatch(
     CommonActions.reset({
       index: 0,
-      routes: [{ name: 'Auth' }],
+      routes: [{ name: routeName }],
     })
   );
+  return true;
+}
+
+function dispatchRootResetWithRetry(routeName: keyof RootStackParamList): void {
+  if (dispatchRootReset(routeName)) return;
+  let attempts = 0;
+  const timer = setInterval(() => {
+    attempts += 1;
+    if (dispatchRootReset(routeName) || attempts >= 24) {
+      clearInterval(timer);
+    }
+  }, 50);
+}
+
+/** Reset the root stack to the login flow (works from any nested tab or stack). */
+export function resetToAuthScreen(): void {
+  dispatchRootResetWithRetry('Auth');
 }
 
 /** Reset the root stack to the signed-in app shell. */
 export function resetToMainScreen(): void {
-  if (!rootNavigationRef.isReady()) return;
-  rootNavigationRef.dispatch(
-    CommonActions.reset({
-      index: 0,
-      routes: [{ name: 'Main' }],
-    })
-  );
+  dispatchRootResetWithRetry('Main');
 }

@@ -109,11 +109,10 @@ export const AgentSupplierChatScreen: React.FC = () => {
   if (accessGate === 'checking') {
     return (
       <View style={styles.root}>
-        <SourceWaveStackHeader title="Chat" subtitle="Checking access…" onBack={() => navigation.goBack()} />
+        <SourceWaveStackHeader title="Chat" onBack={() => navigation.goBack()} />
         <SafeAreaView style={styles.bodySafe} edges={['bottom']}>
           <View style={styles.centered}>
             <ActivityIndicator size="large" color={Colors.WINE} />
-            <Text style={styles.loadingLabel}>Checking subscription…</Text>
           </View>
         </SafeAreaView>
       </View>

@@ -14,11 +14,8 @@ import { useNavigation } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
-import { getERPNextClient } from '../services/erpnext';
-import { joinAllPublicRavenWorkspacesAsSessionUser } from '../services/ravenNativeApi';
 import { useUserSession } from '../context/UserContext';
-import { saveFrappeWebCredentials } from '../services/sessionCredentials';
-import { detectSupplierPortalSession } from '../services/supplierPortal';
+import { completeAppSignIn } from '../utils/completeAppSignIn';
 import { resetToMainScreen } from '../navigation/rootNavigation';
 
 export const LoginScreen: React.FC = () => {
@@ -74,83 +71,9 @@ export const LoginScreen: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const client = getERPNextClient();
       const loginIdentifier = trimmedEmail;
-
-      console.log('Attempting login with:', { loginIdentifier, passwordLength: password.length });
-      const loginResult = await client.login(loginIdentifier, password);
-      console.log('Login successful:', loginResult);
-
-      try {
-        await joinAllPublicRavenWorkspacesAsSessionUser();
-      } catch (joinWsErr) {
-        console.warn('Could not join all public Raven workspaces:', joinWsErr);
-      }
-      
-      // Store user session
-      // Use loginIdentifier as fallback if user field is not available
-      const userEmail = loginResult.user || loginIdentifier;
-      
-      // Fetch customer by email to get the customer name (ERPNext Customer 'name' field for API calls)
-      // and customer_name (display name for profile)
-      let customerId = userEmail; // Fallback to email if customer not found
-      let customerDisplayName = loginResult.full_name || undefined; // Fallback to login full_name
-      try {
-        const customer = await client.getCustomerByEmail(userEmail);
-        if (customer) {
-          // customer.name is the ERPNext Customer ID (e.g., "CUST-00001") - used for API calls
-          if (customer.name) {
-            customerId = customer.name;
-          }
-          // customer.customer_name is the display name (e.g., "John Doe") - used for profile display
-          if (customer.customer_name) {
-            customerDisplayName = customer.customer_name;
-          }
-          console.log('Customer found:', { id: customer.name, name: customer.customer_name });
-        }
-      } catch (error) {
-        console.warn('Could not fetch customer by email:', error);
-        // Continue with email as fallback
-      }
-
-      const frappeUserName = String(loginResult.user || loginIdentifier).trim();
-      let portal: Awaited<ReturnType<typeof detectSupplierPortalSession>> | null = null;
-      try {
-        portal = await detectSupplierPortalSession(userEmail, frappeUserName);
-      } catch (e) {
-        console.warn('Supplier portal detection failed:', e);
-      }
-
-      // Supplier UI when ERPNext reports Supplier role and/or a linked Supplier doc.
-      // supplierId may be missing if the site links the portal user differently; lists stay empty until fixed in ERPNext.
-      if (portal?.isSupplier) {
-        const supplierDoc = portal.supplierId?.trim() || '';
-        setUser({
-          email: userEmail,
-          fullName: portal.supplierName || customerDisplayName || loginResult.full_name,
-          /** Frappe `User.name` (for Raven / roles). ERPNext Supplier doc id is always `supplierId`. */
-          user: frappeUserName || userEmail,
-          appMode: 'supplier',
-          supplierId: supplierDoc || undefined,
-          supplierName: portal.supplierName,
-        });
-      } else {
-        setUser({
-          email: userEmail,
-          fullName: customerDisplayName,
-          user: customerId,
-          appMode: 'buyer',
-        });
-      }
-
-      try {
-        await saveFrappeWebCredentials(userEmail, password);
-      } catch (credErr) {
-        console.warn('Could not save credentials for Raven auto-login:', credErr);
-      }
-
-      console.log('User session stored:', { email: userEmail, customerId: customerId, customerDisplayName: customerDisplayName });
-
+      const session = await completeAppSignIn(loginIdentifier, password);
+      setUser(session);
       setIsLoading(false);
       resetToMainScreen();
     } catch (error: any) {

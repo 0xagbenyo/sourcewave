@@ -13,6 +13,7 @@ import { ProfileScreen } from '../screens/ProfileScreen';
 import { RavenUIMessagesScreen } from '../screens/RavenUIMessagesScreen';
 import { getMainTabBarStyle } from './mainTabBarStyle';
 import { Colors } from '../constants/colors';
+import { requestSuppliersTabReset } from '../utils/suppliersTabReset';
 import type { MainTabParamList } from '../types';
 
 const MainTab = createBottomTabNavigator<MainTabParamList>();
@@ -24,17 +25,19 @@ export const MainTabNavigator: React.FC = () => {
   const { user } = useUserSession();
   const { isActive: subscriptionActive, isLoading: subscriptionLoading } = useSubscription();
 
-  const suppliersTabListeners = useMemo(
-    () => ({
+  const suppliersTabListeners = useCallback(
+    ({ navigation: tabNav }: { navigation: { navigate: (name: string, params?: object) => void } }) => ({
       tabPress: (e: { preventDefault?: () => void }) => {
         if (!user?.email) return;
         if (!subscriptionLoading && !subscriptionActive) {
           e.preventDefault?.();
           (navigation as { navigate: (name: string) => void }).navigate('Subscription');
+          return;
         }
+        requestSuppliersTabReset();
       },
     }),
-    [user?.email, subscriptionLoading, subscriptionActive, t, navigation]
+    [user?.email, subscriptionLoading, subscriptionActive, navigation]
   );
 
   const screenOptions = useCallback(
@@ -88,7 +91,7 @@ export const MainTabNavigator: React.FC = () => {
       <MainTab.Screen
         name="Suppliers"
         component={RavenUIMessagesScreen}
-        options={{ tabBarLabel: t('tabs.suppliers') }}
+        options={{ tabBarLabel: t('tabs.suppliers'), unmountOnBlur: true }}
         listeners={suppliersTabListeners}
       />
       <MainTab.Screen name="Profile" component={ProfileScreen} options={{ tabBarLabel: t('tabs.account') }} />
