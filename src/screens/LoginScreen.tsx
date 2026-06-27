@@ -174,6 +174,10 @@ export const LoginScreen: React.FC = () => {
         action={t('login.signUp')}
         onPress={() => navigation.navigate('RegisterConsent' as never)}
       />
+
+      <AuthTextLink centered onPress={() => navigation.getParent()?.navigate('ContactUs' as never)}>
+        {t('login.contactUs')}
+      </AuthTextLink>
     </AuthScreenShell>
   );
 };
