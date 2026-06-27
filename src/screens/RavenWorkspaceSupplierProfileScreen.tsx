@@ -9,11 +9,9 @@ import {
   RefreshControl,
   Linking,
   Modal,
-  Pressable,
-  Alert,
   useWindowDimensions,
-  Platform,
 } from 'react-native';
+import { appAlert as Alert } from '../services/appAlert';
 import { useRoute, useNavigation, useFocusEffect, type RouteProp } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -44,16 +42,11 @@ type IoniconsName = React.ComponentProps<typeof Ionicons>['name'];
 
 type RouteProps = RouteProp<RootStackParamList, 'RavenWorkspaceSupplierProfile'>;
 
-const MEDIA_COLS = 3;
-const MEDIA_GAP = 8;
-const PDF_TOOLBAR_BASE_H = 52;
+const MEDIA_COLS = 2;
+const MEDIA_GAP = 6;
+const FILE_COLS = 2;
 
 type GalleryItem = { key: string; uri: string };
-
-function isPrivateAttachment(a: ErpSupplierFileAttachment): boolean {
-  const v = a.is_private as unknown;
-  return v === true || v === 1 || String(v).toLowerCase() === 'true' || String(v) === '1';
-}
 
 function isImageFileName(name: string): boolean {
   const ext = name.split('.').pop()?.toLowerCase() ?? '';
@@ -109,21 +102,28 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
   });
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
-  const { supplierDocName, workspaceAdminUser, ravenWorkspaceId } = route.params;
+  const { supplierDocName, workspaceAdminUser, ravenWorkspaceId, ravenWorkspaceName, shareSalesOrderName } =
+    route.params;
+  const shareOrderName = (shareSalesOrderName || '').trim();
 
   const [profile, setProfile] = useState<ErpSupplierProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [lightboxUri, setLightboxUri] = useState<string | null>(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   /** Any Supplier attachment (PDF, Office, etc.) — same authenticated WebView as PDFs so private `/private/files/` URLs work in-app. */
   const [fileWebPreview, setFileWebPreview] = useState<{ uri: string; title: string } | null>(null);
   const [openingChat, setOpeningChat] = useState(false);
 
+  const sectionPad = Spacing.MD;
+
   const mediaTile = useMemo(() => {
-    const pad = Spacing.MD * 2;
-    return (windowWidth - pad - MEDIA_GAP * (MEDIA_COLS - 1)) / MEDIA_COLS;
-  }, [windowWidth]);
+    return (windowWidth - sectionPad * 2 - MEDIA_GAP * (MEDIA_COLS - 1)) / MEDIA_COLS;
+  }, [windowWidth, sectionPad]);
+
+  const fileTileWidth = useMemo(() => {
+    return (windowWidth - sectionPad * 2 - MEDIA_GAP * (FILE_COLS - 1)) / FILE_COLS;
+  }, [windowWidth, sectionPad]);
 
   const load = useCallback(async () => {
     const key = (supplierDocName || '').trim();
@@ -248,6 +248,54 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
     }
   }, [adminId, adminIdLower, viewerId, wsId, navigation]);
 
+  const onSendSalesOrder = useCallback(() => {
+    if (!adminId) {
+      Alert.alert(t('salesOrderShare.title'), 'No representative user is linked to this profile.');
+      return;
+    }
+    if (adminIdLower === viewerId) {
+      Alert.alert(t('salesOrderShare.title'), 'You cannot send a request to yourself.');
+      return;
+    }
+    (navigation as { navigate: (name: string, params: object) => void }).navigate('SourcingRequest', {
+      peerUserId: adminId,
+      supplierLabel: profile?.supplier_name || profile?.name || '',
+      supplierDocName: (supplierDocName || '').trim(),
+      supplierGroup: String(profile?.supplier_group || '').trim(),
+      ...((ravenWorkspaceName || '').trim()
+        ? { workspaceName: (ravenWorkspaceName || '').trim() }
+        : {}),
+    });
+  }, [
+    adminId,
+    adminIdLower,
+    viewerId,
+    navigation,
+    profile?.supplier_name,
+    profile?.name,
+    profile?.supplier_group,
+    supplierDocName,
+    ravenWorkspaceName,
+    t,
+  ]);
+
+  const onShareExistingOrder = useCallback(() => {
+    if (!adminId) {
+      Alert.alert(t('salesOrderShare.title'), 'No representative user is linked to this profile.');
+      return;
+    }
+    if (adminIdLower === viewerId) {
+      Alert.alert(t('salesOrderShare.title'), 'You cannot send a request to yourself.');
+      return;
+    }
+    if (!shareOrderName) return;
+    (navigation as { navigate: (name: string, params: object) => void }).navigate('BuyerSalesOrderShareCompose', {
+      peerUserId: adminId,
+      salesOrderName: shareOrderName,
+      supplierLabel: profile?.supplier_name || profile?.name || '',
+    });
+  }, [adminId, adminIdLower, viewerId, shareOrderName, navigation, profile?.supplier_name, profile?.name, t]);
+
   const onOpenFile = (att: ErpSupplierFileAttachment) => {
     const t = att.file_url.trim();
     if (!t) return;
@@ -264,12 +312,35 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
     });
   }, [fileWebPreview?.uri]);
 
+  const openLightbox = useCallback((index: number) => setLightboxIndex(index), []);
+  const closeLightbox = useCallback(() => setLightboxIndex(null), []);
+
+  const stepLightbox = useCallback(
+    (delta: number) => {
+      setLightboxIndex((idx) => {
+        if (idx == null || galleryItems.length === 0) return idx;
+        const next = idx + delta;
+        if (next < 0 || next >= galleryItems.length) return idx;
+        return next;
+      });
+    },
+    [galleryItems.length]
+  );
+
+  const filePreviewIsImage = fileWebPreview ? isImageFileName(fileWebPreview.title) : false;
+  const filePreviewIsPdf = fileWebPreview ? isPdfFileName(fileWebPreview.title) : false;
+
   const initials = useMemo(() => {
     if (!profile) return '';
     return initialsFromUserId(profile.supplier_name || profile.name);
   }, [profile]);
 
-  const gateHeader = (
+  const workspaceLabel = (ravenWorkspaceName || '').trim();
+  const aboutPlain = profile?.supplier_details_plain?.trim() || '';
+  const hasAbout =
+    aboutPlain.length > 0 && !/^no description on file/i.test(aboutPlain);
+
+  const renderNav = (title: string, kicker?: string) => (
     <>
       <StatusBar style="dark" backgroundColor={RavenLight.panel} translucent />
       <View style={[styles.statusBarFill, { height: insets.top }]} />
@@ -283,10 +354,12 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
           >
             <Ionicons name="chevron-back" size={24} color={RavenLight.text} />
           </TouchableOpacity>
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', minWidth: 0, paddingHorizontal: 8 }}>
-            <Text style={styles.navKicker}>Supplier</Text>
+          <View style={styles.navCenter}>
+            <Text style={styles.navKicker} numberOfLines={1}>
+              {kicker || t('supplierProfile.kicker')}
+            </Text>
             <Text style={styles.navTitle} numberOfLines={1}>
-              Profile
+              {title}
             </Text>
           </View>
           <View style={styles.navSpacer} />
@@ -298,7 +371,7 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
   if (!user?.email) {
     return (
       <View style={styles.root}>
-        {gateHeader}
+        {renderNav(t('supplierProfile.title'))}
         <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: Spacing.LG }}>
           <Text style={styles.navTitle}>{t('suppliersPremium.signInTitle')}</Text>
           <Text style={[styles.loadingText, { marginTop: 10, textAlign: 'center' }]}>
@@ -326,7 +399,7 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
   if (subscriptionLoading) {
     return (
       <View style={styles.root}>
-        {gateHeader}
+        {renderNav(t('supplierProfile.title'))}
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator color={RavenLight.accent} size="large" />
         </View>
@@ -337,7 +410,7 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
   if (!subscriptionActive) {
     return (
       <View style={styles.root}>
-        {gateHeader}
+        {renderNav(t('supplierProfile.title'))}
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator color={RavenLight.accent} size="large" />
         </View>
@@ -347,27 +420,7 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
 
   return (
     <View style={styles.root}>
-      <StatusBar style="dark" backgroundColor={RavenLight.panel} translucent />
-      <View style={[styles.statusBarFill, { height: insets.top }]} />
-      <View style={styles.safeTop}>
-        <View style={styles.navRow}>
-          <TouchableOpacity
-            onPress={() => navigation.goBack()}
-            style={styles.navBack}
-            hitSlop={14}
-            accessibilityLabel="Go back"
-          >
-            <Ionicons name="chevron-back" size={24} color={RavenLight.text} />
-          </TouchableOpacity>
-          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', minWidth: 0, paddingHorizontal: 8 }}>
-            <Text style={styles.navKicker}>Supplier</Text>
-            <Text style={styles.navTitle} numberOfLines={1}>
-              Profile
-            </Text>
-          </View>
-          <View style={styles.navSpacer} />
-        </View>
-      </View>
+      {renderNav(profile?.supplier_name || t('supplierProfile.title'), workspaceLabel || undefined)}
 
       <ScrollView
         style={styles.scroll}
@@ -376,99 +429,210 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
         keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        <View style={styles.bodyPad}>
-          <View style={styles.heroCard}>
+        <View style={styles.body}>
+          <View style={styles.section}>
             <View style={styles.headBlock}>
-            <View style={styles.avatarWrap}>
-              {loading && !profile ? (
-                <View style={[styles.avatar, styles.avatarFallback]}>
-                  <ActivityIndicator color={RavenLight.accent} size="large" />
-                </View>
-              ) : profile?.image ? (
-                <ErpAuthenticatedImage uri={profile.image} style={styles.avatar} resizeMode="cover" />
-              ) : (
-                <View style={[styles.avatar, styles.avatarFallback]}>
-                  <Text style={styles.avatarInitials}>{initials || '—'}</Text>
-                </View>
-              )}
-            </View>
-
-            {loading && !profile ? (
-              <View style={styles.loadingBlock}>
-                <Text style={styles.loadingText}>Loading…</Text>
+              <View style={styles.avatarWrap}>
+                {loading && !profile ? (
+                  <View style={[styles.avatar, styles.avatarFallback]}>
+                    <ActivityIndicator color={RavenLight.accent} size="large" />
+                  </View>
+                ) : profile?.image ? (
+                  <ErpAuthenticatedImage uri={profile.image} style={styles.avatar} resizeMode="cover" />
+                ) : (
+                  <View style={[styles.avatar, styles.avatarFallback]}>
+                    <Text style={styles.avatarInitials}>{initials || '—'}</Text>
+                  </View>
+                )}
               </View>
-            ) : null}
 
-            {error && !profile ? <Text style={styles.err}>{error}</Text> : null}
-
-            {profile ? (
-              <>
-                <Text style={styles.businessName} numberOfLines={2}>
-                  {profile.supplier_name}
-                </Text>
-                {profile.supplier_type ? (
-                  <Text style={styles.businessType}>{profile.supplier_type}</Text>
-                ) : null}
-
-                <View style={styles.chipRow}>
-                  {profile.country ? (
-                    <View style={styles.chip}>
-                      <Ionicons name="earth-outline" size={14} color={RavenLight.textMuted} />
-                      <Text style={styles.chipText}>{profile.country}</Text>
-                    </View>
-                  ) : null}
-                  {profile.supplier_group ? (
-                    <View style={styles.chip}>
-                      <Ionicons name="pricetags-outline" size={14} color={RavenLight.textMuted} />
-                      <Text style={styles.chipText}>{profile.supplier_group}</Text>
-                    </View>
-                  ) : null}
+              {loading && !profile ? (
+                <View style={styles.loadingBlock}>
+                  <Text style={styles.loadingText}>{t('supplierProfile.loading')}</Text>
                 </View>
+              ) : null}
 
-                <TouchableOpacity
-                  style={[styles.chatBtn, (!canMessageAdmin || openingChat) && styles.chatBtnDisabled]}
-                  onPress={() => void onMessageSupplier()}
-                  disabled={openingChat}
-                  activeOpacity={0.85}
-                  accessibilityLabel="Chat with supplier"
-                >
-                  {openingChat ? (
-                    <ActivityIndicator size="small" color={RavenLight.accent} />
-                  ) : (
-                    <Ionicons name="chatbubble-ellipses-outline" size={20} color={RavenLight.accent} />
+              {error && !profile ? (
+                <View style={styles.errorBlock}>
+                  <Ionicons name="cloud-offline-outline" size={36} color={RavenLight.textMuted} />
+                  <Text style={styles.err}>{error}</Text>
+                  <TouchableOpacity style={styles.retryBtn} onPress={onRefresh} activeOpacity={0.85}>
+                    <Text style={styles.retryBtnText}>{t('supplierProfile.retry')}</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              {profile ? (
+                <>
+                  {workspaceLabel ? (
+                    <View style={styles.workspacePill}>
+                      <Ionicons name="people-outline" size={14} color={RavenLight.accent} />
+                      <Text style={styles.workspacePillText} numberOfLines={1}>
+                        {t('supplierProfile.workspaceBadge', { name: workspaceLabel })}
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  <Text style={styles.businessName} numberOfLines={2}>
+                    {profile.supplier_name}
+                  </Text>
+                  {profile.supplier_type ? (
+                    <Text style={styles.businessType}>{profile.supplier_type}</Text>
+                  ) : null}
+
+                  {(galleryItems.length > 0 || fileAttachments.length > 0) && (
+                    <View style={styles.statsRow}>
+                      {galleryItems.length > 0 ? (
+                        <View style={styles.statPill}>
+                          <Ionicons name="images-outline" size={14} color={RavenLight.accent} />
+                          <Text style={styles.statPillText}>
+                            {t('supplierProfile.statPhotos', { count: galleryItems.length })}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {fileAttachments.length > 0 ? (
+                        <View style={styles.statPill}>
+                          <Ionicons name="folder-outline" size={14} color={RavenLight.accent} />
+                          <Text style={styles.statPillText}>
+                            {t('supplierProfile.statFiles', { count: fileAttachments.length })}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
                   )}
-                  <Text style={styles.chatBtnText}>Chat</Text>
-                </TouchableOpacity>
-              </>
-            ) : null}
-          </View>
+
+                  {user?.appMode !== 'supplier' ? (
+                    <>
+                      <View style={styles.actionRow}>
+                        <TouchableOpacity
+                          style={[
+                            styles.actionBtn,
+                            styles.actionBtnOutline,
+                            (!canMessageAdmin || openingChat) && styles.actionBtnDisabled,
+                          ]}
+                          onPress={() => void onMessageSupplier()}
+                          disabled={openingChat || !canMessageAdmin}
+                          activeOpacity={0.85}
+                          accessibilityLabel={t('supplierProfile.chat')}
+                        >
+                          {openingChat ? (
+                            <ActivityIndicator size="small" color={RavenLight.accent} />
+                          ) : (
+                            <Ionicons name="chatbubble-ellipses-outline" size={20} color={RavenLight.accent} />
+                          )}
+                          <Text style={styles.actionBtnOutlineText}>{t('supplierProfile.chat')}</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[styles.actionBtn, styles.actionBtnPrimary, !adminId && styles.actionBtnDisabled]}
+                          onPress={shareOrderName ? onShareExistingOrder : onSendSalesOrder}
+                          disabled={!adminId}
+                          activeOpacity={0.85}
+                          accessibilityLabel={
+                            shareOrderName ? t('supplierProfile.shareOrder') : t('supplierProfile.sendRequest')
+                          }
+                        >
+                          <Ionicons
+                            name={shareOrderName ? 'share-outline' : 'cart-outline'}
+                            size={20}
+                            color={RavenLight.panel}
+                          />
+                          <Text style={styles.actionBtnPrimaryText} numberOfLines={2}>
+                            {shareOrderName
+                              ? t('supplierProfile.shareOrder', { order: shareOrderName })
+                              : t('supplierProfile.sendRequest')}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                      {shareOrderName ? (
+                        <TouchableOpacity
+                          style={[styles.secondaryLinkBtn, !adminId && styles.actionBtnDisabled]}
+                          onPress={onSendSalesOrder}
+                          disabled={!adminId}
+                          activeOpacity={0.85}
+                        >
+                          <Text style={styles.secondaryLinkBtnText}>{t('supplierProfile.sendNewRequestInstead')}</Text>
+                        </TouchableOpacity>
+                      ) : null}
+                    </>
+                  ) : (
+                    <TouchableOpacity
+                      style={[
+                        styles.actionBtn,
+                        styles.actionBtnOutline,
+                        styles.actionBtnSolo,
+                        (!canMessageAdmin || openingChat) && styles.actionBtnDisabled,
+                      ]}
+                      onPress={() => void onMessageSupplier()}
+                      disabled={openingChat || !canMessageAdmin}
+                      activeOpacity={0.85}
+                      accessibilityLabel={t('supplierProfile.chat')}
+                    >
+                      {openingChat ? (
+                        <ActivityIndicator size="small" color={RavenLight.accent} />
+                      ) : (
+                        <Ionicons name="chatbubble-ellipses-outline" size={20} color={RavenLight.accent} />
+                      )}
+                      <Text style={styles.actionBtnOutlineText}>{t('supplierProfile.chat')}</Text>
+                    </TouchableOpacity>
+                  )}
+                </>
+              ) : null}
+            </View>
           </View>
 
           {profile ? (
             <>
-              <View style={styles.card}>
-                <View style={styles.cardHeader}>
-                  <Ionicons name="reader-outline" size={18} color={RavenLight.textMuted} />
-                  <Text style={styles.cardTitle}>About</Text>
+              {(profile.country || profile.supplier_group) && (
+                <View style={styles.section}>
+                  {profile.country ? (
+                    <View style={styles.infoRow}>
+                      <View style={styles.infoIconWrap}>
+                        <Ionicons name="earth-outline" size={18} color={RavenLight.accent} />
+                      </View>
+                      <View style={styles.infoMid}>
+                        <Text style={styles.infoLabel}>{t('supplierProfile.country')}</Text>
+                        <Text style={styles.infoValue}>{profile.country}</Text>
+                      </View>
+                    </View>
+                  ) : null}
+                  {profile.supplier_group ? (
+                    <View style={[styles.infoRow, profile.country ? styles.infoRowBorder : null]}>
+                      <View style={styles.infoIconWrap}>
+                        <Ionicons name="pricetags-outline" size={18} color={RavenLight.accent} />
+                      </View>
+                      <View style={styles.infoMid}>
+                        <Text style={styles.infoLabel}>{t('supplierProfile.group')}</Text>
+                        <Text style={styles.infoValue}>{profile.supplier_group}</Text>
+                      </View>
+                    </View>
+                  ) : null}
                 </View>
-                <Text style={styles.aboutText}>{profile.supplier_details_plain}</Text>
-                <Text style={styles.docFoot}>Document · {profile.name}</Text>
+              )}
+
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>{t('supplierProfile.about')}</Text>
+                {hasAbout ? (
+                  <Text style={styles.aboutText}>{aboutPlain}</Text>
+                ) : (
+                  <Text style={styles.aboutEmpty}>{t('supplierProfile.aboutEmpty')}</Text>
+                )}
               </View>
 
               {galleryItems.length > 0 ? (
-                <View style={styles.card}>
-                  <View style={styles.cardHeader}>
-                    <Ionicons name="images-outline" size={18} color={RavenLight.textMuted} />
-                    <Text style={styles.cardTitle}>Photos</Text>
-                    <Text style={styles.cardBadge}>{galleryItems.length}</Text>
+                <View style={styles.section}>
+                  <View style={styles.sectionHeadRow}>
+                    <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>
+                      {t('supplierProfile.photos')}
+                    </Text>
+                    <Text style={styles.sectionCount}>{galleryItems.length}</Text>
                   </View>
-                  <Text style={styles.cardHint}>All thumbnails below — tap to enlarge.</Text>
                   <View style={[styles.mediaGrid, { gap: MEDIA_GAP }]}>
-                    {galleryItems.map((item) => (
+                    {galleryItems.map((item, index) => (
                       <TouchableOpacity
                         key={item.key}
-                        activeOpacity={0.88}
-                        onPress={() => setLightboxUri(item.uri)}
+                        activeOpacity={0.9}
+                        onPress={() => openLightbox(index)}
                         style={[styles.mediaTile, { width: mediaTile, height: mediaTile }]}
                       >
                         <ErpAuthenticatedImage uri={item.uri} style={styles.mediaImage} resizeMode="cover" />
@@ -479,42 +643,35 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
               ) : null}
 
               {fileAttachments.length > 0 ? (
-                <View style={styles.card}>
-                  <View style={styles.cardHeader}>
-                    <Ionicons name="folder-outline" size={18} color={RavenLight.textMuted} />
-                    <Text style={styles.cardTitle}>Files</Text>
-                    <Text style={styles.cardBadge}>{fileAttachments.length}</Text>
+                <View style={styles.section}>
+                  <View style={styles.sectionHeadRow}>
+                    <Text style={[styles.sectionTitle, styles.sectionTitleInline]}>
+                      {t('supplierProfile.files')}
+                    </Text>
+                    <Text style={styles.sectionCount}>{fileAttachments.length}</Text>
                   </View>
-                  <Text style={styles.cardHint}>
-                    Files open inside the app when you are signed in. Use “Browser” in the viewer toolbar if you prefer
-                    Safari/Chrome or another app (Office may still need that).
-                  </Text>
-                  {fileAttachments.map((att) => {
-                    const { icon, color } = fileKindLabel(att.file_name);
-                    const priv = isPrivateAttachment(att);
-                    const pdf = isPdfFileName(att.file_name);
-                    return (
-                      <TouchableOpacity
-                        key={att.name || att.file_url}
-                        style={styles.fileRow}
-                        onPress={() => onOpenFile(att)}
-                        activeOpacity={0.75}
-                      >
-                        <View style={[styles.fileIconWrap, { backgroundColor: `${color}18` }]}>
-                          <Ionicons name={icon} size={22} color={color} />
-                        </View>
-                        <View style={styles.fileMid}>
-                          <Text style={styles.fileName} numberOfLines={2}>
+                  <View style={[styles.fileGrid, { gap: MEDIA_GAP }]}>
+                    {fileAttachments.map((att) => {
+                      const { icon, color } = fileKindLabel(att.file_name);
+                      const ext = (att.file_name.split('.').pop() || '').toUpperCase();
+                      return (
+                        <TouchableOpacity
+                          key={att.name || att.file_url}
+                          style={[styles.fileTile, { width: fileTileWidth }]}
+                          onPress={() => onOpenFile(att)}
+                          activeOpacity={0.85}
+                        >
+                          <View style={[styles.fileTileIcon, { borderColor: color }]}>
+                            <Ionicons name={icon} size={24} color={color} />
+                          </View>
+                          <Text style={styles.fileTileExt}>{ext || 'FILE'}</Text>
+                          <Text style={styles.fileTileName} numberOfLines={3}>
                             {att.file_name}
                           </Text>
-                          <Text style={styles.fileMeta}>
-                            {pdf ? 'PDF · in-app viewer' : priv ? 'Private · in-app (signed in)' : 'In-app viewer'}
-                          </Text>
-                        </View>
-                        <Ionicons name="chevron-forward" size={20} color={RavenLight.textSubtle} />
-                      </TouchableOpacity>
-                    );
-                  })}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
                 </View>
               ) : null}
             </>
@@ -522,24 +679,64 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
         </View>
       </ScrollView>
 
-      <Modal visible={!!lightboxUri} transparent animationType="fade" onRequestClose={() => setLightboxUri(null)}>
+      <Modal
+        visible={lightboxIndex != null}
+        transparent
+        animationType="fade"
+        onRequestClose={closeLightbox}
+      >
         <View style={styles.lightboxRoot}>
-          <Pressable style={styles.lightboxScrim} onPress={() => setLightboxUri(null)} />
-          <View style={styles.lightboxBody}>
-            <TouchableOpacity
-              style={[
-                styles.lightboxClose,
-                { top: Math.max(insets.top, 12) + 6, right: Math.max(insets.right, 16) },
-              ]}
-              onPress={() => setLightboxUri(null)}
-              hitSlop={16}
-            >
-              <Ionicons name="close" size={28} color="#fff" />
+          <StatusBar style="light" />
+          <View style={[styles.lightboxTopBar, { paddingTop: Math.max(insets.top, 8) }]}>
+            <TouchableOpacity onPress={closeLightbox} style={styles.lightboxTopBtn} hitSlop={12}>
+              <Ionicons name="close" size={26} color="#fff" />
             </TouchableOpacity>
-            {lightboxUri ? (
-              <ErpAuthenticatedImage uri={lightboxUri} style={styles.lightboxImage} resizeMode="contain" />
+            <Text style={styles.lightboxCounter}>
+              {lightboxIndex != null
+                ? t('supplierProfile.photoCounter', {
+                    current: lightboxIndex + 1,
+                    total: galleryItems.length,
+                  })
+                : ''}
+            </Text>
+            <View style={styles.lightboxTopBtn} />
+          </View>
+
+          <View style={styles.lightboxImageWrap}>
+            {lightboxIndex != null && galleryItems[lightboxIndex] ? (
+              <ErpAuthenticatedImage
+                uri={galleryItems[lightboxIndex].uri}
+                style={styles.lightboxImage}
+                resizeMode="contain"
+              />
             ) : null}
           </View>
+
+          {galleryItems.length > 1 ? (
+            <View style={[styles.lightboxNavRow, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+              <TouchableOpacity
+                style={[styles.lightboxNavBtn, lightboxIndex === 0 && styles.lightboxNavBtnOff]}
+                onPress={() => stepLightbox(-1)}
+                disabled={lightboxIndex === 0}
+              >
+                <Ionicons name="chevron-back" size={22} color="#fff" />
+                <Text style={styles.lightboxNavText}>{t('supplierProfile.photoPrev')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.lightboxNavBtn,
+                  lightboxIndex === galleryItems.length - 1 && styles.lightboxNavBtnOff,
+                ]}
+                onPress={() => stepLightbox(1)}
+                disabled={lightboxIndex === galleryItems.length - 1}
+              >
+                <Text style={styles.lightboxNavText}>{t('supplierProfile.photoNext')}</Text>
+                <Ionicons name="chevron-forward" size={22} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={{ height: Math.max(insets.bottom, 16) }} />
+          )}
         </View>
       </Modal>
 
@@ -549,63 +746,71 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
         presentationStyle="fullScreen"
         onRequestClose={() => setFileWebPreview(null)}
       >
-        <View style={styles.pdfRoot}>
-          <View style={[styles.pdfWebShell, { paddingTop: PDF_TOOLBAR_BASE_H + Math.max(insets.top, 12) }]}>
-            {fileWebPreview?.uri ? (
-              isImageFileName(fileWebPreview.title) ? (
-                <ErpAuthenticatedImage
-                  uri={fileWebPreview.uri}
-                  style={styles.pdfWebView}
-                  resizeMode="contain"
-                />
-              ) : isPdfFileName(fileWebPreview.title) ? (
-                <ErpAuthenticatedPdfWebView resourceUri={fileWebPreview.uri} style={styles.pdfWebView} />
-              ) : (
-                <ErpAuthenticatedCachedFileWebView
-                  resourceUri={fileWebPreview.uri}
-                  fileName={fileWebPreview.title}
-                  style={styles.pdfWebView}
-                />
-              )
-            ) : null}
-          </View>
+        <View style={styles.previewRoot}>
+          <StatusBar style={filePreviewIsImage ? 'light' : 'dark'} />
           <View
             style={[
-              styles.pdfToolbar,
-              {
-                paddingTop: Math.max(insets.top, 12) + 4,
-                minHeight: PDF_TOOLBAR_BASE_H + Math.max(insets.top, 12) + 4,
-              },
+              styles.previewToolbar,
+              { paddingTop: Math.max(insets.top, 8) },
+              filePreviewIsImage && styles.previewToolbarDark,
             ]}
-            collapsable={false}
           >
             <TouchableOpacity
               onPress={() => setFileWebPreview(null)}
-              style={styles.pdfToolbarBtn}
+              style={styles.previewToolbarBtn}
               accessibilityLabel="Close file viewer"
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              hitSlop={12}
             >
-              <Ionicons name="chevron-down-circle" size={34} color={RavenLight.text} />
+              <Ionicons
+                name="close"
+                size={26}
+                color={filePreviewIsImage ? '#fff' : RavenLight.text}
+              />
             </TouchableOpacity>
-            <Text style={styles.pdfTitle} numberOfLines={1}>
+            <Text
+              style={[styles.previewTitle, filePreviewIsImage && styles.previewTitleDark]}
+              numberOfLines={1}
+            >
               {fileWebPreview?.title}
             </Text>
             <TouchableOpacity
               onPress={() => onOpenFileInBrowser()}
-              style={styles.pdfToolbarBtn}
+              style={styles.previewToolbarBtn}
               accessibilityLabel="Open in browser"
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              hitSlop={12}
             >
-              <Ionicons name="open-outline" size={26} color={RavenLight.accent} />
+              <Ionicons
+                name="open-outline"
+                size={24}
+                color={filePreviewIsImage ? '#fff' : RavenLight.accent}
+              />
             </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => setFileWebPreview(null)}
-              style={styles.pdfToolbarBtn}
-              accessibilityLabel="Close"
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            >
-              <Ionicons name="close" size={28} color={RavenLight.textMuted} />
-            </TouchableOpacity>
+          </View>
+
+          <View
+            style={[
+              styles.previewBody,
+              filePreviewIsImage && styles.previewBodyDark,
+              filePreviewIsPdf && styles.previewBodyDoc,
+            ]}
+          >
+            {fileWebPreview?.uri ? (
+              filePreviewIsImage ? (
+                <ErpAuthenticatedImage
+                  uri={fileWebPreview.uri}
+                  style={styles.previewImage}
+                  resizeMode="contain"
+                />
+              ) : filePreviewIsPdf ? (
+                <ErpAuthenticatedPdfWebView resourceUri={fileWebPreview.uri} style={styles.previewWeb} />
+              ) : (
+                <ErpAuthenticatedCachedFileWebView
+                  resourceUri={fileWebPreview.uri}
+                  fileName={fileWebPreview.title}
+                  style={styles.previewWeb}
+                />
+              )
+            ) : null}
           </View>
         </View>
       </Modal>
@@ -614,7 +819,7 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: RavenLight.bg },
+  root: { flex: 1, backgroundColor: RavenLight.panel },
   statusBarFill: {
     width: '100%',
     backgroundColor: RavenLight.panel,
@@ -637,6 +842,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  navCenter: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 0,
+    paddingHorizontal: 8,
+  },
   navTitle: {
     textAlign: 'center',
     fontSize: 17,
@@ -654,39 +866,44 @@ const styles = StyleSheet.create({
   },
   scroll: { flex: 1 },
   scrollContent: { flexGrow: 1 },
-  bodyPad: { paddingHorizontal: Spacing.MD },
-  heroCard: {
-    backgroundColor: RavenLight.panel,
-    borderRadius: RavenLight.radiusLg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: RavenLight.border,
+  body: { flex: 1 },
+  section: {
     paddingHorizontal: Spacing.MD,
-    paddingTop: Spacing.LG,
-    paddingBottom: Spacing.MD,
-    marginBottom: Spacing.MD,
-    ...Platform.select({
-      ios: {
-        shadowColor: RavenLight.shadowSoft,
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 1,
-        shadowRadius: 14,
-      },
-      android: { elevation: 3 },
-      default: {},
-    }),
+    paddingVertical: Spacing.LG,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: RavenLight.border,
+    backgroundColor: RavenLight.panel,
   },
+  sectionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: RavenLight.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 12,
+  },
+  sectionHeadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  sectionCount: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: RavenLight.textSubtle,
+  },
+  sectionTitleInline: { marginBottom: 0 },
   headBlock: {
     alignItems: 'center',
-    paddingTop: 0,
-    paddingBottom: Spacing.SM,
+    paddingTop: 4,
+    paddingBottom: 4,
   },
-  avatarWrap: {
-    marginBottom: Spacing.MD,
-  },
+  avatarWrap: { marginBottom: Spacing.MD },
   avatar: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
+    width: 88,
+    height: 88,
+    borderRadius: 44,
     overflow: 'hidden',
     backgroundColor: RavenLight.canvas,
     borderWidth: StyleSheet.hairlineWidth,
@@ -700,6 +917,19 @@ const styles = StyleSheet.create({
   avatarInitials: { fontSize: 32, fontWeight: '800', color: RavenLight.accent },
   loadingBlock: { paddingVertical: 8 },
   loadingText: { fontSize: 14, color: RavenLight.textMuted },
+  errorBlock: {
+    alignItems: 'center',
+    paddingVertical: 16,
+    gap: 10,
+  },
+  retryBtn: {
+    marginTop: 4,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: RavenLight.accent,
+  },
+  retryBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
   err: {
     fontSize: 15,
     color: RavenLight.danger,
@@ -721,171 +951,268 @@ const styles = StyleSheet.create({
     color: RavenLight.textMuted,
     textAlign: 'center',
   },
-  chipRow: {
+  workspacePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    maxWidth: '100%',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: RavenLight.accentSoft,
+    marginBottom: 10,
+  },
+  workspacePillText: {
+    flexShrink: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    color: RavenLight.accent,
+  },
+  statsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'center',
     gap: 8,
     marginTop: 12,
+    marginBottom: 4,
   },
-  chip: {
+  statPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 16,
     backgroundColor: RavenLight.canvas,
   },
-  chipText: { fontSize: 13, fontWeight: '600', color: RavenLight.text },
-  chatBtn: {
+  statPillText: { fontSize: 12, fontWeight: '600', color: RavenLight.textMuted },
+  actionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 16,
+    alignSelf: 'stretch',
+  },
+  actionBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    marginTop: 16,
     paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 12,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+  },
+  actionBtnSolo: { alignSelf: 'stretch', marginTop: 16 },
+  actionBtnOutline: {
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: RavenLight.accent,
     backgroundColor: RavenLight.accentSoft,
-    alignSelf: 'stretch',
   },
-  chatBtnDisabled: { opacity: 0.55 },
-  chatBtnText: {
+  actionBtnPrimary: {
+    backgroundColor: RavenLight.accent,
+  },
+  actionBtnDisabled: { opacity: 0.5 },
+  actionBtnOutlineText: {
     fontSize: 15,
     fontWeight: '700',
     color: RavenLight.accent,
   },
-  card: {
-    marginTop: Spacing.SM,
-    backgroundColor: RavenLight.panel,
-    borderRadius: RavenLight.radiusLg,
-    padding: Spacing.MD,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: RavenLight.border,
-    ...Platform.select({
-      ios: {
-        shadowColor: RavenLight.shadowSoft,
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 1,
-        shadowRadius: 10,
-      },
-      android: { elevation: 2 },
-      default: {},
-    }),
+  actionBtnPrimaryText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: RavenLight.panel,
   },
-  cardHeader: {
+  secondaryLinkBtn: {
+    marginTop: 10,
+    alignSelf: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+  },
+  secondaryLinkBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: RavenLight.accent,
+    textAlign: 'center',
+  },
+  infoRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
+    paddingVertical: 12,
   },
-  cardTitle: { flex: 1, fontSize: 15, fontWeight: '700', color: RavenLight.text },
-  cardBadge: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: RavenLight.textMuted,
-    backgroundColor: RavenLight.canvas,
-    paddingHorizontal: 10,
-    paddingVertical: 3,
+  infoRowBorder: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: RavenLight.border,
+  },
+  infoIconWrap: {
+    width: 36,
+    height: 36,
     borderRadius: 8,
-    overflow: 'hidden',
+    backgroundColor: RavenLight.canvas,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  cardHint: {
-    fontSize: 12,
+  infoMid: { flex: 1, marginLeft: 12, minWidth: 0 },
+  infoLabel: {
+    fontSize: 11,
+    fontWeight: '700',
     color: RavenLight.textSubtle,
-    marginBottom: 10,
-    marginTop: -4,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  infoValue: {
+    marginTop: 2,
+    fontSize: 15,
+    fontWeight: '600',
+    color: RavenLight.text,
   },
   aboutText: {
     fontSize: 15,
     lineHeight: 22,
     color: RavenLight.text,
   },
-  docFoot: {
-    marginTop: 12,
-    fontSize: 11,
-    fontWeight: '600',
-    color: RavenLight.textSubtle,
+  aboutEmpty: {
+    fontSize: 14,
+    lineHeight: 21,
+    color: RavenLight.textMuted,
+    fontStyle: 'italic',
   },
   mediaGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
   },
   mediaTile: {
-    borderRadius: RavenLight.radiusMd,
     overflow: 'hidden',
     backgroundColor: RavenLight.canvas,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: RavenLight.border,
   },
   mediaImage: { width: '100%', height: '100%' },
-  fileRow: {
+  fileGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  fileTile: {
+    padding: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: RavenLight.border,
+    backgroundColor: RavenLight.canvas,
+    alignItems: 'center',
+    minHeight: 120,
+  },
+  fileTileIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: RavenLight.panel,
+    marginBottom: 8,
+  },
+  fileTileExt: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: RavenLight.textSubtle,
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  fileTileName: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: RavenLight.text,
+    textAlign: 'center',
+    lineHeight: 16,
+  },
+  lightboxRoot: { flex: 1, backgroundColor: '#000' },
+  lightboxTopBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: RavenLight.border,
+    paddingHorizontal: 8,
+    paddingBottom: 8,
   },
-  fileIconWrap: {
+  lightboxTopBtn: {
     width: 44,
     height: 44,
-    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  fileMid: { flex: 1, marginLeft: 12, minWidth: 0 },
-  fileName: { fontSize: 15, fontWeight: '600', color: RavenLight.text },
-  fileMeta: { marginTop: 3, fontSize: 12, color: RavenLight.textMuted },
-  lightboxRoot: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)' },
-  lightboxScrim: { ...StyleSheet.absoluteFillObject },
-  lightboxBody: { flex: 1, justifyContent: 'center', padding: 12 },
-  lightboxClose: {
-    position: 'absolute',
-    zIndex: 2,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    alignItems: 'center',
+  lightboxCounter: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 15,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.9)',
+  },
+  lightboxImageWrap: {
+    flex: 1,
     justifyContent: 'center',
+    paddingHorizontal: 8,
   },
   lightboxImage: {
     width: '100%',
-    height: '78%',
-    alignSelf: 'center',
+    height: '100%',
   },
-  pdfRoot: { flex: 1, backgroundColor: RavenLight.panel },
-  pdfWebShell: {
-    flex: 1,
-    backgroundColor: RavenLight.panel,
+  lightboxNavRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.MD,
+    gap: 12,
   },
-  pdfWebView: { flex: 1, backgroundColor: RavenLight.panel },
-  pdfToolbar: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
+  lightboxNavBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 6,
+    gap: 4,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  lightboxNavBtnOff: { opacity: 0.35 },
+  lightboxNavText: { fontSize: 14, fontWeight: '600', color: '#fff' },
+  previewRoot: { flex: 1, backgroundColor: RavenLight.panel },
+  previewToolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
     paddingBottom: 10,
     backgroundColor: RavenLight.panel,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: RavenLight.border,
-    zIndex: 1000,
-    elevation: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
   },
-  pdfToolbarBtn: { padding: 8 },
-  pdfTitle: {
+  previewToolbarDark: {
+    backgroundColor: '#111',
+    borderBottomColor: 'rgba(255,255,255,0.12)',
+  },
+  previewToolbarBtn: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  previewTitle: {
     flex: 1,
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: '600',
     color: RavenLight.text,
     marginHorizontal: 4,
+  },
+  previewTitleDark: { color: '#fff' },
+  previewBody: {
+    flex: 1,
+    backgroundColor: RavenLight.canvas,
+  },
+  previewBodyDark: {
+    backgroundColor: '#111',
+  },
+  previewBodyDoc: {
+    backgroundColor: RavenLight.panel,
+  },
+  previewImage: {
+    flex: 1,
+    width: '100%',
+  },
+  previewWeb: {
+    flex: 1,
+    backgroundColor: 'transparent',
   },
 });

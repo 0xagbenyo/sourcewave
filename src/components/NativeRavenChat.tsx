@@ -12,7 +12,6 @@ import {
   Pressable,
   RefreshControl,
   Linking,
-  Alert,
   AppState,
   type AppStateStatus,
   Image,
@@ -20,6 +19,7 @@ import {
   type NativeSyntheticEvent,
   type NativeScrollEvent,
 } from 'react-native';
+import { appAlert as Alert } from '../services/appAlert';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -37,12 +37,18 @@ import { RavenChannelPeerAvatar } from './RavenChannelPeerAvatar';
 import { RavenInlineReplyQuote } from './RavenInlineReplyQuote';
 import { RavenSharedInChatList } from './RavenSharedInChatList';
 import { ravenMessageHasVisualMedia, ravenSameMessageOwner } from '../utils/ravenAttachment';
-import { isDmChannel, initialsFromUserId, pastelAvatarBg } from '../utils/ravenChatUi';
+import {
+  formatChatDateSeparator,
+  formatMessageBubbleTime,
+  isDmChannel,
+  initialsFromUserId,
+  pastelAvatarBg,
+  shouldShowChatDateSeparator,
+} from '../utils/ravenChatUi';
 import { resolveRavenUserDisplayName } from '../utils/ravenSearchPreview';
 import { ravenMessageShortPreview } from '../utils/ravenMessageShortPreview';
 import {
   listChannelsForWorkspace,
-  listMessagesForChannel,
   resolveRavenWorkspaceId,
   sendRavenChannelMessage,
   uploadRavenFileWithMessage,
@@ -56,19 +62,25 @@ import {
   type RavenMessageRow,
   ravenMessageShowsReplyQuoteRow,
   ravenMergeMessageRowFromSendResponse,
-  ravenMessageRowSortTimeMs,
-  ravenRefreshMessagesPreservingDocLinks,
   ravenRowIsSupplierQuotationDocLink,
+  ravenRowIsSalesOrderDocLink,
+  ravenRowIsSalesInvoiceDocLink,
   ravenMessageOwnerMatchesSession,
 } from '../services/ravenNativeApi';
-import { mergeRavenMessagesWithPendingDocInsert } from '../utils/ravenDocLinkMessageMergeBridge';
 import {
-  getRavenChannelMessagesSnapshot,
   getRavenWorkspaceChannelsSnapshot,
-  mergeCachedChannelMessagesWithFreshFirstPage,
   setRavenChannelMessagesSnapshot,
   setRavenWorkspaceChannelsSnapshot,
 } from '../utils/ravenMessagingLocalCache';
+import {
+  channelMessagesMemoryIsFresh,
+  fetchChannelMessagesFirstPage,
+  fetchChannelOlderMessagesPage,
+  readChannelMessagesDiskPaint,
+  readChannelMessagesMemoryPaint,
+  refreshChannelMessagesAfterSend,
+  saveChannelMessagesMemoryCache,
+} from '../utils/ravenChannelMessagesLoad';
 import {
   pendingAttachmentsFromImagePickerAssets,
   type RavenPendingAttachment,
@@ -76,6 +88,8 @@ import {
 import { tryParseQuotationDraftFromMessage } from '../utils/chatQuotationDraftMessage';
 import { RavenQuotationDraftCard } from './RavenQuotationDraftCard';
 import { RavenLinkedSupplierQuotationMessage } from './RavenLinkedSupplierQuotationMessage';
+import { RavenLinkedSalesOrderMessage } from './RavenLinkedSalesOrderMessage';
+import { RavenLinkedSalesInvoiceMessage } from './RavenLinkedSalesInvoiceMessage';
 import { RavenLinkedGenericDocMessage } from './RavenLinkedGenericDocMessage';
 import { getERPNextClient } from '../services/erpnext';
 import { userFacingError } from '../utils/userFacingError';
@@ -90,25 +104,10 @@ const NATIVE_RAVEN_MESSAGES_SCROLL_DOWN_SHOW_PX = 160;
 const NATIVE_RAVEN_CHAT_FIRST_PAGE_SIZE = 36;
 const NATIVE_RAVEN_CHAT_OLDER_PAGE_SIZE = 50;
 
-function sortRavenMessagesNewestFirst(rows: RavenMessageRow[]): RavenMessageRow[] {
-  return [...rows].sort((a, b) => ravenMessageRowSortTimeMs(b) - ravenMessageRowSortTimeMs(a));
-}
-
 type Props = {
   /** Optional Raven Workspace.name; otherwise env or API default. */
   workspaceId?: string;
 };
-
-function formatTime(iso?: string): string {
-  if (!iso) return '';
-  try {
-    const d = new Date(iso.includes('T') ? iso : iso.replace(' ', 'T'));
-    if (Number.isNaN(d.getTime())) return '';
-    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return '';
-  }
-}
 
 function channelListPeerSubtitle(
   c: RavenChannelRow,
@@ -144,6 +143,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   const [loadingOlderMsgs, setLoadingOlderMsgs] = useState(false);
   const [hasMoreOlderMessages, setHasMoreOlderMessages] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [sharedMenuTitle, setSharedMenuTitle] = useState('Files shared in this channel');
   const [error, setError] = useState<string | null>(null);
   const [quotationActionByName, setQuotationActionByName] = useState<Record<string, 'accepted' | 'rejected'>>({});
   const [quotationActionBusy, setQuotationActionBusy] = useState<string | null>(null);
@@ -158,50 +158,73 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   const allowOlderEndReachedRef = useRef(false);
   const screenFocusedRef = useRef(false);
 
-  const loadMessages = useCallback(async (channelId: string, opts?: { silent?: boolean }) => {
+  const loadMessages = useCallback(async (channelId: string, opts?: { silent?: boolean; force?: boolean }) => {
     const silent = opts?.silent === true;
-    let cachedMsgs: RavenMessageRow[] | null = null;
+    const force = opts?.force === true;
+    const cid = channelId.trim();
+    if (!cid) return;
+
+    let prevForMerge: RavenMessageRow[] = [];
+
     if (!silent) {
-      cachedMsgs = await getRavenChannelMessagesSnapshot(user?.email, channelId);
-      if (cachedMsgs?.length) {
-        setMessages(sortRavenMessagesNewestFirst(mergeRavenMessagesWithPendingDocInsert(channelId, cachedMsgs)));
-        setHasMoreOlderMessages(cachedMsgs.length >= NATIVE_RAVEN_CHAT_FIRST_PAGE_SIZE);
+      const memPaint = readChannelMessagesMemoryPaint(user?.email, cid);
+      if (memPaint) {
+        setMessages(memPaint.messages);
+        setHasMoreOlderMessages(memPaint.hasMoreOlder);
         setLoadingMsgs(false);
+        prevForMerge = memPaint.messages;
+
+        if (!force && channelMessagesMemoryIsFresh(user?.email, cid)) {
+          try {
+            const result = await fetchChannelMessagesFirstPage(
+              cid,
+              NATIVE_RAVEN_CHAT_FIRST_PAGE_SIZE,
+              memPaint.messages,
+              { silent: true }
+            );
+            setMessages(result.messages);
+            setHasMoreOlderMessages(result.hasMoreOlder);
+            saveChannelMessagesMemoryCache(user?.email, cid, result.messages, result.hasMoreOlder);
+            setError(null);
+          } catch {
+            /* keep cached thread */
+          }
+          setRefreshing(false);
+          return;
+        }
       } else {
-        setMessages([]);
-        setLoadingMsgs(true);
+        const diskPaint = await readChannelMessagesDiskPaint(user?.email, cid, NATIVE_RAVEN_CHAT_FIRST_PAGE_SIZE);
+        if (diskPaint) {
+          setMessages(diskPaint.messages);
+          setHasMoreOlderMessages(diskPaint.hasMoreOlder);
+          setLoadingMsgs(false);
+          prevForMerge = diskPaint.messages;
+        } else {
+          setMessages([]);
+          setLoadingMsgs(true);
+        }
       }
     }
+
     try {
-      const rows = await listMessagesForChannel(channelId, NATIVE_RAVEN_CHAT_FIRST_PAGE_SIZE);
-      const rowsMerged = mergeRavenMessagesWithPendingDocInsert(channelId, rows);
-      if (silent) {
-        setMessages((prev) => {
-          const mergedRows = ravenRefreshMessagesPreservingDocLinks(rowsMerged, prev);
-          const fresh = new Map(
-            mergedRows
-              .map((m) => [(m.name || '').trim(), m] as const)
-              .filter(([k]) => k.length > 0)
-          );
-          const preserved = prev.filter((m) => {
-            const n = (m.name || '').trim();
-            return n && !fresh.has(n);
-          });
-          return sortRavenMessagesNewestFirst([...mergedRows, ...preserved]);
-        });
-      } else {
-        const combined = mergeCachedChannelMessagesWithFreshFirstPage(rowsMerged, cachedMsgs);
-        setMessages(combined);
-        setHasMoreOlderMessages(
-          combined.length >= NATIVE_RAVEN_CHAT_FIRST_PAGE_SIZE || combined.length > rowsMerged.length
-        );
-      }
+      const result = await fetchChannelMessagesFirstPage(
+        cid,
+        NATIVE_RAVEN_CHAT_FIRST_PAGE_SIZE,
+        silent ? messagesRef.current : prevForMerge,
+        { silent }
+      );
+      setMessages(result.messages);
+      setHasMoreOlderMessages(result.hasMoreOlder);
+      saveChannelMessagesMemoryCache(user?.email, cid, result.messages, result.hasMoreOlder);
       setError(null);
     } catch (e: any) {
       if (!silent) {
-        if (cachedMsgs?.length) {
-          setMessages(sortRavenMessagesNewestFirst(mergeRavenMessagesWithPendingDocInsert(channelId, cachedMsgs)));
-          setHasMoreOlderMessages(cachedMsgs.length >= NATIVE_RAVEN_CHAT_FIRST_PAGE_SIZE);
+        const fallback =
+          readChannelMessagesMemoryPaint(user?.email, cid) ??
+          (prevForMerge.length ? { messages: prevForMerge, hasMoreOlder: true } : null);
+        if (fallback) {
+          setMessages(fallback.messages);
+          setHasMoreOlderMessages(fallback.hasMoreOlder);
         } else {
           setMessages([]);
           setHasMoreOlderMessages(false);
@@ -220,34 +243,22 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
     loadingOlderRef.current = true;
     setLoadingOlderMsgs(true);
     try {
-      const start = messagesRef.current.length;
-      const older = await listMessagesForChannel(ch, NATIVE_RAVEN_CHAT_OLDER_PAGE_SIZE, { limitStart: start });
-      const olderMerged = mergeRavenMessagesWithPendingDocInsert(ch, older);
-      if (olderMerged.length === 0) {
-        setHasMoreOlderMessages(false);
-        return;
-      }
-      const prev = messagesRef.current;
-      const seen = new Set(prev.map((m) => (m.name || '').trim()).filter(Boolean));
-      const extra = olderMerged.filter((m) => {
-        const n = (m.name || '').trim();
-        return n && !seen.has(n);
-      });
-      if (extra.length === 0) {
-        setHasMoreOlderMessages(false);
-        return;
-      }
-      setMessages(sortRavenMessagesNewestFirst([...prev, ...extra]));
-      if (olderMerged.length < NATIVE_RAVEN_CHAT_OLDER_PAGE_SIZE) {
-        setHasMoreOlderMessages(false);
-      }
+      const result = await fetchChannelOlderMessagesPage(
+        ch,
+        NATIVE_RAVEN_CHAT_OLDER_PAGE_SIZE,
+        messagesRef.current
+      );
+      if (!result) return;
+      setMessages(result.messages);
+      setHasMoreOlderMessages(result.hasMoreOlder);
+      saveChannelMessagesMemoryCache(user?.email, ch, result.messages, result.hasMoreOlder);
     } catch {
       /* keep hasMore */
     } finally {
       loadingOlderRef.current = false;
       setLoadingOlderMsgs(false);
     }
-  }, [channel?.name, hasMoreOlderMessages]);
+  }, [channel?.name, hasMoreOlderMessages, user?.email]);
 
   const messagesById = useMemo(() => {
     const map = new Map<string, RavenMessageRow>();
@@ -421,6 +432,25 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   useEffect(() => {
     channelIdRef.current = channel?.name ?? null;
   }, [channel?.name]);
+
+  useEffect(() => {
+    if (!channel?.name) {
+      setMessages([]);
+      setLoadingMsgs(false);
+      setHasMoreOlderMessages(false);
+      return;
+    }
+    const paint = readChannelMessagesMemoryPaint(user?.email, channel.name);
+    if (paint) {
+      setMessages(paint.messages);
+      setHasMoreOlderMessages(paint.hasMoreOlder);
+      setLoadingMsgs(false);
+    } else {
+      setMessages([]);
+      setLoadingMsgs(true);
+      setHasMoreOlderMessages(false);
+    }
+  }, [channel?.name, user?.email]);
 
   useEffect(() => {
     if (channel?.name) void loadMessages(channel.name);
@@ -598,17 +628,21 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       setDraft('');
       setPendingAttachments([]);
       setReplyTo(null);
-      let rows = await listMessagesForChannel(channel.name, NATIVE_RAVEN_CHAT_FIRST_PAGE_SIZE);
-      for (const p of mergePayloads) {
-        rows = ravenMergeMessageRowFromSendResponse(rows, p);
-      }
-      const apiLen = rows.length;
-      const msgSnap = await getRavenChannelMessagesSnapshot(user?.email, channel.name);
-      rows = mergeCachedChannelMessagesWithFreshFirstPage(rows, msgSnap);
-      setMessages(sortRavenMessagesNewestFirst(rows));
-      setHasMoreOlderMessages(
-        rows.length >= NATIVE_RAVEN_CHAT_FIRST_PAGE_SIZE || rows.length > apiLen
+      const result = await refreshChannelMessagesAfterSend(
+        user?.email,
+        channel.name,
+        NATIVE_RAVEN_CHAT_FIRST_PAGE_SIZE,
+        messagesRef.current,
+        (rows) => {
+          let next = rows;
+          for (const p of mergePayloads) {
+            next = ravenMergeMessageRowFromSendResponse(next, p);
+          }
+          return next;
+        }
       );
+      setMessages(result.messages);
+      setHasMoreOlderMessages(result.hasMoreOlder);
     } catch (e: any) {
       const msg = e?.message || 'Send failed';
       Alert.alert('Message not sent', msg);
@@ -619,7 +653,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
 
   const onRefresh = () => {
     setRefreshing(true);
-    if (channel?.name) void loadMessages(channel.name);
+    if (channel?.name) void loadMessages(channel.name, { force: true });
     else setRefreshing(false);
   };
 
@@ -631,12 +665,16 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       const linkDnRaw = String(item.link_document || '').trim();
       const isSupplierQuotationLink = !hasAttach && ravenRowIsSupplierQuotationDocLink(linkDtRaw, linkDnRaw);
       const sqLink = isSupplierQuotationLink ? linkDnRaw : null;
+      const isSalesOrderLink = !hasAttach && ravenRowIsSalesOrderDocLink(linkDtRaw, linkDnRaw);
+      const soLink = isSalesOrderLink ? linkDnRaw : null;
+      const isSalesInvoiceLink = !hasAttach && ravenRowIsSalesInvoiceDocLink(linkDtRaw, linkDnRaw);
+      const siLink = isSalesInvoiceLink ? linkDnRaw : null;
       const genericDocLink =
-        !hasAttach && !!linkDtRaw && !!linkDnRaw && !isSupplierQuotationLink
+        !hasAttach && !!linkDtRaw && !!linkDnRaw && !isSupplierQuotationLink && !isSalesOrderLink && !isSalesInvoiceLink
           ? { doctype: linkDtRaw, document: linkDnRaw }
           : null;
       const qDraft =
-        !hasAttach && !sqLink && !genericDocLink ? tryParseQuotationDraftFromMessage(item.text) : null;
+        !hasAttach && !sqLink && !soLink && !siLink && !genericDocLink ? tryParseQuotationDraftFromMessage(item.text) : null;
       const isSupplierPortalUser = user?.appMode === 'supplier' || !!user?.supplierId?.trim();
       const isSupplierLike = user?.appMode === 'supplier' || !!user?.supplierId?.trim();
       const showBuyerQuotationActions = (!!qDraft || !!sqLink) && !mine && !isSupplierPortalUser;
@@ -654,7 +692,10 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
             ravenMessageHasVisualMedia(newer)));
 
       const showReplyQuote = ravenMessageShowsReplyQuoteRow(item);
-      const showPlainTextBubble = !!item.text?.trim() && !qDraft && !sqLink && !genericDocLink;
+      const tLine = formatMessageBubbleTime(item.creation || item.modified);
+      const showDateSep = shouldShowChatDateSeparator(index, messages);
+      const dateSepLabel = formatChatDateSeparator(item.creation || item.modified);
+      const showPlainTextBubble = !!item.text?.trim() && !qDraft && !sqLink && !soLink && !siLink && !genericDocLink;
       /**
        * Frappe User for SI **customer** resolution (Raven User.custom_customer, portal, etc.).
        * Use signed-in user for **both** buyer chat and supplier approve-payment — supplier flow used to pass `null`, which
@@ -676,6 +717,10 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
             onReject={showBuyerQuotationActions ? () => void handleRejectQuotationDraft(sqLink) : undefined}
             onSupplierReplyToQuotation={supplierSqLinkSelfServeUx ? () => setReplyTo(item) : undefined}
           />
+        ) : soLink != null ? (
+          <RavenLinkedSalesOrderMessage orderName={soLink} ravenChannelId={channel?.name} />
+        ) : siLink != null ? (
+          <RavenLinkedSalesInvoiceMessage invoiceName={siLink} />
         ) : genericDocLink != null ? (
           <RavenLinkedGenericDocMessage
             linkDoctype={genericDocLink.doctype}
@@ -729,25 +774,34 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
           ) : !hasAttach && !qDraft && !sqLink && !genericDocLink ? (
             <Text style={[styles.bubbleText, mine && styles.bubbleTextMine]}> </Text>
           ) : null}
-          <Text style={[styles.bubbleTime, mine && styles.bubbleTimeMine]}>{formatTime(item.creation)}</Text>
+          <Text style={[styles.bubbleTime, mine && styles.bubbleTimeMine]}>{tLine}</Text>
         </>
       );
 
       const blockBubbleLongPressForSupplierSq = !!sqLink && isSupplierLike;
 
       return (
-        <Pressable
-          style={[styles.bubbleWrap, mine ? styles.bubbleWrapMine : styles.bubbleWrapTheirs]}
-          onLongPress={blockBubbleLongPressForSupplierSq ? undefined : () => setReplyTo(item)}
-          delayLongPress={380}
-        >
-          <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
-            {!mine && !!item.owner && (
-              <Text style={styles.bubbleMeta}>{resolveRavenUserDisplayName(item.owner, ravenUserProfilesById)}</Text>
-            )}
-            {inner}
-          </View>
-        </Pressable>
+        <View>
+          {showDateSep && dateSepLabel ? (
+            <View style={styles.chatDateSepRow}>
+              <View style={styles.chatDateSepLine} />
+              <Text style={styles.chatDateSepText}>{dateSepLabel}</Text>
+              <View style={styles.chatDateSepLine} />
+            </View>
+          ) : null}
+          <Pressable
+            style={[styles.bubbleWrap, mine ? styles.bubbleWrapMine : styles.bubbleWrapTheirs]}
+            onLongPress={blockBubbleLongPressForSupplierSq ? undefined : () => setReplyTo(item)}
+            delayLongPress={380}
+          >
+            <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
+              {!mine && !!item.owner && (
+                <Text style={styles.bubbleMeta}>{resolveRavenUserDisplayName(item.owner, ravenUserProfilesById)}</Text>
+              )}
+              {inner}
+            </View>
+          </Pressable>
+        </View>
       );
     },
     [
@@ -967,12 +1021,12 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
         <Pressable style={styles.modalBackdrop} onPress={() => setPickerOpen(false)}>
           <Pressable style={styles.modalSheet} onPress={(e) => e.stopPropagation()}>
             <View style={styles.pickerModalHead}>
-              <Text style={styles.pickerModalTitle}>Shared in chat</Text>
+              <Text style={styles.pickerModalTitle}>{sharedMenuTitle}</Text>
               <TouchableOpacity
                 onPress={() => setPickerOpen(false)}
                 hitSlop={12}
                 accessibilityRole="button"
-                accessibilityLabel="Close menu"
+                accessibilityLabel="Close"
               >
                 <Ionicons name="close" size={28} color={Colors.BLACK} />
               </TouchableOpacity>
@@ -989,10 +1043,12 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
                   variant="wine"
                   onGoToMessage={goToMessageFromSharedMenu}
                   userDisplayProfiles={ravenUserProfilesById}
+                  showInlineTitle={false}
+                  onSectionTitleChange={setSharedMenuTitle}
                 />
               ) : (
                 <Text style={[styles.channelRowMeta, { paddingHorizontal: Spacing.LG, paddingVertical: Spacing.MD }]}>
-                  Select a channel to see files shared in the conversation.
+                  Select a channel to view files shared in this channel.
                 </Text>
               )}
             </ScrollView>
@@ -1039,34 +1095,25 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 14,
     bottom: 14,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 40,
+    height: 40,
+    borderRadius: 8,
     backgroundColor: Colors.WHITE,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E8E8E8',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.18,
-        shadowRadius: 5,
-      },
-      android: { elevation: 4 },
-    }),
   },
   messagesOlderLoader: {
     paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  listContent: { paddingHorizontal: Spacing.MD, paddingVertical: Spacing.SM },
-  bubbleWrap: { marginVertical: 4, maxWidth: '92%' },
+  listContent: { paddingHorizontal: Spacing.MD, paddingVertical: 8 },
+  bubbleWrap: { marginVertical: 2, maxWidth: '92%' },
   bubbleWrapMine: { alignSelf: 'flex-end' },
   bubbleWrapTheirs: { alignSelf: 'flex-start' },
-  bubble: { borderRadius: 16, paddingHorizontal: 12, paddingVertical: 8 },
+  bubble: { borderRadius: 8, paddingHorizontal: 11, paddingVertical: 7 },
   bubbleMine: { backgroundColor: Colors.WINE, alignItems: 'stretch' },
   bubbleTheirs: { backgroundColor: Colors.WHITE, borderWidth: StyleSheet.hairlineWidth, borderColor: '#E8E8E8' },
   bubbleMeta: { fontSize: 11, fontWeight: '700', color: Colors.TEXT_SECONDARY, marginBottom: 2 },
@@ -1074,6 +1121,18 @@ const styles = StyleSheet.create({
   bubbleTextMine: { color: Colors.WHITE, alignSelf: 'stretch', textAlign: 'right' },
   bubbleTime: { fontSize: 10, marginTop: 4, color: Colors.TEXT_SECONDARY, alignSelf: 'flex-end' },
   bubbleTimeMine: { color: 'rgba(255,255,255,0.85)' },
+  chatDateSepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    gap: 10,
+  },
+  chatDateSepLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#E8E8E8',
+  },
+  chatDateSepText: { fontSize: 11, fontWeight: '600', color: Colors.TEXT_SECONDARY },
   replyBadge: { fontSize: 11, fontWeight: '700', color: Colors.WINE, marginBottom: 4 },
   replyBadgeMine: { color: 'rgba(255,255,255,0.9)' },
   replyStrip: {

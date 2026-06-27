@@ -90,6 +90,37 @@ export function ravenWorkspaceAdminsSorted(members: RavenWorkspaceMemberRow[]): 
     .sort((a, b) => String(a.user).localeCompare(String(b.user), undefined, { sensitivity: 'base' }));
 }
 
+/** Buyer supplier list / drawer: workspace admins only, excluding the signed-in user. */
+export function ravenWorkspaceSupplierAdminsForList(
+  members: RavenWorkspaceMemberRow[],
+  viewerEmail: string | null | undefined,
+  viewerUserId: string | null | undefined
+): RavenWorkspaceMemberRow[] {
+  return ravenWorkspaceAdminsSorted(members).filter(
+    (m) => !ravenWorkspaceMemberMatchesViewer(m, viewerEmail, viewerUserId)
+  );
+}
+
+/** Collapse duplicate Raven Workspace Member rows for the same Frappe user (whitelist + resource merge). */
+export function dedupeRavenWorkspaceMembersByUser(
+  members: RavenWorkspaceMemberRow[]
+): RavenWorkspaceMemberRow[] {
+  const byUser = new Map<string, RavenWorkspaceMemberRow>();
+  for (const m of members) {
+    const key = (m.user || '').trim().toLowerCase() || String(m.name || '').trim();
+    if (!key) continue;
+    const prev = byUser.get(key);
+    if (!prev) {
+      byUser.set(key, m);
+      continue;
+    }
+    const score = (row: RavenWorkspaceMemberRow) =>
+      (ravenWorkspaceMemberIsAdmin(row) ? 2 : 0) + (ravenWorkspaceMemberIsSupplier(row) ? 1 : 0);
+    byUser.set(key, score(m) >= score(prev) ? m : prev);
+  }
+  return Array.from(byUser.values());
+}
+
 /** Members with **`custom_is_supplier`** set, sorted by `user` (supplier roster for a workspace). */
 export function ravenWorkspaceSuppliersSorted(members: RavenWorkspaceMemberRow[]): RavenWorkspaceMemberRow[] {
   return members

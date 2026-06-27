@@ -4,11 +4,11 @@ import {
   ActivityIndicator,
   StyleSheet,
   Text,
-  Alert,
   Pressable,
-  Platform,
-  ActionSheetIOS,
 } from 'react-native';
+import { appAlert as Alert } from '../services/appAlert';
+import { useNavigation } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { RavenQuotationDraftCard } from './RavenQuotationDraftCard';
 import { SupplierQuotationPaymentModal } from './SupplierQuotationPaymentModal';
 import { getERPNextClient } from '../services/erpnext';
@@ -19,6 +19,8 @@ import {
   supplierQuotationWorkflowStateIsApprovedLike,
 } from '../utils/chatQuotationDraftMessage';
 import { RavenLight } from '../constants/ravenLightTheme';
+import { useUserSession } from '../context/UserContext';
+import { navigateToSalesInvoiceDetail } from '../utils/erpDocumentNavigation';
 
 type Props = {
   sqName: string;
@@ -80,6 +82,9 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
   onReject,
   onSupplierReplyToQuotation,
 }) => {
+  const navigation = useNavigation();
+  const { user } = useUserSession();
+  const isSupplierPortal = user?.appMode === 'supplier' || !!user?.supplierId?.trim();
   const enableSupplierUx = !!supplierSelfServeUx;
   const [payload, setPayload] = useState<SourcewaveQuotationDraftPayload | null>(null);
   const [isDraft, setIsDraft] = useState(true);
@@ -255,6 +260,19 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
     }
   };
 
+  const openLinkedInvoice = useCallback(() => {
+    if (!linkedInvoice?.name) return;
+    try {
+      navigateToSalesInvoiceDetail(
+        navigation as { navigate: (n: string, p?: object) => void },
+        linkedInvoice.name,
+        isSupplierPortal
+      );
+    } catch (e: unknown) {
+      Alert.alert('Invoice', userFacingError(e, 'Could not open this invoice.'));
+    }
+  }, [navigation, linkedInvoice?.name, isSupplierPortal]);
+
   if (loadError && !payload) {
     return (
       <RavenQuotationDraftCard
@@ -316,13 +334,7 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
     submitted &&
     (linkedInvoice != null || invoiceBusy);
 
-  const showInvoiceStrip =
-    submitted &&
-    linkedInvoice != null &&
-    enableSupplierUx &&
-    viewerSup.length > 0 &&
-    quotationSupplierId != null &&
-    viewerSup === quotationSupplierId;
+  const showInvoiceStrip = submitted && linkedInvoice != null;
 
   const outstanding = linkedInvoice?.outstanding ?? 0;
   const showPaidInFull = supplierSeesPaymentRow && linkedInvoice && outstanding <= 0.009 && linkedInvoice.grandTotal > 0;
@@ -334,21 +346,11 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
       void startPaymentFlow();
     };
 
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        { options: ['Cancel', 'Reply', 'Confirm payment'], cancelButtonIndex: 0 },
-        (idx) => {
-          if (idx === 1) reply();
-          if (idx === 2) pay();
-        }
-      );
-    } else {
-      Alert.alert('Quotation', 'What would you like to do?', [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Reply', onPress: reply },
-        { text: 'Confirm payment', onPress: pay },
-      ]);
-    }
+    Alert.alert('Quotation', 'What would you like to do?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Reply', onPress: reply },
+      { text: 'Confirm payment', onPress: pay },
+    ]);
   };
 
   const onQuotationCardLongPress =
@@ -370,14 +372,22 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
         onCardLongPress={onQuotationCardLongPress}
       />
       {showInvoiceStrip ? (
-        <View style={styles.invoiceStrip} accessibilityLabel={`Sales invoice ${linkedInvoice!.name}, ${linkedInvoice!.statusLabel}`}>
+        <Pressable
+          onPress={openLinkedInvoice}
+          style={({ pressed }) => [styles.invoiceStrip, pressed && styles.invoiceStripPressed]}
+          accessibilityRole="button"
+          accessibilityLabel={`View sales invoice ${linkedInvoice!.name}`}
+        >
           <Text style={styles.invoiceStripLabel} numberOfLines={1}>
             Sales invoice
           </Text>
-          <Text style={styles.invoiceStripValue} numberOfLines={1}>
-            {linkedInvoice!.name} · {linkedInvoice!.statusLabel}
-          </Text>
-        </View>
+          <View style={styles.invoiceStripRow}>
+            <Text style={styles.invoiceStripValue} numberOfLines={1}>
+              {linkedInvoice!.name} · {linkedInvoice!.statusLabel}
+            </Text>
+            <Ionicons name="chevron-forward" size={14} color={RavenLight.accent} />
+          </View>
+        </Pressable>
       ) : null}
       {(supplierSeesPaymentRow || (showSupplierLongPressMenu && invoiceBusy)) &&
         (showSupplierLongPressMenu ? (
@@ -437,24 +447,31 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
 
 const styles = StyleSheet.create({
   loading: {
-    minHeight: 88,
+    minHeight: 80,
     alignSelf: 'stretch',
-    paddingVertical: 16,
+    paddingVertical: 14,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: RavenLight.panel,
-    borderRadius: RavenLight.radiusMd,
+    borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: RavenLight.border,
   },
   invoiceStrip: {
     marginTop: 6,
-    paddingVertical: 5,
+    paddingVertical: 8,
     paddingHorizontal: 8,
     borderRadius: 6,
     backgroundColor: RavenLight.accentSoft,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: RavenLight.border,
+  },
+  invoiceStripPressed: { opacity: 0.85 },
+  invoiceStripRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
   },
   invoiceStripLabel: {
     fontSize: 10,

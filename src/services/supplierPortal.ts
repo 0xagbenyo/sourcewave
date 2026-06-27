@@ -1,5 +1,6 @@
 import { getERPNextClient } from './erpnext';
 import type { UserSession } from '../context/UserContext';
+import { isGhanaPhoneLoginIdentifier, isUsernameLoginIdentifier } from '../utils/loginIdentifier';
 
 export type SupplierPortalDetection = {
   isSupplier: boolean;
@@ -17,8 +18,40 @@ export async function detectSupplierPortalSession(
   frappeUserName: string
 ): Promise<SupplierPortalDetection> {
   const client = getERPNextClient();
-  const email = userEmail.trim();
-  const usr = frappeUserName.trim();
+  let email = userEmail.trim();
+  let usr = frappeUserName.trim();
+
+  if (
+    !email.includes('@') &&
+    (isGhanaPhoneLoginIdentifier(email) ||
+      isGhanaPhoneLoginIdentifier(usr) ||
+      isGhanaPhoneLoginIdentifier(usr.replace(/\s/g, '')))
+  ) {
+    const phone = isGhanaPhoneLoginIdentifier(email) ? email : usr;
+    try {
+      const row = await client.getUserByPhone(phone);
+      if (row?.name) {
+        usr = String(row.name).trim();
+        email = String(row.email || row.name).trim();
+      }
+    } catch {
+      // continue with original identifiers
+    }
+  } else if (
+    (isUsernameLoginIdentifier(email) || isUsernameLoginIdentifier(usr)) &&
+    !email.includes('@')
+  ) {
+    const username = isUsernameLoginIdentifier(email) ? email : usr;
+    try {
+      const row = await client.getUserByUsername(username);
+      if (row?.name) {
+        usr = String(row.name).trim();
+        email = String(row.email || row.name).trim();
+      }
+    } catch {
+      // continue with original identifiers
+    }
+  }
 
   let roles: string[] = [];
   try {

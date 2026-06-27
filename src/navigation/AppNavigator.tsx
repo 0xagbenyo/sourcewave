@@ -35,6 +35,8 @@ import { SupplierChatListScreen } from '../screens/SupplierChatListScreen';
 import { RavenUIMessagesScreen } from '../screens/RavenUIMessagesScreen';
 import { RavenWorkspaceSupplierProfileScreen } from '../screens/RavenWorkspaceSupplierProfileScreen';
 import { SupplierQuotationComposeScreen } from '../screens/supplier/SupplierQuotationComposeScreen';
+import { SupplierQuotationDetailScreen } from '../screens/supplier/SupplierQuotationDetailScreen';
+import { BuyerSalesOrderShareComposeScreen } from '../screens/BuyerSalesOrderShareComposeScreen';
 
 // Types
 import { RootStackParamList, AuthStackParamList } from '../types';
@@ -156,6 +158,16 @@ export const AppNavigator = () => {
         <Stack.Screen
           name="SupplierQuotationCompose"
           component={SupplierQuotationComposeScreen}
+          options={{ presentation: 'card', gestureEnabled: true }}
+        />
+        <Stack.Screen
+          name="SupplierQuotationDetail"
+          component={SupplierQuotationDetailScreen}
+          options={{ presentation: 'card', gestureEnabled: true }}
+        />
+        <Stack.Screen
+          name="BuyerSalesOrderShareCompose"
+          component={BuyerSalesOrderShareComposeScreen}
           options={{ presentation: 'card', gestureEnabled: true }}
         />
         <Stack.Screen name="RavenUIMessages" component={RavenUIMessagesScreen} options={{ presentation: 'card' }} />

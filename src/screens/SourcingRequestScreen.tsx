@@ -7,12 +7,12 @@ import {
   ScrollView,
   ActivityIndicator,
   TextInput,
-  Alert,
   Image,
   Platform,
   Keyboard,
   KeyboardAvoidingView,
 } from 'react-native';
+import { appAlert as Alert } from '../services/appAlert';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -300,12 +300,11 @@ export const SourcingRequestScreen: React.FC = () => {
         }
       }
 
-      await client.submitSalesOrder(createdOrder.name);
-
+      const orderName = createdOrder.name;
       Alert.alert(
         t('sourcing.submittedTitle'),
-        t('sourcing.submittedBody', { name: createdOrder.name }),
-        [{ text: 'OK', onPress: () => resetAll() }]
+        t('sourcing.submittedBody', { name: orderName }),
+        [{ text: t('contactUs.ok'), onPress: () => resetAll() }]
       );
     } catch (error: any) {
       console.error('Error creating sourcing request order:', error);

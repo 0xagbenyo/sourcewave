@@ -35,15 +35,113 @@ export function pastelAvatarBg(seed: string): string {
   return PASTEL_AVATAR_BG[h % PASTEL_AVATAR_BG.length];
 }
 
-export function formatMessageHeaderTime(iso?: string): string {
-  if (!iso) return '';
+/** Parse Frappe / Raven ISO datetimes (`YYYY-MM-DD HH:mm:ss` or ISO with `T`). */
+export function parseRavenDateTime(iso?: string | null): Date | null {
+  if (!iso) return null;
   try {
-    const d = new Date(iso.includes('T') ? iso : iso.replace(' ', 'T'));
-    if (Number.isNaN(d.getTime())) return '';
-    return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true });
+    let normalized = String(iso).trim();
+    if (!normalized) return null;
+    if (!normalized.includes('T')) {
+      normalized = normalized.replace(/^(\d{4}-\d{2}-\d{2})[ ](.+)$/, '$1T$2');
+    }
+    const d = new Date(normalized);
+    return Number.isNaN(d.getTime()) ? null : d;
   } catch {
-    return '';
+    return null;
   }
+}
+
+function startOfLocalDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+export function isSameCalendarDay(a?: string | null, b?: string | null): boolean {
+  const da = parseRavenDateTime(a);
+  const db = parseRavenDateTime(b);
+  if (!da || !db) return false;
+  return startOfLocalDay(da).getTime() === startOfLocalDay(db).getTime();
+}
+
+function formatLocalTime(d: Date): string {
+  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true });
+}
+
+function daysAgoFromToday(d: Date): number {
+  const today = startOfLocalDay(new Date());
+  const then = startOfLocalDay(d);
+  return Math.round((today.getTime() - then.getTime()) / 86_400_000);
+}
+
+/** Inbox / list timestamps — compact, with date when not today. */
+export function formatMessageHeaderTime(iso?: string): string {
+  const d = parseRavenDateTime(iso);
+  if (!d) return '';
+  const daysAgo = daysAgoFromToday(d);
+  if (daysAgo === 0) return formatLocalTime(d);
+  if (daysAgo === 1) return 'Yesterday';
+  if (daysAgo > 1 && daysAgo < 7) {
+    return d.toLocaleDateString(undefined, { weekday: 'short' });
+  }
+  const now = new Date();
+  if (d.getFullYear() === now.getFullYear()) {
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+/** Message bubble timestamp — always includes date when not today. */
+export function formatMessageBubbleTime(iso?: string): string {
+  const d = parseRavenDateTime(iso);
+  if (!d) return '';
+  const time = formatLocalTime(d);
+  const daysAgo = daysAgoFromToday(d);
+  if (daysAgo === 0) return time;
+  if (daysAgo === 1) return `Yesterday, ${time}`;
+  const now = new Date();
+  const datePart =
+    d.getFullYear() === now.getFullYear()
+      ? d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+      : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return `${datePart}, ${time}`;
+}
+
+/** Centered date pill between message groups in chat. */
+export function formatChatDateSeparator(iso?: string): string {
+  const d = parseRavenDateTime(iso);
+  if (!d) return '';
+  const daysAgo = daysAgoFromToday(d);
+  if (daysAgo === 0) return 'Today';
+  if (daysAgo === 1) return 'Yesterday';
+  if (daysAgo > 1 && daysAgo < 7) {
+    return d.toLocaleDateString(undefined, { weekday: 'long' });
+  }
+  const now = new Date();
+  if (d.getFullYear() === now.getFullYear()) {
+    return d.toLocaleDateString(undefined, { month: 'long', day: 'numeric' });
+  }
+  return d.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+}
+
+/** True when a date pill should render above this row (newest-first / inverted list). */
+export function shouldShowChatDateSeparator(
+  index: number,
+  messages: { creation?: string; modified?: string }[]
+): boolean {
+  if (messages.length === 0) return false;
+
+  const isoAt = (i: number) => messages[i]?.creation || messages[i]?.modified;
+
+  if (index > 0 && !isSameCalendarDay(isoAt(index), isoAt(index - 1))) {
+    return true;
+  }
+
+  // Top of loaded history: show "Today" (etc.) when every loaded message is the same day.
+  if (index === messages.length - 1) {
+    if (messages.length === 1) return true;
+    return isSameCalendarDay(isoAt(0), isoAt(messages.length - 1));
+  }
+
+  return false;
 }
 
 function dayOrdinalEn(n: number): string {
@@ -59,14 +157,9 @@ function dayOrdinalEn(n: number): string {
  * Raven-style context line for quoted replies: "7th June at 4:41 AM" (used after "Author | …").
  */
 export function formatRavenReplyQuotedDateTime(iso?: string): string {
-  if (!iso) return '';
-  try {
-    const d = new Date(iso.includes('T') ? iso : iso.replace(' ', 'T'));
-    if (Number.isNaN(d.getTime())) return '';
-    const month = d.toLocaleString(undefined, { month: 'long' });
-    const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true });
-    return `${dayOrdinalEn(d.getDate())} ${month} at ${time}`;
-  } catch {
-    return '';
-  }
+  const d = parseRavenDateTime(iso);
+  if (!d) return '';
+  const month = d.toLocaleString(undefined, { month: 'long' });
+  const time = formatLocalTime(d);
+  return `${dayOrdinalEn(d.getDate())} ${month} at ${time}`;
 }

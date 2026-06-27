@@ -1,15 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, Text, StyleSheet } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
@@ -24,6 +14,9 @@ import { useOtpResendCooldown } from '../hooks/useOtpResendCooldown';
 import { useUserSession } from '../context/UserContext';
 import { completeAppSignIn } from '../utils/completeAppSignIn';
 import { resetToMainScreen } from '../navigation/rootNavigation';
+import { AuthScreenShell, AuthStepIndicator } from '../components/auth/AuthScreenShell';
+import { AuthField } from '../components/auth/AuthField';
+import { AuthPrimaryButton, AuthInlineSwitch, AuthTextLink } from '../components/auth/AuthPrimaryButton';
 
 export const RegisterScreen: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -35,8 +28,6 @@ export const RegisterScreen: React.FC = () => {
   const [otpCode, setOtpCode] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [resendingOtp, setResendingOtp] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -60,54 +51,30 @@ export const RegisterScreen: React.FC = () => {
     }, [navigation])
   );
 
-  const validateEmail = (value: string) => {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(value);
-  };
+  const validateEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 
   const validatePhone = (value: string) => {
     const cleaned = value.replace(/[\s\-()]/g, '');
-    const phoneRegex = /^(\+?233|0)?[0-9]{9}$/;
-    return phoneRegex.test(cleaned);
+    return /^(\+?233|0)?[0-9]{9}$/.test(cleaned);
   };
 
   const validateDetailsForm = () => {
     const newErrors: Record<string, string> = {};
-
-    if (!email.trim()) {
-      newErrors.email = 'register.errors.emailRequired';
-    } else if (!validateEmail(email.trim())) {
-      newErrors.email = 'register.errors.emailInvalid';
-    }
-
-    if (!firstName.trim()) {
-      newErrors.firstName = 'register.errors.firstRequired';
-    }
-
-    if (!lastName.trim()) {
-      newErrors.lastName = 'register.errors.lastRequired';
-    }
-
-    if (!phone.trim()) {
-      newErrors.phone = 'register.errors.phoneRequired';
-    } else if (!validatePhone(phone.trim())) {
-      newErrors.phone = 'register.errors.phoneInvalid';
-    }
-
+    if (!email.trim()) newErrors.email = 'register.errors.emailRequired';
+    else if (!validateEmail(email.trim())) newErrors.email = 'register.errors.emailInvalid';
+    if (!firstName.trim()) newErrors.firstName = 'register.errors.firstRequired';
+    if (!lastName.trim()) newErrors.lastName = 'register.errors.lastRequired';
+    if (!phone.trim()) newErrors.phone = 'register.errors.phoneRequired';
+    else if (!validatePhone(phone.trim())) newErrors.phone = 'register.errors.phoneInvalid';
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
   const validateVerifyForm = () => {
     const newErrors: Record<string, string> = {};
-    if (!otpCode.trim()) {
-      newErrors.otp = 'register.errors.otpRequired';
-    }
-    if (!password.trim()) {
-      newErrors.password = 'register.errors.passwordRequired';
-    } else if (password.trim().length < 8) {
-      newErrors.password = 'register.errors.passwordShort';
-    }
+    if (!otpCode.trim()) newErrors.otp = 'register.errors.otpRequired';
+    if (!password.trim()) newErrors.password = 'register.errors.passwordRequired';
+    else if (password.trim().length < 8) newErrors.password = 'register.errors.passwordShort';
     if (password.trim() !== confirmPassword.trim()) {
       newErrors.confirmPassword = 'register.errors.passwordMismatch';
     }
@@ -117,17 +84,14 @@ export const RegisterScreen: React.FC = () => {
 
   const handleSendOtp = async () => {
     if (!validateDetailsForm()) return;
-
     setIsLoading(true);
     setErrors({});
     try {
-      const client = getERPNextClient();
-      await client.sendOtp({ email: email.trim(), purpose: OTP_PURPOSE_SIGN_UP });
+      await getERPNextClient().sendOtp({ email: email.trim(), purpose: OTP_PURPOSE_SIGN_UP });
       setOtpStep('verify');
       startCooldown();
     } catch (error: unknown) {
-      const msg = userFacingError(error, t('register.alerts.otpSendFailed'));
-      Alert.alert(t('register.alerts.registrationError'), msg);
+      Alert.alert(t('register.alerts.registrationError'), userFacingError(error, t('register.alerts.otpSendFailed')));
     } finally {
       setIsLoading(false);
     }
@@ -135,18 +99,15 @@ export const RegisterScreen: React.FC = () => {
 
   const handleResendOtp = async () => {
     if (!canResend || resendingOtp) return;
-
     setResendingOtp(true);
     setErrors({});
     try {
-      const client = getERPNextClient();
-      await client.sendOtp({ email: email.trim(), purpose: OTP_PURPOSE_SIGN_UP });
+      await getERPNextClient().sendOtp({ email: email.trim(), purpose: OTP_PURPOSE_SIGN_UP });
       setOtpCode('');
       startCooldown();
       Alert.alert(t('register.alerts.otpResentTitle'), t('register.alerts.otpResentBody'));
     } catch (error: unknown) {
-      const msg = userFacingError(error, t('register.alerts.otpSendFailed'));
-      Alert.alert(t('register.alerts.registrationError'), msg);
+      Alert.alert(t('register.alerts.registrationError'), userFacingError(error, t('register.alerts.otpSendFailed')));
     } finally {
       setResendingOtp(false);
     }
@@ -182,7 +143,6 @@ export const RegisterScreen: React.FC = () => {
       const fullName = [firstName.trim(), middleName.trim(), lastName.trim()].filter(Boolean).join(' ');
 
       let customerId: string | null = null;
-
       const existingCustomer = await client.getCustomerByEmail(emailTrim, {
         includePortalUsersChildScan: false,
       });
@@ -243,8 +203,6 @@ export const RegisterScreen: React.FC = () => {
       setOtpCode('');
       setPassword('');
       setConfirmPassword('');
-      setShowPassword(false);
-      setShowConfirmPassword(false);
       setErrors({});
       resetCooldown();
       return;
@@ -252,454 +210,263 @@ export const RegisterScreen: React.FC = () => {
     navigation.goBack();
   };
 
+  const legalFooter = (
+    <Text style={styles.legalText}>
+      {t('register.legalPrefix')}{' '}
+      <Text style={styles.legalLink} onPress={() => navigation.navigate('PrivacyPolicy' as never)}>
+        {t('register.privacy')}
+      </Text>{' '}
+      {t('register.and')}{' '}
+      <Text style={styles.legalLink} onPress={() => navigation.navigate('TermsAndConditions' as never)}>
+        {t('register.terms')}
+      </Text>
+      {t('register.legalSuffix')}
+    </Text>
+  );
+
   return (
-    <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
-      >
-        <ScrollView contentContainerStyle={styles.scrollContent}>
-          <View style={styles.header}>
-            <TouchableOpacity style={styles.backButton} onPress={handleBack}>
-              <Ionicons name="arrow-back" size={20} color={Colors.BLACK} />
-            </TouchableOpacity>
-            <Text style={styles.title}>{t('register.title')}</Text>
-            <Text style={styles.subtitle}>{t('register.subtitle')}</Text>
+    <AuthScreenShell
+      heroTitle={otpStep === 'details' ? t('register.heroTitle') : t('register.verifyHeroTitle')}
+      heroSubtitle={otpStep === 'details' ? t('register.heroSubtitle') : t('register.verifyHeroSubtitle')}
+      showBack
+      onBack={handleBack}
+      footer={legalFooter}
+      contentStyle={styles.scrollExtra}
+    >
+      <AuthStepIndicator
+        currentKey={otpStep}
+        progressCaption={t('register.stepOf', {
+          current: otpStep === 'details' ? 1 : 2,
+          total: 2,
+        })}
+        steps={[
+          { key: 'details', label: t('register.stepDetails') },
+          { key: 'verify', label: t('register.stepVerify') },
+        ]}
+      />
+
+      {otpStep === 'details' ? (
+        <>
+          <AuthField
+            label={t('register.email')}
+            icon="mail-outline"
+            placeholder={t('register.emailPlaceholder')}
+            value={email}
+            onChangeText={setEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            error={errors.email ? t(errors.email) : undefined}
+          />
+
+          <View style={styles.nameRow}>
+            <AuthField
+              label={t('register.firstName')}
+              icon="person-outline"
+              placeholder={t('register.firstNamePlaceholder')}
+              value={firstName}
+              onChangeText={setFirstName}
+              autoCapitalize="words"
+              autoCorrect={false}
+              containerStyle={styles.nameCol}
+              error={errors.firstName ? t(errors.firstName) : undefined}
+            />
+            <AuthField
+              label={t('register.lastName')}
+              placeholder={t('register.lastNamePlaceholder')}
+              value={lastName}
+              onChangeText={setLastName}
+              autoCapitalize="words"
+              autoCorrect={false}
+              containerStyle={styles.nameCol}
+              error={errors.lastName ? t(errors.lastName) : undefined}
+            />
           </View>
 
-          <View style={styles.formContainer}>
-            {otpStep === 'details' ? (
-              <>
-                <View style={styles.inputContainer}>
-                  <Text style={styles.label}>{t('register.email')}</Text>
-                  <TextInput
-                    style={[styles.input, errors.email && styles.inputError]}
-                    placeholder={t('register.emailPlaceholder')}
-                    value={email}
-                    onChangeText={setEmail}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                  {errors.email ? <Text style={styles.errorText}>{t(errors.email)}</Text> : null}
-                </View>
+          <AuthField
+            label={t('register.middleName')}
+            placeholder={t('register.middleNamePlaceholder')}
+            value={middleName}
+            onChangeText={setMiddleName}
+            autoCapitalize="words"
+            autoCorrect={false}
+          />
 
-                <View style={styles.inputContainer}>
-                  <Text style={styles.label}>{t('register.firstName')}</Text>
-                  <TextInput
-                    style={[styles.input, errors.firstName && styles.inputError]}
-                    placeholder={t('register.firstNamePlaceholder')}
-                    value={firstName}
-                    onChangeText={setFirstName}
-                    autoCapitalize="words"
-                    autoCorrect={false}
-                  />
-                  {errors.firstName ? <Text style={styles.errorText}>{t(errors.firstName)}</Text> : null}
-                </View>
+          <AuthField
+            label={t('register.phone')}
+            icon="call-outline"
+            placeholder={t('register.phonePlaceholder')}
+            value={phone}
+            onChangeText={setPhone}
+            keyboardType="phone-pad"
+            autoCapitalize="none"
+            autoCorrect={false}
+            error={errors.phone ? t(errors.phone) : undefined}
+          />
 
-                <View style={styles.inputContainer}>
-                  <Text style={styles.label}>{t('register.middleName')}</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder={t('register.middleNamePlaceholder')}
-                    value={middleName}
-                    onChangeText={setMiddleName}
-                    autoCapitalize="words"
-                    autoCorrect={false}
-                  />
-                </View>
+          <View style={styles.infoBanner}>
+            <Ionicons name="information-circle-outline" size={18} color={Colors.TEXT_SECONDARY} />
+            <Text style={styles.infoText}>{t('register.infoBanner')}</Text>
+          </View>
 
-                <View style={styles.inputContainer}>
-                  <Text style={styles.label}>{t('register.lastName')}</Text>
-                  <TextInput
-                    style={[styles.input, errors.lastName && styles.inputError]}
-                    placeholder={t('register.lastNamePlaceholder')}
-                    value={lastName}
-                    onChangeText={setLastName}
-                    autoCapitalize="words"
-                    autoCorrect={false}
-                  />
-                  {errors.lastName ? <Text style={styles.errorText}>{t(errors.lastName)}</Text> : null}
-                </View>
-
-                <View style={styles.inputContainer}>
-                  <Text style={styles.label}>{t('register.phone')}</Text>
-                  <TextInput
-                    style={[styles.input, errors.phone && styles.inputError]}
-                    placeholder={t('register.phonePlaceholder')}
-                    value={phone}
-                    onChangeText={setPhone}
-                    keyboardType="phone-pad"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                  {errors.phone ? <Text style={styles.errorText}>{t(errors.phone)}</Text> : null}
-                </View>
-
-                <TouchableOpacity
-                  style={[styles.registerButton, isLoading && styles.registerButtonDisabled]}
-                  onPress={handleSendOtp}
-                  disabled={isLoading}
-                >
-                  <Text style={styles.registerButtonText}>
-                    {isLoading ? t('register.sending') : t('register.sendCode')}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <>
-                <View style={styles.otpSentBanner}>
-                  <Ionicons name="mail-outline" size={20} color={Colors.ELECTRIC_BLUE} />
-                  <View style={styles.otpSentBannerTextWrap}>
-                    <Text style={styles.otpSentMessage}>{t('register.otpSentMessage')}</Text>
-                    <Text style={styles.otpSpamNote}>{t('register.otpSpamNote')}</Text>
-                  </View>
-                </View>
-
-                <Text style={styles.emailSummary}>{email.trim()}</Text>
-
-                <View style={styles.inputContainer}>
-                  <Text style={styles.label}>{t('register.otpLabel')}</Text>
-                  <TextInput
-                    style={[styles.input, errors.otp && styles.inputError]}
-                    placeholder={t('register.otpPlaceholder')}
-                    value={otpCode}
-                    onChangeText={setOtpCode}
-                    keyboardType="number-pad"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                  {errors.otp ? <Text style={styles.errorText}>{t(errors.otp)}</Text> : null}
-                </View>
-
-                <View style={styles.inputContainer}>
-                  <Text style={styles.label}>{t('register.password')}</Text>
-                  <View
-                    style={[
-                      styles.passwordInputWrapper,
-                      errors.password && styles.passwordInputWrapperError,
-                    ]}
-                  >
-                    <TextInput
-                      style={styles.passwordInput}
-                      placeholder={t('register.passwordPlaceholder')}
-                      value={password}
-                      onChangeText={setPassword}
-                      secureTextEntry={!showPassword}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                    />
-                    {password.length > 0 ? (
-                      <TouchableOpacity
-                        style={styles.eyeButton}
-                        onPress={() => setShowPassword(!showPassword)}
-                        accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
-                      >
-                        <Ionicons
-                          name={showPassword ? 'eye-off' : 'eye'}
-                          size={18}
-                          color={Colors.BLACK}
-                        />
-                      </TouchableOpacity>
-                    ) : null}
-                  </View>
-                  {errors.password ? <Text style={styles.errorText}>{t(errors.password)}</Text> : null}
-                </View>
-
-                <View style={styles.inputContainer}>
-                  <Text style={styles.label}>{t('register.confirmPassword')}</Text>
-                  <View
-                    style={[
-                      styles.passwordInputWrapper,
-                      errors.confirmPassword && styles.passwordInputWrapperError,
-                    ]}
-                  >
-                    <TextInput
-                      style={styles.passwordInput}
-                      placeholder={t('register.confirmPasswordPlaceholder')}
-                      value={confirmPassword}
-                      onChangeText={setConfirmPassword}
-                      secureTextEntry={!showConfirmPassword}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                    />
-                    {confirmPassword.length > 0 ? (
-                      <TouchableOpacity
-                        style={styles.eyeButton}
-                        onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-                        accessibilityLabel={showConfirmPassword ? 'Hide password' : 'Show password'}
-                      >
-                        <Ionicons
-                          name={showConfirmPassword ? 'eye-off' : 'eye'}
-                          size={18}
-                          color={Colors.BLACK}
-                        />
-                      </TouchableOpacity>
-                    ) : null}
-                  </View>
-                  {errors.confirmPassword ? (
-                    <Text style={styles.errorText}>{t(errors.confirmPassword)}</Text>
-                  ) : null}
-                </View>
-
-                <TouchableOpacity
-                  style={[styles.registerButton, isLoading && styles.registerButtonDisabled]}
-                  onPress={handleCompleteRegistration}
-                  disabled={isLoading}
-                >
-                  <Text style={styles.registerButtonText}>
-                    {isLoading ? t('register.sending') : t('register.createAccount')}
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={() => {
-                    resetCooldown();
-                    setOtpStep('details');
-                  }}
-                  style={styles.textLinkWrap}
-                >
-                  <Text style={styles.textLink}>{t('register.backEditDetails')}</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={handleResendOtp}
-                  style={styles.textLinkWrap}
-                  disabled={isLoading || resendingOtp || !canResend}
-                >
-                  <Text
-                    style={[
-                      styles.textLink,
-                      (isLoading || resendingOtp || !canResend) && styles.textLinkDisabled,
-                    ]}
-                  >
-                    {resendingOtp
-                      ? t('register.sending')
-                      : canResend
-                        ? t('register.resendOtp')
-                        : t('register.resendOtpIn', { seconds: secondsLeft })}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            )}
-
-            <View style={styles.signinSection}>
-              <Text style={styles.signinText}>{t('register.haveAccount')}</Text>
-              <TouchableOpacity onPress={() => navigation.navigate('Login' as never)}>
-                <Text style={styles.signinLink}>{t('register.signIn')}</Text>
-              </TouchableOpacity>
+          <AuthPrimaryButton
+            title={isLoading ? t('register.sending') : t('register.sendCode')}
+            onPress={handleSendOtp}
+            loading={isLoading}
+          />
+        </>
+      ) : (
+        <>
+          <View style={styles.otpBanner}>
+            <Ionicons name="mail-outline" size={18} color={Colors.TEXT_SECONDARY} />
+            <View style={styles.otpBannerText}>
+              <Text style={styles.otpSentMessage}>{t('register.otpSentMessage')}</Text>
+              <Text style={styles.emailSummary}>{email.trim()}</Text>
+              <Text style={styles.otpSpamNote}>{t('register.otpSpamNote')}</Text>
             </View>
-
-            {otpStep === 'details' ? (
-              <View style={styles.infoBanner}>
-                <Ionicons name="information-circle-outline" size={16} color={Colors.ELECTRIC_BLUE} />
-                <Text style={styles.infoText}>{t('register.infoBanner')}</Text>
-              </View>
-            ) : null}
           </View>
 
-          <Text style={styles.legalText}>
-            {t('register.legalPrefix')}{' '}
-            <Text style={styles.linkText} onPress={() => navigation.navigate('PrivacyPolicy' as never)}>
-              {t('register.privacy')}
-            </Text>{' '}
-            {t('register.and')}{' '}
-            <Text style={styles.linkText} onPress={() => navigation.navigate('TermsAndConditions' as never)}>
-              {t('register.terms')}
-            </Text>
-            {t('register.legalSuffix')}
-          </Text>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+          <AuthField
+            label={t('register.otpLabel')}
+            icon="keypad-outline"
+            placeholder={t('register.otpPlaceholder')}
+            value={otpCode}
+            onChangeText={setOtpCode}
+            keyboardType="number-pad"
+            autoCapitalize="none"
+            autoCorrect={false}
+            error={errors.otp ? t(errors.otp) : undefined}
+          />
+
+          <AuthField
+            label={t('register.password')}
+            icon="lock-closed-outline"
+            placeholder={t('register.passwordPlaceholder')}
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            error={errors.password ? t(errors.password) : undefined}
+          />
+
+          <AuthField
+            label={t('register.confirmPassword')}
+            icon="lock-closed-outline"
+            placeholder={t('register.confirmPasswordPlaceholder')}
+            value={confirmPassword}
+            onChangeText={setConfirmPassword}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            error={errors.confirmPassword ? t(errors.confirmPassword) : undefined}
+          />
+
+          <AuthPrimaryButton
+            title={isLoading ? t('register.sending') : t('register.createAccount')}
+            onPress={handleCompleteRegistration}
+            loading={isLoading}
+          />
+
+          <AuthTextLink
+            centered
+            onPress={() => {
+              resetCooldown();
+              setOtpStep('details');
+            }}
+          >
+            {t('register.backEditDetails')}
+          </AuthTextLink>
+
+          <AuthTextLink
+            centered
+            disabled={isLoading || resendingOtp || !canResend}
+            onPress={handleResendOtp}
+          >
+            {resendingOtp
+              ? t('register.sending')
+              : canResend
+                ? t('register.resendOtp')
+                : t('register.resendOtpIn', { seconds: secondsLeft })}
+          </AuthTextLink>
+        </>
+      )}
+
+      <AuthInlineSwitch
+        prefix={t('register.haveAccount')}
+        action={t('register.signIn')}
+        onPress={() => navigation.navigate('Login' as never)}
+      />
+    </AuthScreenShell>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.BACKGROUND,
+  scrollExtra: {
+    paddingBottom: Spacing.XXL,
   },
-  keyboardView: {
-    flex: 1,
-  },
-  scrollContent: {
-    flexGrow: 1,
-    paddingBottom: 20,
-  },
-  header: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 24,
-  },
-  backButton: {
-    marginBottom: 16,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: Colors.BLACK,
-    marginBottom: 6,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: Colors.TEXT_SECONDARY,
-  },
-  formContainer: {
-    paddingHorizontal: 20,
-    marginBottom: 24,
-  },
-  inputContainer: {
-    marginBottom: 18,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: Colors.TEXT_SECONDARY,
-    marginBottom: 6,
-  },
-  input: {
-    backgroundColor: Colors.WHITE,
-    borderWidth: 1,
-    borderColor: Colors.BORDER,
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 14,
-    color: Colors.BLACK,
-  },
-  passwordInputWrapper: {
+  nameRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.WHITE,
-    borderWidth: 1,
-    borderColor: Colors.BORDER,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    minHeight: 46,
+    gap: 12,
   },
-  passwordInputWrapperError: {
-    borderColor: Colors.ERROR,
-  },
-  passwordInput: {
+  nameCol: {
     flex: 1,
-    paddingVertical: 12,
-    paddingHorizontal: 4,
-    fontSize: 14,
-    color: Colors.BLACK,
-  },
-  eyeButton: {
-    padding: 6,
-  },
-  inputError: {
-    borderColor: Colors.ERROR,
-  },
-  errorText: {
-    color: Colors.ERROR,
-    fontSize: 11,
-    marginTop: 3,
-    marginLeft: 4,
-  },
-  emailSummary: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: Colors.BLACK,
-    marginBottom: Spacing.MD,
-    textAlign: 'center',
-  },
-  otpSentBanner: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: '#E3F2FD',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderRadius: 8,
-    marginBottom: Spacing.MD,
-  },
-  otpSentBannerTextWrap: {
-    flex: 1,
-    marginLeft: 8,
-  },
-  otpSentMessage: {
-    fontSize: 13,
-    color: Colors.ELECTRIC_BLUE,
-    lineHeight: 19,
-    marginBottom: 8,
-  },
-  otpSpamNote: {
-    fontSize: 12,
-    color: Colors.TEXT_SECONDARY,
-    lineHeight: 17,
-    fontStyle: 'italic',
-  },
-  registerButton: {
-    backgroundColor: Colors.BLACK,
-    borderRadius: 8,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  registerButtonDisabled: {
-    opacity: 0.6,
-  },
-  registerButtonText: {
-    color: Colors.WHITE,
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  textLinkWrap: {
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  textLink: {
-    fontSize: 14,
-    color: Colors.ELECTRIC_BLUE,
-    fontWeight: '500',
-  },
-  textLinkDisabled: {
-    opacity: 0.5,
-  },
-  signinSection: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: 16,
-    marginBottom: 16,
-  },
-  signinText: {
-    fontSize: 14,
-    color: Colors.TEXT_SECONDARY,
-  },
-  signinLink: {
-    fontSize: 14,
-    color: Colors.SHEIN_PINK,
-    fontWeight: '500',
   },
   infoBanner: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    backgroundColor: '#E3F2FD',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 8,
-    marginTop: 16,
+    gap: 10,
+    paddingVertical: 12,
+    marginBottom: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.BORDER,
   },
   infoText: {
     flex: 1,
-    marginLeft: 6,
+    fontSize: 13,
+    lineHeight: 19,
+    color: Colors.TEXT_SECONDARY,
+  },
+  otpBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingVertical: 12,
+    marginBottom: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.BORDER,
+  },
+  otpBannerText: {
+    flex: 1,
+  },
+  otpSentMessage: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: Colors.TEXT_SECONDARY,
+    marginBottom: 6,
+  },
+  emailSummary: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.BRAND_NAVY,
+    marginBottom: 6,
+  },
+  otpSpamNote: {
     fontSize: 12,
-    color: Colors.ELECTRIC_BLUE,
-    lineHeight: 18,
+    lineHeight: 17,
+    color: Colors.TEXT_SECONDARY,
+    fontStyle: 'italic',
   },
   legalText: {
-    fontSize: 11,
+    fontSize: 12,
     color: Colors.TEXT_SECONDARY,
     textAlign: 'center',
-    paddingHorizontal: 20,
-    lineHeight: 16,
-    marginTop: 16,
+    lineHeight: 18,
   },
-  linkText: {
-    color: Colors.ELECTRIC_BLUE,
+  legalLink: {
+    color: Colors.WINE,
+    fontWeight: '600',
   },
 });

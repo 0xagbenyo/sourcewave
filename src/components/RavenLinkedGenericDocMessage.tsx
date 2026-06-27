@@ -1,8 +1,9 @@
 import React, { useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Linking, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RavenLight } from '../constants/ravenLightTheme';
 import { getERPNextBaseUrl } from '../services/erpnext';
+import { appAlert as Alert } from '../services/appAlert';
 
 type Props = {
   linkDoctype: string;
@@ -64,11 +65,11 @@ export const RavenLinkedGenericDocMessage: React.FC<Props> = ({ linkDoctype, lin
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: RavenLight.radiusMd,
+    borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: RavenLight.border,
     backgroundColor: RavenLight.panel,
-    padding: 12,
+    padding: 10,
     maxWidth: '100%',
     alignSelf: 'stretch',
   },

@@ -1,24 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, Text, StyleSheet } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
+import { Spacing } from '../constants/spacing';
 import { getERPNextClient } from '../services/erpnext';
 import { OTP_PURPOSE_RESET_PASSWORD } from '../constants/otpPurposes';
 import { appAlert as Alert } from '../services/appAlert';
 import { userFacingError } from '../utils/userFacingError';
 import { useOtpResendCooldown } from '../hooks/useOtpResendCooldown';
+import { AuthScreenShell, AuthStepIndicator } from '../components/auth/AuthScreenShell';
+import { AuthField } from '../components/auth/AuthField';
+import { AuthPrimaryButton, AuthInlineSwitch, AuthTextLink } from '../components/auth/AuthPrimaryButton';
 
 interface RouteParams {
   email?: string;
@@ -35,28 +29,23 @@ export const ForgotPasswordScreen: React.FC = () => {
   const [otpCode, setOtpCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [showNewPassword, setShowNewPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [resendingOtp, setResendingOtp] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
 
   useEffect(() => {
-    if (initialEmail) {
-      setEmail(initialEmail);
-    }
+    if (initialEmail) setEmail(initialEmail);
   }, [initialEmail]);
+
+  const validateEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 
   const handleSendOtp = async () => {
     const trimmedEmail = email.trim();
-
     if (!trimmedEmail) {
       Alert.alert(t('forgot.alerts.emailRequiredTitle'), t('forgot.alerts.emailRequiredBody'));
       return;
     }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(trimmedEmail)) {
+    if (!validateEmail(trimmedEmail)) {
       Alert.alert(t('forgot.alerts.invalidTitle'), t('forgot.alerts.invalidBody'));
       return;
     }
@@ -73,8 +62,7 @@ export const ForgotPasswordScreen: React.FC = () => {
       setStep('otp');
       startCooldown();
     } catch (error: unknown) {
-      const msg = userFacingError(error, t('forgot.alerts.otpSendFailed'));
-      Alert.alert(t('forgot.alerts.errorTitle'), msg);
+      Alert.alert(t('forgot.alerts.errorTitle'), userFacingError(error, t('forgot.alerts.otpSendFailed')));
     } finally {
       setIsLoading(false);
     }
@@ -97,12 +85,10 @@ export const ForgotPasswordScreen: React.FC = () => {
 
     setIsLoading(true);
     try {
-      const client = getERPNextClient();
-      await client.resetPasswordWithOtp(trimmedEmail, otpCode.trim(), newPassword.trim());
+      await getERPNextClient().resetPasswordWithOtp(trimmedEmail, otpCode.trim(), newPassword.trim());
       setIsSuccess(true);
     } catch (error: unknown) {
-      const msg = userFacingError(error, t('forgot.alerts.resetFailed'));
-      Alert.alert(t('forgot.alerts.errorTitle'), msg);
+      Alert.alert(t('forgot.alerts.errorTitle'), userFacingError(error, t('forgot.alerts.resetFailed')));
     } finally {
       setIsLoading(false);
     }
@@ -114,447 +100,263 @@ export const ForgotPasswordScreen: React.FC = () => {
 
     setResendingOtp(true);
     try {
-      const client = getERPNextClient();
-      await client.sendOtp({ email: trimmedEmail, purpose: OTP_PURPOSE_RESET_PASSWORD });
+      await getERPNextClient().sendOtp({ email: trimmedEmail, purpose: OTP_PURPOSE_RESET_PASSWORD });
       setOtpCode('');
       startCooldown();
       Alert.alert(t('forgot.alerts.otpResentTitle'), t('forgot.alerts.otpResentBody'));
     } catch (error: unknown) {
-      const msg = userFacingError(error, t('forgot.alerts.otpSendFailed'));
-      Alert.alert(t('forgot.alerts.errorTitle'), msg);
+      Alert.alert(t('forgot.alerts.errorTitle'), userFacingError(error, t('forgot.alerts.otpSendFailed')));
     } finally {
       setResendingOtp(false);
     }
   };
 
-  const handleBackToLogin = () => {
+  const handleBack = () => {
+    if (isSuccess) {
+      navigation.goBack();
+      return;
+    }
+    if (step === 'otp') {
+      setStep('email');
+      setOtpCode('');
+      setNewPassword('');
+      setConfirmPassword('');
+      resetCooldown();
+      return;
+    }
     navigation.goBack();
   };
 
-  const handleResend = () => {
+  const handleStartOver = () => {
     setIsSuccess(false);
     setStep('email');
     setOtpCode('');
     setNewPassword('');
     setConfirmPassword('');
-    setShowNewPassword(false);
-    setShowConfirmPassword(false);
+    resetCooldown();
   };
 
   if (isSuccess) {
     return (
-      <SafeAreaView style={styles.container}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.keyboardView}
-        >
-          <TouchableOpacity style={styles.backButtonTop} onPress={handleBackToLogin}>
-            <Ionicons name="arrow-back" size={24} color={Colors.BLACK} />
-          </TouchableOpacity>
-          <ScrollView contentContainerStyle={styles.scrollContent}>
-            <View style={styles.header}>
-              <View style={styles.successIconContainer}>
-                <Ionicons name="checkmark-circle" size={64} color={Colors.SUCCESS} />
-              </View>
-            </View>
+      <AuthScreenShell
+        centered
+        heroLogo={require('../assets/images/sourcewave logo.png')}
+        heroTitle={t('forgot.successTitleOtp')}
+        heroSubtitle={t('forgot.successSubtitleOtp')}
+        showBack
+        onBack={handleBack}
+        contentStyle={styles.scrollExtra}
+      >
+        <View style={styles.successIconWrap}>
+          <Ionicons name="checkmark-circle" size={56} color={Colors.SUCCESS} />
+        </View>
+        <Text style={styles.successEmail}>{email.trim()}</Text>
+        <Text style={styles.successNote}>{t('forgot.successInstructionsOtp')}</Text>
 
-            <View style={styles.formContainer}>
-              <Text style={styles.title}>{t('forgot.successTitleOtp')}</Text>
-              <Text style={styles.subtitle}>{t('forgot.successSubtitleOtp')}</Text>
-              <Text style={styles.emailText}>{email.trim()}</Text>
+        <AuthPrimaryButton title={t('forgot.backLogin')} onPress={handleBack} />
 
-              <Text style={styles.instructions}>{t('forgot.successInstructionsOtp')}</Text>
+        <AuthTextLink centered onPress={handleStartOver}>
+          {t('forgot.resend')}
+        </AuthTextLink>
 
-              <TouchableOpacity style={styles.primaryButton} onPress={handleBackToLogin}>
-                <Text style={styles.primaryButtonText}>{t('forgot.backLogin')}</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.secondaryButton} onPress={handleResend}>
-                <Text style={styles.secondaryButtonText}>{t('forgot.resend')}</Text>
-              </TouchableOpacity>
-
-              <View style={styles.helpContainer}>
-                <Text style={styles.helpText}>{t('forgot.noEmailTitle')}</Text>
-                <Text style={styles.helpSubtext}>{t('forgot.noEmailBody')}</Text>
-              </View>
-            </View>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
+        <View style={styles.helpBlock}>
+          <Text style={styles.helpTitle}>{t('forgot.noEmailTitle')}</Text>
+          <Text style={styles.helpBody}>{t('forgot.noEmailBody')}</Text>
+        </View>
+      </AuthScreenShell>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
-      >
-        <TouchableOpacity style={styles.backButtonTop} onPress={handleBackToLogin}>
-          <Ionicons name="arrow-back" size={24} color={Colors.BLACK} />
-        </TouchableOpacity>
-        <ScrollView contentContainerStyle={styles.scrollContent}>
-          <View style={styles.header} />
+    <AuthScreenShell
+      heroTitle={step === 'email' ? t('forgot.heroTitle') : t('forgot.heroTitleOtp')}
+      heroSubtitle={step === 'email' ? t('forgot.heroSubtitleEmail') : t('forgot.heroSubtitleOtp')}
+      showBack
+      onBack={handleBack}
+      contentStyle={styles.scrollExtra}
+    >
+      <AuthStepIndicator
+        currentKey={step}
+        progressCaption={t('forgot.stepOf', { current: step === 'email' ? 1 : 2, total: 2 })}
+        steps={[
+          { key: 'email', label: t('forgot.stepEmail') },
+          { key: 'otp', label: t('forgot.stepReset') },
+        ]}
+      />
 
-          <View style={styles.formContainer}>
-            <Text style={styles.title}>{t('forgot.title')}</Text>
-            <Text style={styles.subtitle}>
-              {step === 'email' ? t('forgot.subtitleOtp') : t('forgot.otpStepHint')}
-            </Text>
+      {step === 'email' ? (
+        <>
+          <AuthField
+            label={t('forgot.emailLabel')}
+            icon="mail-outline"
+            placeholder={t('forgot.emailPlaceholder')}
+            value={email}
+            onChangeText={setEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!isLoading}
+          />
 
-            {step === 'email' ? (
-              <>
-                <View style={styles.inputContainer}>
-                  <Text style={styles.label}>{t('forgot.emailLabel')}</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder={t('forgot.emailPlaceholder')}
-                    placeholderTextColor={Colors.TEXT_SECONDARY}
-                    value={email}
-                    onChangeText={setEmail}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    editable={!isLoading}
-                  />
-                </View>
-
-                <TouchableOpacity
-                  style={[styles.primaryButton, (isLoading || !email.trim()) && styles.primaryButtonDisabled]}
-                  onPress={handleSendOtp}
-                  disabled={isLoading || !email.trim()}
-                >
-                  <Text style={styles.primaryButtonText}>
-                    {isLoading ? t('forgot.sending') : t('forgot.sendCode')}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <>
-                <Text style={styles.emailText}>{email.trim()}</Text>
-
-                <View style={styles.inputContainer}>
-                  <Text style={styles.label}>{t('forgot.otpLabel')}</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder={t('forgot.otpPlaceholder')}
-                    placeholderTextColor={Colors.TEXT_SECONDARY}
-                    value={otpCode}
-                    onChangeText={setOtpCode}
-                    keyboardType="number-pad"
-                    autoCapitalize="none"
-                    editable={!isLoading}
-                  />
-                </View>
-
-                <View style={styles.inputContainer}>
-                  <Text style={styles.label}>{t('forgot.newPassword')}</Text>
-                  <View style={styles.passwordInputWrapper}>
-                    <TextInput
-                      style={styles.passwordInput}
-                      placeholder={t('forgot.newPasswordPlaceholder')}
-                      placeholderTextColor={Colors.TEXT_SECONDARY}
-                      value={newPassword}
-                      onChangeText={setNewPassword}
-                      secureTextEntry={!showNewPassword}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      editable={!isLoading}
-                    />
-                    {newPassword.length > 0 ? (
-                      <TouchableOpacity
-                        style={styles.eyeButton}
-                        onPress={() => setShowNewPassword(!showNewPassword)}
-                        accessibilityLabel={showNewPassword ? 'Hide password' : 'Show password'}
-                      >
-                        <Ionicons
-                          name={showNewPassword ? 'eye-off' : 'eye'}
-                          size={18}
-                          color={Colors.BLACK}
-                        />
-                      </TouchableOpacity>
-                    ) : null}
-                  </View>
-                </View>
-
-                <View style={styles.inputContainer}>
-                  <Text style={styles.label}>{t('forgot.confirmPassword')}</Text>
-                  <View style={styles.passwordInputWrapper}>
-                    <TextInput
-                      style={styles.passwordInput}
-                      placeholder={t('forgot.confirmPasswordPlaceholder')}
-                      placeholderTextColor={Colors.TEXT_SECONDARY}
-                      value={confirmPassword}
-                      onChangeText={setConfirmPassword}
-                      secureTextEntry={!showConfirmPassword}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      editable={!isLoading}
-                    />
-                    {confirmPassword.length > 0 ? (
-                      <TouchableOpacity
-                        style={styles.eyeButton}
-                        onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-                        accessibilityLabel={showConfirmPassword ? 'Hide password' : 'Show password'}
-                      >
-                        <Ionicons
-                          name={showConfirmPassword ? 'eye-off' : 'eye'}
-                          size={18}
-                          color={Colors.BLACK}
-                        />
-                      </TouchableOpacity>
-                    ) : null}
-                  </View>
-                </View>
-
-                <TouchableOpacity
-                  style={[
-                    styles.primaryButton,
-                    (isLoading || !otpCode.trim() || !newPassword.trim()) && styles.primaryButtonDisabled,
-                  ]}
-                  onPress={handleResetWithOtp}
-                  disabled={isLoading || !otpCode.trim() || !newPassword.trim()}
-                >
-                  <Text style={styles.primaryButtonText}>
-                    {isLoading ? t('forgot.sending') : t('forgot.resetWithOtp')}
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={() => {
-                    resetCooldown();
-                    setStep('email');
-                  }}
-                  disabled={isLoading || resendingOtp}
-                >
-                  <Text style={styles.backEditLink}>{t('forgot.backEditEmail')}</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={handleResendOtp}
-                  disabled={isLoading || resendingOtp || !canResend}
-                  style={styles.resendOtpWrap}
-                >
-                  <Text
-                    style={[
-                      styles.resendOtpLink,
-                      (isLoading || resendingOtp || !canResend) && styles.resendOtpLinkDisabled,
-                    ]}
-                  >
-                    {resendingOtp
-                      ? t('forgot.sending')
-                      : canResend
-                        ? t('forgot.resendOtp')
-                        : t('forgot.resendOtpIn', { seconds: secondsLeft })}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            )}
-
-            <View style={styles.backToLoginContainer}>
-              <Text style={styles.backToLoginText}>{t('forgot.remember')}</Text>
-              <TouchableOpacity onPress={handleBackToLogin}>
-                <Text style={styles.backToLoginLink}>{t('forgot.signIn')}</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.helpContainer}>
-              <Text style={styles.helpText}>{t('forgot.helpTitle')}</Text>
-              <Text style={styles.helpSubtext}>{t('forgot.helpBody')}</Text>
+          <AuthPrimaryButton
+            title={isLoading ? t('forgot.sending') : t('forgot.sendCode')}
+            onPress={handleSendOtp}
+            disabled={!email.trim()}
+            loading={isLoading}
+          />
+        </>
+      ) : (
+        <>
+          <View style={styles.otpBanner}>
+            <Ionicons name="mail-outline" size={18} color={Colors.TEXT_SECONDARY} />
+            <View style={styles.otpBannerText}>
+              <Text style={styles.otpHint}>{t('forgot.otpStepHint')}</Text>
+              <Text style={styles.emailSummary}>{email.trim()}</Text>
             </View>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+
+          <AuthField
+            label={t('forgot.otpLabel')}
+            icon="keypad-outline"
+            placeholder={t('forgot.otpPlaceholder')}
+            value={otpCode}
+            onChangeText={setOtpCode}
+            keyboardType="number-pad"
+            autoCapitalize="none"
+            editable={!isLoading}
+          />
+
+          <AuthField
+            label={t('forgot.newPassword')}
+            icon="lock-closed-outline"
+            placeholder={t('forgot.newPasswordPlaceholder')}
+            value={newPassword}
+            onChangeText={setNewPassword}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!isLoading}
+          />
+
+          <AuthField
+            label={t('forgot.confirmPassword')}
+            icon="lock-closed-outline"
+            placeholder={t('forgot.confirmPasswordPlaceholder')}
+            value={confirmPassword}
+            onChangeText={setConfirmPassword}
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!isLoading}
+          />
+
+          <AuthPrimaryButton
+            title={isLoading ? t('forgot.sending') : t('forgot.resetWithOtp')}
+            onPress={handleResetWithOtp}
+            disabled={!otpCode.trim() || !newPassword.trim()}
+            loading={isLoading}
+          />
+
+          <AuthTextLink
+            centered
+            disabled={isLoading}
+            onPress={() => {
+              resetCooldown();
+              setStep('email');
+            }}
+          >
+            {t('forgot.backEditEmail')}
+          </AuthTextLink>
+
+          <AuthTextLink
+            centered
+            disabled={isLoading || resendingOtp || !canResend}
+            onPress={handleResendOtp}
+          >
+            {resendingOtp
+              ? t('forgot.sending')
+              : canResend
+                ? t('forgot.resendOtp')
+                : t('forgot.resendOtpIn', { seconds: secondsLeft })}
+          </AuthTextLink>
+        </>
+      )}
+
+      <AuthInlineSwitch
+        prefix={t('forgot.remember')}
+        action={t('forgot.signIn')}
+        onPress={() => navigation.goBack()}
+      />
+
+      <View style={styles.helpBlock}>
+        <Text style={styles.helpTitle}>{t('forgot.helpTitle')}</Text>
+        <Text style={styles.helpBody}>{t('forgot.helpBody')}</Text>
+      </View>
+    </AuthScreenShell>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.BACKGROUND,
+  scrollExtra: {
+    paddingBottom: Spacing.XXL,
   },
-  keyboardView: {
-    flex: 1,
-  },
-  scrollContent: {
-    flexGrow: 1,
-    paddingBottom: 20,
-    paddingTop: 40,
-    justifyContent: 'center',
-  },
-  backButtonTop: {
-    position: 'absolute',
-    top: 50,
-    left: 20,
-    zIndex: 10,
-    padding: 8,
-  },
-  header: {
-    paddingHorizontal: 20,
-    paddingTop: 40,
-    paddingBottom: 24,
-    alignItems: 'center',
-  },
-  successIconContainer: {
-    marginBottom: 24,
-  },
-  formContainer: {
-    paddingHorizontal: 20,
-    marginBottom: 24,
-    alignItems: 'center',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: Colors.BLACK,
-    marginBottom: 12,
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: 14,
-    color: Colors.TEXT_SECONDARY,
-    textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: 20,
-  },
-  inputContainer: {
-    width: '100%',
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: Colors.TEXT_SECONDARY,
-    marginBottom: 6,
-  },
-  input: {
-    backgroundColor: Colors.WHITE,
-    borderWidth: 1,
-    borderColor: Colors.BORDER,
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    fontSize: 14,
-    color: Colors.BLACK,
-    width: '100%',
-  },
-  passwordInputWrapper: {
+  otpBanner: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.WHITE,
-    borderWidth: 1,
-    borderColor: Colors.BORDER,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    width: '100%',
-    minHeight: 48,
-  },
-  passwordInput: {
-    flex: 1,
-    paddingVertical: 14,
-    paddingHorizontal: 4,
-    fontSize: 14,
-    color: Colors.BLACK,
-  },
-  eyeButton: {
-    padding: 6,
-  },
-  primaryButton: {
-    backgroundColor: Colors.BLACK,
-    borderRadius: 8,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginBottom: 16,
-    width: '100%',
-  },
-  primaryButtonDisabled: {
-    opacity: 0.6,
-  },
-  primaryButtonText: {
-    color: Colors.WHITE,
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  secondaryButton: {
-    backgroundColor: Colors.WHITE,
-    borderWidth: 1,
-    borderColor: Colors.BORDER,
-    borderRadius: 8,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginBottom: 16,
-    width: '100%',
-  },
-  secondaryButtonText: {
-    color: Colors.BLACK,
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  backEditLink: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.WINE,
-    textDecorationLine: 'underline',
-    textAlign: 'center',
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingVertical: 12,
     marginBottom: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.BORDER,
   },
-  resendOtpWrap: {
-    alignItems: 'center',
-    marginBottom: 12,
+  otpBannerText: {
+    flex: 1,
   },
-  resendOtpLink: {
-    fontSize: 14,
+  otpHint: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: Colors.TEXT_SECONDARY,
+    marginBottom: 4,
+  },
+  emailSummary: {
+    fontSize: 15,
     fontWeight: '600',
-    color: Colors.ELECTRIC_BLUE,
-    textAlign: 'center',
+    color: Colors.BRAND_NAVY,
   },
-  resendOtpLinkDisabled: {
-    opacity: 0.5,
+  helpBlock: {
+    marginTop: Spacing.LG,
+    paddingTop: Spacing.MD,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.BORDER,
   },
-  backToLoginContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
+  helpTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.BRAND_NAVY,
+    marginBottom: 4,
+  },
+  helpBody: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: Colors.TEXT_SECONDARY,
+  },
+  successIconWrap: {
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: Spacing.MD,
   },
-  backToLoginText: {
-    fontSize: 14,
-    color: Colors.TEXT_SECONDARY,
-  },
-  backToLoginLink: {
-    fontSize: 14,
-    color: Colors.SHEIN_PINK,
-    fontWeight: '500',
-  },
-  helpContainer: {
-    alignItems: 'center',
-    marginTop: 16,
-  },
-  helpText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: Colors.BLACK,
-    marginBottom: 6,
-  },
-  helpSubtext: {
-    fontSize: 12,
-    color: Colors.TEXT_SECONDARY,
+  successEmail: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.BRAND_NAVY,
     textAlign: 'center',
-    lineHeight: 18,
+    marginBottom: Spacing.MD,
   },
-  emailText: {
+  successNote: {
     fontSize: 14,
-    fontWeight: 'bold',
-    color: Colors.SHEIN_PINK,
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  instructions: {
-    fontSize: 14,
-    color: Colors.TEXT_SECONDARY,
-    textAlign: 'center',
     lineHeight: 20,
-    marginBottom: 24,
+    color: Colors.TEXT_SECONDARY,
+    textAlign: 'center',
+    marginBottom: Spacing.MD,
   },
 });

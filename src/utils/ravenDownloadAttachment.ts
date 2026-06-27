@@ -1,8 +1,9 @@
+import { appAlert as Alert } from '../services/appAlert';
 /**
  * Download ERP-hosted attachments with the same auth as in-app images, then open the OS share sheet
  * (Save to Files, Open in Excel, etc.) — avoids opening unauthenticated browser links for spreadsheets.
  */
-import { Platform, Alert } from 'react-native';
+import { Platform } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';

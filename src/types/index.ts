@@ -241,7 +241,7 @@ export type SupplierStackParamList = {
   SupplierSalesInvoiceDetail: { name: string };
   SupplierPaymentEntryDetail: { name: string };
   SupplierQuotationList: { initialTab?: 'list' | 'new' } | undefined;
-  SupplierQuotationDetail: { name: string };
+  SupplierQuotationDetail: { name: string; customerId?: string };
 };
 
 export type SupplierTabParamList = {
@@ -263,6 +263,8 @@ export type MainTabParamList = {
         openRavenChannelId?: string;
         /** Frappe user id — used to build a DM row if the channel is not in the list yet (same as in-drawer “new DM”). */
         openRavenPeerUserId?: string;
+        /** Buyer picked an order to share — browse groups and suppliers until one is chosen. */
+        shareSalesOrderName?: string;
       }
     | undefined;
   Profile: undefined;
@@ -279,6 +281,17 @@ export type RootStackParamList = {
     parentCategoryId?: string;
     subCategory?: string;
     subCategoryId?: string;
+    /** When set, the request is shared in this Raven DM after submit. */
+    ravenChannelId?: string;
+    /** Supplier representative (Frappe user); used when opening from profile. */
+    peerUserId?: string;
+    supplierLabel?: string;
+    /** ERPNext Supplier document name — locks category to supplier group and lists supplier items. */
+    supplierDocName?: string;
+    /** Supplier group label — resolved to Item Group for locked category in supplier sourcing. */
+    supplierGroup?: string;
+    /** Raven workspace display name (optional context). */
+    workspaceName?: string;
   } | undefined;
   Search: { query?: string };
   OrderHistory: undefined;
@@ -286,6 +299,8 @@ export type RootStackParamList = {
   InvoicesPayments: undefined;
   OrderDetails: { orderId: string };
   InvoiceDetails: { invoiceId: string };
+  /** In-app preview for Supplier Quotation (from chat or lists). */
+  SupplierQuotationDetail: { name: string; customerId?: string };
   PaymentEntryDetail: { name: string };
   EditProfile: undefined;
   Settings: undefined;
@@ -296,7 +311,16 @@ export type RootStackParamList = {
   AgentSupplierChat: { supplierId: string };
   SupplierChatList: undefined;
   /** Draft SQ + Raven doc link. Omit `ravenChannelId` to pick any chat/channel on the compose screen. */
-  SupplierQuotationCompose: { ravenChannelId?: string } | undefined;
+  SupplierQuotationCompose: { ravenChannelId?: string; salesOrderName?: string } | undefined;
+  /** Buyer: pick a Sales Order (sourcing request) and share it in supplier chat. */
+  BuyerSalesOrderShareCompose:
+    | {
+        ravenChannelId?: string;
+        peerUserId?: string;
+        salesOrderName?: string;
+        supplierLabel?: string;
+      }
+    | undefined;
   /** Native Raven-style chat (light UI); not a WebView. */
   RavenUIMessages: undefined;
   /** Header chat icon: your channels & people you message (not the Suppliers tab). */
@@ -306,6 +330,10 @@ export type RootStackParamList = {
     workspaceAdminUser?: string;
     /** Raven workspace `name` — required to return to in-app chat after opening a DM. */
     ravenWorkspaceId?: string;
+    /** Display label for the workspace (supplier group name). */
+    ravenWorkspaceName?: string;
+    /** When set, profile offers to share this Sales Order in chat with the supplier. */
+    shareSalesOrderName?: string;
   };
   Subscription: undefined;
   /** Contact form → ERPNext Issue (Support). */
@@ -320,7 +348,7 @@ export type AuthStackParamList = {
   RegisterConsent: undefined;
   PrivacyPolicy: undefined;
   TermsAndConditions: undefined;
-  ForgotPassword: undefined;
+  ForgotPassword: { email?: string } | undefined;
 };
 
 // API Response Types

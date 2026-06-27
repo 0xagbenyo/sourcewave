@@ -3,6 +3,7 @@
  * Keyed by user email; cleared on logout via `clearRavenMessagingLocalCache`.
  */
 import { appStorage } from '../services/appStorage';
+import { clearRavenChannelMessagesMemoryCache } from './ravenMessagingMemoryCache';
 import {
   ravenMessageRowSortTimeMs,
   type RavenChannelRow,
@@ -259,6 +260,7 @@ export async function setRavenWorkspaceChannelsSnapshot(
 
 /** Remove inbox + all per-channel message snapshots for this user (call on logout). */
 export async function clearRavenMessagingLocalCache(userEmail: string | undefined | null): Promise<void> {
+  clearRavenChannelMessagesMemoryCache();
   const userKey = normalizeUserKey(userEmail);
   const inboxKey = `${INBOX_KEY_PREFIX}${userKey}`;
   const msgPrefix = `${CHAN_MSG_KEY_PREFIX}${userKey}_`;

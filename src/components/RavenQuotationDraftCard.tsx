@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Pressable } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { RavenLight } from '../constants/ravenLightTheme';
 import { Colors } from '../constants/colors';
@@ -9,7 +10,7 @@ import {
   supplierQuotationWorkflowStateIsApprovedLike,
   supplierQuotationWorkflowStateIsRejectedLike,
 } from '../utils/chatQuotationDraftMessage';
-import { SupplierQuotationPdfModal } from './SupplierQuotationPdfModal';
+import { navigateToSupplierQuotationDetail } from '../utils/erpDocumentNavigation';
 
 type Props = {
   payload: SourcewaveQuotationDraftPayload;
@@ -92,21 +93,28 @@ export const RavenQuotationDraftCard: React.FC<Props> = ({
   onReject,
   onCardLongPress,
 }) => {
-  const [pdfOpen, setPdfOpen] = useState(false);
+  const navigation = useNavigation();
   const uiStatus = useMemo(() => deriveQuotationUiStatus(payload, handled), [payload, handled]);
   const chip = chipColors(uiStatus.kind);
   const dateLine = formatQuotationDate(payload.transactionDate);
 
+  const openPreview = () => {
+    navigateToSupplierQuotationDetail(
+      navigation as { navigate: (name: string, params?: object) => void },
+      payload.name
+    );
+  };
+
   return (
     <View style={styles.card}>
       <Pressable
-        onPress={() => setPdfOpen(true)}
+        onPress={openPreview}
         {...(onCardLongPress
           ? { onLongPress: onCardLongPress, delayLongPress: 380 as const }
           : {})}
         style={({ pressed }) => [styles.tapArea, pressed && styles.tapAreaPressed]}
         accessibilityRole="button"
-        accessibilityLabel="Open quotation PDF preview"
+        accessibilityLabel="View quotation details"
       >
         <View style={styles.cardHead}>
           <Ionicons name="document-text-outline" size={20} color={RavenLight.accent} />
@@ -151,18 +159,17 @@ export const RavenQuotationDraftCard: React.FC<Props> = ({
           </TouchableOpacity>
         </View>
       ) : null}
-      <SupplierQuotationPdfModal visible={pdfOpen} docName={payload.name} onClose={() => setPdfOpen(false)} />
     </View>
   );
 };
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: RavenLight.radiusMd,
+    borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: RavenLight.border,
     backgroundColor: RavenLight.panel,
-    padding: 10,
+    padding: 9,
     maxWidth: '100%',
     alignSelf: 'stretch',
   },

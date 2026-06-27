@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
@@ -41,6 +41,8 @@ export const AppAlertHost: React.FC = () => {
     return () => bindAppAlert(null);
   }, [show]);
 
+  const useRowButtons = state.buttons.length === 2;
+
   const modalButtons = useMemo(() => {
     return state.buttons.map((button, index) => {
       const label = button.text?.trim() || 'OK';
@@ -51,7 +53,7 @@ export const AppAlertHost: React.FC = () => {
           key={`${label}-${index}`}
           style={[
             styles.button,
-            index > 0 && styles.buttonGap,
+            useRowButtons ? styles.buttonRowItem : index > 0 && styles.buttonGap,
             isCancel && styles.buttonSecondary,
             isDestructive && styles.buttonDestructive,
           ]}
@@ -73,7 +75,7 @@ export const AppAlertHost: React.FC = () => {
         </TouchableOpacity>
       );
     });
-  }, [close, state.buttons]);
+  }, [close, state.buttons, useRowButtons]);
 
   return (
     <Modal
@@ -82,13 +84,13 @@ export const AppAlertHost: React.FC = () => {
       visible={state.visible}
       onRequestClose={close}
       statusBarTranslucent
+      presentationStyle="overFullScreen"
     >
       <View style={styles.overlay}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={close} />
         <View style={[styles.card, { marginTop: insets.top + 48, marginBottom: Math.max(insets.bottom, 24) }]}>
           <Text style={styles.title}>{state.title}</Text>
           {state.message ? <Text style={styles.message}>{state.message}</Text> : null}
-          <View style={styles.buttons}>{modalButtons}</View>
+          <View style={[styles.buttons, useRowButtons && styles.buttonsRow]}>{modalButtons}</View>
         </View>
       </View>
     </Modal>
@@ -121,6 +123,13 @@ const styles = StyleSheet.create({
   },
   buttons: {
     marginTop: Spacing.LG,
+  },
+  buttonsRow: {
+    flexDirection: 'row',
+    gap: Spacing.SM,
+  },
+  buttonRowItem: {
+    flex: 1,
   },
   button: {
     minHeight: 48,

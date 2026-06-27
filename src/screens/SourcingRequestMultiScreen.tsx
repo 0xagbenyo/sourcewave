@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,15 +7,15 @@ import {
   ScrollView,
   ActivityIndicator,
   TextInput,
-  Alert,
   Image,
   Platform,
   Keyboard,
   KeyboardAvoidingView,
 } from 'react-native';
+import { appAlert as Alert } from '../services/appAlert';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
@@ -29,19 +29,53 @@ import {
   resolveItemGroupIdsForSourcingCategory,
 } from '../utils/itemGroup';
 import { Category } from '../types';
+import type { RootStackParamList } from '../types';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { withOtherItemOption, SourcingItemOption, resolveSubcategorySourcingItem, prependSourcingItemOption } from '../utils/sourcingItems';
 import { buildSourcingSalesOrderLines } from '../utils/sourcingSubmit';
+import {
+  resolveRavenChannelForSupplierShare,
+  shareSalesOrderInRavenChat,
+} from '../utils/shareSalesOrderInChat';
+import { userFacingError } from '../utils/userFacingError';
+
+type SourcingRoute = RouteProp<RootStackParamList, 'SourcingRequest'>;
 
 const hairline = StyleSheet.hairlineWidth;
 
 type DropdownItem = SourcingItemOption;
+
+function resolveCanonicalItemGroupId(raw: string, allGroups: any[]): string {
+  const q = raw.trim();
+  if (!q) return '';
+  const qLower = q.toLowerCase();
+  const match = allGroups.find((g: any) => {
+    const name = String(g?.name || '').trim();
+    const label = String(g?.item_group_name || '').trim();
+    return (
+      name === q ||
+      label === q ||
+      name.toLowerCase() === qLower ||
+      label.toLowerCase() === qLower
+    );
+  });
+  return match ? String(match.name || '').trim() : q;
+}
+
+function itemGroupLabelForId(groupId: string, allGroups: any[]): string {
+  const id = groupId.trim();
+  if (!id) return '';
+  const match = allGroups.find((g: any) => String(g?.name || '').trim() === id);
+  return String(match?.item_group_name || match?.name || id).trim();
+}
+
 type RequestForm = {
   id: string;
   expanded: boolean;
   selectedCategoryId: string;
   selectedCategoryName: string;
   selectedProductId: string;
+  itemFreeText: string;
   itemDescription: string;
   referenceImageUri: string | null;
   quantity: string;
@@ -55,6 +89,7 @@ const newForm = (expanded: boolean): RequestForm => ({
   selectedCategoryId: '',
   selectedCategoryName: '',
   selectedProductId: '',
+  itemFreeText: '',
   itemDescription: '',
   referenceImageUri: null,
   quantity: '1',
@@ -64,11 +99,23 @@ const newForm = (expanded: boolean): RequestForm => ({
 
 export const SourcingRequestMultiScreen: React.FC = () => {
   const navigation = useNavigation();
-  const route = useRoute<any>();
+  const route = useRoute<SourcingRoute>();
   const { t } = useTranslation();
   const { user } = useUserSession();
   const insets = useSafeAreaInsets();
   const [keyboardPad, setKeyboardPad] = useState(0);
+
+  const paramChannelId = (route.params?.ravenChannelId || '').trim();
+  const paramPeerUserId = (route.params?.peerUserId || '').trim();
+  const supplierLabel = (route.params?.supplierLabel || '').trim();
+  const paramSupplierDocName = (route.params?.supplierDocName || '').trim();
+  const paramSupplierGroupLabel = String(
+    route.params?.workspaceName || route.params?.supplierGroup || ''
+  ).trim();
+  const [supplierGroupName, setSupplierGroupName] = useState(paramSupplierGroupLabel);
+  const [loadingSupplierGroup, setLoadingSupplierGroup] = useState(false);
+  const supplierSourcingMode = paramSupplierDocName.length > 0;
+  const lockedRecipient = !!(paramChannelId || paramPeerUserId);
 
   const [allGroups, setAllGroups] = useState<any[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(false);
@@ -76,6 +123,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
   const [forms, setForms] = useState<RequestForm[]>([newForm(true)]);
   const [productsByFormId, setProductsByFormId] = useState<Record<string, DropdownItem[]>>({});
   const [didAutoPrefill, setDidAutoPrefill] = useState(false);
+  const supplierItemsFetchGenRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     const fetchGroups = async () => {
@@ -122,6 +170,16 @@ export const SourcingRequestMultiScreen: React.FC = () => {
     () => buildSourcingCategoryOptions(allGroups),
     [allGroups]
   );
+
+  /** Selected supplier group → locked item category; id maps to Item Group for queries. */
+  const supplierLockedCategory = useMemo(() => {
+    if (!supplierSourcingMode) return null;
+    const rawName = supplierGroupName.trim();
+    if (!rawName) return null;
+    const id = resolveCanonicalItemGroupId(rawName, allGroups) || rawName;
+    const name = itemGroupLabelForId(id, allGroups) || rawName;
+    return { id, name };
+  }, [supplierSourcingMode, supplierGroupName, allGroups]);
 
   const updateForm = (formId: string, updates: Partial<RequestForm>) => {
     setForms((prev) => prev.map((f) => (f.id === formId ? { ...f, ...updates } : f)));
@@ -171,10 +229,117 @@ export const SourcingRequestMultiScreen: React.FC = () => {
     }
   };
 
+  const fetchSupplierItemsForForm = async (formId: string, categoryId: string) => {
+    const canonicalId = resolveCanonicalItemGroupId(categoryId, allGroups) || categoryId.trim();
+    if (!canonicalId) {
+      setProductsByFormId((prev) => ({ ...prev, [formId]: [] }));
+      return;
+    }
+
+    const groupIds = resolveItemGroupIdsForSourcingCategory(canonicalId, categoryTree);
+    const allowedGroupIds = new Set(groupIds.map((g) => g.toLowerCase()));
+
+    const gen = (supplierItemsFetchGenRef.current[formId] || 0) + 1;
+    supplierItemsFetchGenRef.current[formId] = gen;
+
+    try {
+      updateForm(formId, { loadingProducts: true, selectedProductId: '' });
+      setProductsByFormId((prev) => ({ ...prev, [formId]: [] }));
+
+      const client = getERPNextClient();
+      let rows = await client.searchItemsForQuotation({
+        supplier: paramSupplierDocName,
+        itemGroups: groupIds.length > 0 ? groupIds : undefined,
+        q: '',
+        limit: 200,
+      });
+
+      if (supplierItemsFetchGenRef.current[formId] !== gen) return;
+
+      const filtered = rows.filter((row) => {
+        const ig = resolveCanonicalItemGroupId(String(row.item_group || ''), allGroups).toLowerCase();
+        return allowedGroupIds.has(ig);
+      });
+
+      const dropdownItems: DropdownItem[] = filtered.map((row) => {
+        const code = String(row.item_code || row.name || '').trim();
+        return {
+          id: code,
+          name: String(row.item_name || '').trim() || code,
+          itemCode: code,
+        };
+      });
+      setProductsByFormId((prev) => ({ ...prev, [formId]: dropdownItems }));
+    } catch (error) {
+      if (supplierItemsFetchGenRef.current[formId] !== gen) return;
+      console.error('Error fetching supplier items for form:', error);
+      setProductsByFormId((prev) => ({ ...prev, [formId]: [] }));
+    } finally {
+      if (supplierItemsFetchGenRef.current[formId] === gen) {
+        updateForm(formId, { loadingProducts: false });
+      }
+    }
+  };
+
   const selectedProductFor = (form: RequestForm) =>
     (productsByFormId[form.id] || []).find((p) => p.id === form.selectedProductId);
 
   useEffect(() => {
+    if (paramSupplierGroupLabel) {
+      setSupplierGroupName(paramSupplierGroupLabel);
+    }
+  }, [paramSupplierGroupLabel]);
+
+  useEffect(() => {
+    if (!supplierSourcingMode || !paramSupplierDocName || supplierGroupName) return;
+    let cancelled = false;
+
+    const loadSupplierGroup = async () => {
+      try {
+        setLoadingSupplierGroup(true);
+        const sup = await getERPNextClient().getSupplier(paramSupplierDocName);
+        if (cancelled) return;
+        setSupplierGroupName(String(sup?.supplier_group || '').trim());
+      } catch (error) {
+        console.error('Error loading supplier group:', error);
+      } finally {
+        if (!cancelled) setLoadingSupplierGroup(false);
+      }
+    };
+
+    void loadSupplierGroup();
+    return () => {
+      cancelled = true;
+    };
+  }, [supplierSourcingMode, paramSupplierDocName, supplierGroupName]);
+
+  useEffect(() => {
+    if (!supplierSourcingMode || didAutoPrefill || loadingGroups || loadingSupplierGroup) return;
+    if (!forms[0]) return;
+    if (!supplierLockedCategory) {
+      setDidAutoPrefill(true);
+      return;
+    }
+
+    const { id, name } = supplierLockedCategory;
+    updateForm(forms[0].id, {
+      selectedCategoryId: id,
+      selectedCategoryName: name,
+      selectedProductId: '',
+    });
+    void fetchSupplierItemsForForm(forms[0].id, id);
+    setDidAutoPrefill(true);
+  }, [
+    supplierSourcingMode,
+    didAutoPrefill,
+    loadingGroups,
+    loadingSupplierGroup,
+    supplierLockedCategory,
+    forms,
+  ]);
+
+  useEffect(() => {
+    if (supplierSourcingMode) return;
     if (didAutoPrefill) return;
     if (loadingGroups) return;
     if (!allGroups || allGroups.length === 0) return;
@@ -261,7 +426,21 @@ export const SourcingRequestMultiScreen: React.FC = () => {
   }, [didAutoPrefill, loadingGroups, allGroups, forms, route?.params]);
 
   const addAnotherItem = () => {
-    setForms((prev) => [...prev.map((f) => ({ ...f, expanded: false })), newForm(true)]);
+    const nextForm = newForm(true);
+    if (supplierSourcingMode && supplierLockedCategory) {
+      const { id, name } = supplierLockedCategory;
+      setForms((prev) => [
+        ...prev.map((f) => ({ ...f, expanded: false })),
+        {
+          ...nextForm,
+          selectedCategoryId: id,
+          selectedCategoryName: name,
+        },
+      ]);
+      void fetchSupplierItemsForForm(nextForm.id, id);
+      return;
+    }
+    setForms((prev) => [...prev.map((f) => ({ ...f, expanded: false })), nextForm]);
   };
 
   const pickImageFor = async (formId: string) => {
@@ -394,9 +573,37 @@ export const SourcingRequestMultiScreen: React.FC = () => {
         }
       }
 
-      Alert.alert('Success', 'Order request sent successfully', [
-        { text: 'OK', onPress: () => navigation.goBack() },
-      ]);
+      const orderName = createdOrder.name;
+
+      if (lockedRecipient) {
+        try {
+          const chId = await resolveRavenChannelForSupplierShare({
+            sessionEmail: user?.email ?? null,
+            ravenChannelId: paramChannelId,
+            peerUserId: paramPeerUserId,
+          });
+          await shareSalesOrderInRavenChat(chId, orderName, undefined, {
+            t,
+            navigation: navigation as { navigate: (name: string, params?: object) => void },
+          });
+          Alert.alert(t('salesOrderShare.sharedTitle'), t('salesOrderShare.sharedBody'), [
+            { text: t('contactUs.ok'), onPress: () => navigation.goBack() },
+          ]);
+        } catch (shareErr: unknown) {
+          Alert.alert(
+            t('sourcing.submittedTitle'),
+            `${t('sourcing.submittedBody', { name: orderName })}\n\n${userFacingError(shareErr, t('salesOrderShare.shareFailed'))}`,
+            [{ text: t('contactUs.ok'), onPress: () => navigation.goBack() }]
+          );
+        }
+        return;
+      }
+
+      Alert.alert(
+        t('sourcing.submittedTitle'),
+        t('sourcing.submittedBody', { name: orderName }),
+        [{ text: t('contactUs.ok'), onPress: () => navigation.goBack() }]
+      );
     } catch (error: any) {
       console.error('Error creating sourcing request order:', error);
       Alert.alert('Request Failed', error?.message || 'Unable to submit request right now.');
@@ -407,7 +614,17 @@ export const SourcingRequestMultiScreen: React.FC = () => {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
-      <Header showBackButton title={t('sourcing.stackTitle')} />
+      <Header
+        showBackButton
+        title={t('sourcing.stackTitle')}
+        subtitle={
+          lockedRecipient
+            ? supplierLabel
+              ? t('salesOrderShare.formForSupplier', { name: supplierLabel })
+              : t('salesOrderShare.sendToOpenChat')
+            : undefined
+        }
+      />
       <KeyboardAvoidingView
         style={styles.keyboardAvoid}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -438,7 +655,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
                   <Text style={styles.cardTitle}>{t('sourcing.lineLabel', { n: idx + 1 })}</Text>
                   {!form.expanded && (
                     <Text style={styles.cardSubtitle}>
-                      {product?.name || 'Tap to edit'}
+                      {product?.name || t('sourcing.tapToExpand')}
                     </Text>
                   )}
                 </View>
@@ -451,40 +668,82 @@ export const SourcingRequestMultiScreen: React.FC = () => {
 
               {form.expanded && (
                 <>
-                  <Text style={styles.label}>Item Category *</Text>
-                  <SearchableSelect
-                    options={itemCategoryList}
-                    selectedId={form.selectedCategoryId}
-                    selectedLabel={form.selectedCategoryName}
-                    onSelect={async (category) => {
-                      updateForm(form.id, {
-                        selectedCategoryId: category.id,
-                        selectedCategoryName: category.name,
-                        selectedProductId: '',
-                      });
-                      await fetchItemsForForm(form.id, category.id);
-                    }}
-                    placeholder="Select item category"
-                    searchPlaceholder="Search categories..."
-                    loading={loadingGroups}
-                    emptyText="No item categories available right now."
-                  />
+                  {supplierSourcingMode ? (
+                    <>
+                      <Text style={styles.label}>{t('sourcing.fieldCategory')} *</Text>
+                      {loadingGroups || loadingSupplierGroup ? (
+                        <ActivityIndicator
+                          size="small"
+                          color={Colors.WINE}
+                          style={styles.categoryLoading}
+                        />
+                      ) : supplierLockedCategory ? (
+                        <>
+                          <TextInput
+                            style={[styles.input, styles.inputLocked]}
+                            value={form.selectedCategoryName || supplierLockedCategory.name}
+                            editable={false}
+                          />
+                          <Text style={styles.fieldHint}>{t('sourcing.supplierCategoryHint')}</Text>
+                        </>
+                      ) : (
+                        <Text style={styles.fieldHint}>{t('sourcing.noSupplierGroup')}</Text>
+                      )}
 
-                  <Text style={styles.label}>Item *</Text>
-                  <SearchableSelect
-                    options={formProducts}
-                    selectedId={form.selectedProductId}
-                    selectedLabel={product?.name}
-                    onSelect={(item) => updateForm(form.id, { selectedProductId: item.id })}
-                    placeholder={form.selectedCategoryId ? 'Select item' : 'Select item category first'}
-                    searchPlaceholder="Search items..."
-                    disabled={!form.selectedCategoryId}
-                    loading={form.loadingProducts}
-                    emptyText="No items found in this category."
-                    listMaxHeight={320}
-                  />
+                      <Text style={styles.label}>{t('sourcing.fieldItem')} *</Text>
+                      <SearchableSelect
+                        options={formProducts}
+                        selectedId={form.selectedProductId}
+                        selectedLabel={product?.name}
+                        onSelect={(item) => updateForm(form.id, { selectedProductId: item.id })}
+                        placeholder={
+                          supplierLockedCategory ? t('sourcing.phItem') : t('sourcing.phItemNeedCategory')
+                        }
+                        searchPlaceholder={t('sourcing.searchItem')}
+                        disabled={!supplierLockedCategory}
+                        loading={form.loadingProducts}
+                        emptyText={t('sourcing.noSupplierItems')}
+                        listMaxHeight={320}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <Text style={styles.label}>{t('sourcing.fieldCategory')} *</Text>
+                      <SearchableSelect
+                        options={itemCategoryList}
+                        selectedId={form.selectedCategoryId}
+                        selectedLabel={form.selectedCategoryName}
+                        onSelect={async (category) => {
+                          updateForm(form.id, {
+                            selectedCategoryId: category.id,
+                            selectedCategoryName: category.name,
+                            selectedProductId: '',
+                          });
+                          await fetchItemsForForm(form.id, category.id);
+                        }}
+                        placeholder="Select item category"
+                        searchPlaceholder="Search categories..."
+                        loading={loadingGroups}
+                        emptyText="No item categories available right now."
+                      />
 
-                  <Text style={styles.label}>Item Description *</Text>
+                      <Text style={styles.label}>{t('sourcing.fieldItem')} *</Text>
+                      <SearchableSelect
+                        options={formProducts}
+                        selectedId={form.selectedProductId}
+                        selectedLabel={product?.name}
+                        onSelect={(item) => updateForm(form.id, { selectedProductId: item.id })}
+                        placeholder={form.selectedCategoryId ? 'Select item' : 'Select item category first'}
+                        searchPlaceholder="Search items..."
+                        disabled={!form.selectedCategoryId}
+                        loading={form.loadingProducts}
+                        emptyText="No items found in this category."
+                        listMaxHeight={320}
+                      />
+                    </>
+                  )}
+
+                  <Text style={styles.label}>{t('sourcing.fieldDescription')} *</Text>
                   <TextInput
                     style={[styles.input, styles.textArea]}
                     value={form.itemDescription}
@@ -594,6 +853,19 @@ const styles = StyleSheet.create({
     marginTop: 14,
     paddingHorizontal: 4,
   },
+  fieldHint: {
+    fontSize: 12,
+    color: Colors.TEXT_SECONDARY,
+    lineHeight: 17,
+    marginTop: 6,
+    marginHorizontal: 4,
+    marginBottom: 4,
+  },
+  categoryLoading: {
+    alignSelf: 'flex-start',
+    marginHorizontal: 4,
+    marginVertical: 12,
+  },
   input: {
     marginHorizontal: 4,
     borderWidth: 0,
@@ -605,6 +877,10 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 16,
     color: Colors.BLACK,
+  },
+  inputLocked: {
+    backgroundColor: Colors.OFF_WHITE,
+    color: Colors.TEXT_SECONDARY,
   },
   textArea: { minHeight: 90, paddingTop: 12 },
   imagePickerButton: {

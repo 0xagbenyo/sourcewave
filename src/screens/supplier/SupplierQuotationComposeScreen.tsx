@@ -7,7 +7,6 @@ import {
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Modal,
@@ -15,6 +14,7 @@ import {
   Pressable,
   SectionList,
 } from 'react-native';
+import { appAlert as Alert } from '../../services/appAlert';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -28,6 +28,7 @@ import {
   listRavenChannelsForSessionUser,
   ravenChannelLastActivitySortTimeMs,
   sendRavenChannelDocumentLinkMessage,
+  getRavenDmPeerUserId,
   type RavenChannelRow,
 } from '../../services/ravenNativeApi';
 import { setPendingRavenDocLinkMessageMerge } from '../../utils/ravenDocLinkMessageMergeBridge';
@@ -35,6 +36,7 @@ import { userFacingError } from '../../utils/userFacingError';
 import type { RootStackParamList } from '../../types';
 import { ErpAuthenticatedImage } from '../../components/ErpAuthenticatedImage';
 import { useSupplierComposeLeave } from '../../context/SupplierComposeLeaveContext';
+import { quotationLinesFromSalesOrder } from '../../utils/salesOrderToQuotationLines';
 
 type R = RouteProp<RootStackParamList, 'SupplierQuotationCompose'>;
 
@@ -50,6 +52,8 @@ type QuotationLine = {
   item_image?: string;
   qty: string;
   rate: string;
+  /** Buyer budget from linked Sales Order (hint only). */
+  buyer_budget?: string;
 };
 
 function newLine(): QuotationLine {
@@ -142,6 +146,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
   }, [composeLeave, navigation]);
   const { user } = useUserSession();
   const paramChannelId = (route.params?.ravenChannelId || '').trim();
+  const paramSalesOrderName = (route.params?.salesOrderName || '').trim();
   const { supplierDocId, loading: supplierLinkLoading, error: supplierLinkError } = useSupplierDocumentId();
 
   /** After ERPNext create — user picks a DM and taps Send. */
@@ -156,6 +161,8 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
   const [currency, setCurrency] = useState('GHS');
   const [lines, setLines] = useState<QuotationLine[]>(() => [newLine()]);
   const [saving, setSaving] = useState(false);
+  const [loadingFromOrder, setLoadingFromOrder] = useState(!!paramSalesOrderName);
+  const [orderLoadError, setOrderLoadError] = useState<string | null>(null);
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerLineKey, setPickerLineKey] = useState<string | null>(null);
@@ -186,6 +193,37 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
       setSearchLoading(false);
     }
   }, [supplierDocId]);
+
+  useEffect(() => {
+    if (!paramSalesOrderName) return;
+    let cancelled = false;
+    setLoadingFromOrder(true);
+    setOrderLoadError(null);
+    void (async () => {
+      try {
+        const raw = await getERPNextClient().getSalesOrder(paramSalesOrderName);
+        if (cancelled) return;
+        const mapped = quotationLinesFromSalesOrder(raw);
+        if (mapped.lines.length === 0) {
+          setOrderLoadError('This order has no line items to quote.');
+          setLines([newLine()]);
+        } else {
+          setLines(mapped.lines);
+        }
+        if (mapped.referenceTitle) setReferenceTitle(mapped.referenceTitle);
+        if (mapped.currency) setCurrency(mapped.currency);
+      } catch (e: unknown) {
+        if (!cancelled) {
+          setOrderLoadError(userFacingError(e, 'Could not load this sourcing request.'));
+        }
+      } finally {
+        if (!cancelled) setLoadingFromOrder(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [paramSalesOrderName]);
 
   useEffect(() => {
     if (!pickerOpen) return;
@@ -308,7 +346,10 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
     setLines((prev) => (prev.length <= 1 ? prev : prev.filter((l) => l.key !== key)));
   };
 
-  const updateLine = (key: string, patch: Partial<Pick<QuotationLine, 'qty' | 'rate'>>) => {
+  const updateLine = (
+    key: string,
+    patch: Partial<Pick<QuotationLine, 'qty' | 'rate' | 'item_name'>>
+  ) => {
     setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   };
 
@@ -320,6 +361,44 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
   };
 
   const grandPreview = useMemo(() => lines.reduce((s, ln) => s + lineTotal(ln), 0), [lines]);
+
+  const shareQuotationToChannel = useCallback(
+    async (
+      chId: string,
+      quotation: { name: string; cardTitle: string },
+      channelRows?: RavenChannelRow[]
+    ) => {
+      const trimmed = chId.trim();
+      if (!trimmed) throw new Error('No chat channel to send to.');
+
+      const client = getERPNextClient();
+      const rows = channelRows ?? channels;
+      const shareChannel = rows.find((c) => c.name === trimmed);
+      const peerUserId = shareChannel ? getRavenDmPeerUserId(shareChannel, user?.email) : null;
+      if (peerUserId) {
+        try {
+          await client.linkSupplierQuotationToCustomerForShare(quotation.name, peerUserId);
+        } catch (linkErr) {
+          console.warn('[SupplierQuotation] custom_customer link failed:', linkErr);
+        }
+      }
+
+      let sentRaw = await sendRavenChannelDocumentLinkMessage(trimmed, {
+        linkDoctype: 'Supplier Quotation',
+        linkDocument: quotation.name,
+        caption: quotation.cardTitle,
+      });
+      if (sentRaw != null && typeof sentRaw === 'object' && !Array.isArray(sentRaw)) {
+        sentRaw = {
+          ...(sentRaw as Record<string, unknown>),
+          link_doctype: 'Supplier Quotation',
+          link_document: quotation.name,
+        };
+      }
+      setPendingRavenDocLinkMessageMerge(trimmed, sentRaw);
+    },
+    [channels, user?.email]
+  );
 
   const onCreateQuotation = async () => {
     if (supplierLinkLoading) {
@@ -334,25 +413,33 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
       return;
     }
 
-    const payloadLines: Array<{ item_code: string; qty: number; rate: number; uom?: string | null }> = [];
+    const payloadLines: Array<{
+      item_code: string;
+      qty: number;
+      rate: number;
+      uom?: string | null;
+      description?: string | null;
+    }> = [];
     for (const ln of lines) {
       const code = ln.item_code.trim();
       if (!code) continue;
       const qty = parseFloat(String(ln.qty).replace(/,/g, ''));
       const rate = parseFloat(String(ln.rate).replace(/,/g, ''));
       if (!Number.isFinite(qty) || qty <= 0) {
-        Alert.alert('Quotation', `Enter a valid quantity for item ${code}.`);
+        Alert.alert('Quotation', `Enter a valid quantity for ${ln.item_name.trim() || code}.`);
         return;
       }
       if (!Number.isFinite(rate) || rate < 0) {
-        Alert.alert('Quotation', `Enter a valid rate for item ${code}.`);
+        Alert.alert('Quotation', `Enter a valid quote rate for ${ln.item_name.trim() || code}.`);
         return;
       }
+      const description = ln.item_name.trim() || undefined;
       payloadLines.push({
         item_code: code,
         qty,
         rate,
         uom: ln.stock_uom?.trim() || null,
+        description: description || null,
       });
     }
 
@@ -368,6 +455,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
         supplier: supplierDocId,
         currency: currency.trim() || 'GHS',
         referenceTitle: referenceTitle.trim() || undefined,
+        salesOrderName: paramSalesOrderName || undefined,
         lines: payloadLines,
       });
 
@@ -376,7 +464,22 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
         (lines.find((l) => l.item_name.trim())?.item_name ?? '').trim() ||
         `${payloadLines.length} item(s)`;
 
-      setCreatedQuotation({ name: created.name, cardTitle });
+      const quotation = { name: created.name, cardTitle };
+      const chatChannelId = paramChannelId.trim();
+
+      if (chatChannelId) {
+        const channelRows =
+          channels.find((c) => c.name === chatChannelId) != null
+            ? channels
+            : await listRavenChannelsForSessionUser(user?.email ?? null);
+        await shareQuotationToChannel(chatChannelId, quotation, channelRows);
+        Alert.alert('Shared', 'Your quotation was sent in this conversation.', [
+          { text: 'OK', onPress: () => exitCompose() },
+        ]);
+        return;
+      }
+
+      setCreatedQuotation(quotation);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Could not save quotation.';
       Alert.alert('Quotation', msg);
@@ -393,19 +496,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
     }
     setSharing(true);
     try {
-      let sentRaw = await sendRavenChannelDocumentLinkMessage(chId, {
-        linkDoctype: 'Supplier Quotation',
-        linkDocument: createdQuotation.name,
-        caption: createdQuotation.cardTitle,
-      });
-      if (sentRaw != null && typeof sentRaw === 'object' && !Array.isArray(sentRaw)) {
-        sentRaw = {
-          ...(sentRaw as Record<string, unknown>),
-          link_doctype: 'Supplier Quotation',
-          link_document: createdQuotation.name,
-        };
-      }
-      setPendingRavenDocLinkMessageMerge(chId, sentRaw);
+      await shareQuotationToChannel(chId, createdQuotation);
       Alert.alert('Shared', 'Your quotation link was sent in that conversation.', [
         { text: 'OK', onPress: () => exitCompose() },
       ]);
@@ -601,7 +692,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
               <Ionicons name="arrow-back" size={24} color={Colors.BLACK} />
             </TouchableOpacity>
             <Text style={styles.topTitle} numberOfLines={1}>
-              New quotation
+              {paramSalesOrderName ? 'Quote sourcing request' : 'New quotation'}
             </Text>
             <View style={{ width: 32 }} />
           </View>
@@ -621,6 +712,25 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
             <View style={[styles.linkBanner, styles.linkBannerErr]}>
               <Ionicons name="warning-outline" size={20} color={Colors.WINE} style={{ marginRight: 8 }} />
               <Text style={styles.linkBannerText}>{supplierLinkError}</Text>
+            </View>
+          ) : null}
+
+          {loadingFromOrder ? (
+            <View style={styles.linkBanner}>
+              <ActivityIndicator color="#636366" size="small" />
+              <Text style={styles.linkBannerText}>Loading sourcing request…</Text>
+            </View>
+          ) : orderLoadError ? (
+            <View style={[styles.linkBanner, styles.linkBannerErr]}>
+              <Ionicons name="warning-outline" size={20} color={Colors.WINE} style={{ marginRight: 8 }} />
+              <Text style={styles.linkBannerText}>{orderLoadError}</Text>
+            </View>
+          ) : paramSalesOrderName ? (
+            <View style={styles.linkBanner}>
+              <Ionicons name="cart-outline" size={18} color="#636366" style={{ marginRight: 8 }} />
+              <Text style={styles.linkBannerText}>
+                From order {paramSalesOrderName}. Edit lines, then save and send your quotation.
+              </Text>
             </View>
           ) : null}
 
@@ -713,6 +823,17 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
                   <Ionicons name="chevron-forward" size={16} color="#C7C7CC" />
                 </TouchableOpacity>
 
+                <View style={styles.nameFieldWrap}>
+                  <Text style={styles.qtyRateLabel}>Item name</Text>
+                  <TextInput
+                    style={styles.inputBox}
+                    value={ln.item_name}
+                    onChangeText={(t) => updateLine(ln.key, { item_name: t })}
+                    placeholder="Description shown on the quotation"
+                    placeholderTextColor="#AEAEB2"
+                  />
+                </View>
+
                 <View style={styles.qtyRateRow}>
                   <View style={styles.qtyRateCell}>
                     <Text style={styles.qtyRateLabel}>Quantity</Text>
@@ -727,7 +848,10 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
                   </View>
                   <View style={styles.qtyRateGap} />
                   <View style={styles.qtyRateCell}>
-                    <Text style={styles.qtyRateLabel}>Rate ({currency.trim() || '—'})</Text>
+                    <Text style={styles.qtyRateLabel}>Quote rate ({currency.trim() || '—'})</Text>
+                    {ln.buyer_budget ? (
+                      <Text style={styles.budgetHint}>Buyer budget: {ln.buyer_budget}</Text>
+                    ) : null}
                     <TextInput
                       style={styles.qtyRateInput}
                       value={ln.rate}
@@ -763,7 +887,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
           <TouchableOpacity
             style={[styles.saveBtn, saving && styles.saveBtnOff]}
             onPress={() => void onCreateQuotation()}
-            disabled={saving || supplierLinkLoading || !supplierDocId}
+            disabled={saving || supplierLinkLoading || !supplierDocId || loadingFromOrder}
           >
             {saving ? (
               <ActivityIndicator color={Colors.WHITE} />
@@ -962,6 +1086,8 @@ const styles = StyleSheet.create({
   itemRowCode: { fontSize: 13, fontWeight: '600', color: '#1C1C1E' },
   itemRowName: { fontSize: 14, fontWeight: '400', color: '#3A3A3C', marginTop: 3, lineHeight: 19 },
   itemRowPlaceholder: { fontSize: 14, color: '#8E8E93', marginTop: 3 },
+  nameFieldWrap: { marginBottom: 10 },
+  budgetHint: { fontWeight: '400', color: '#8E8E93', fontSize: 11, marginBottom: 4 },
   qtyRateRow: { flexDirection: 'row', alignItems: 'stretch' },
   qtyRateCell: { flex: 1 },
   qtyRateGap: { width: 12 },

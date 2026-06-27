@@ -1,3 +1,4 @@
+import { appAlert as Alert } from '../services/appAlert';
 /**
  * Raven-style attachment rendering: tap image to fullscreen, PDF in WebView with auth headers,
  * video modal with native controls, inline audio, file tap downloads (share sheet) like a real attachment.
@@ -9,7 +10,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Modal,
   Platform,
   Pressable,
@@ -933,23 +933,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   messageImageMessenger: {
-    borderRadius: 8,
+    borderRadius: 6,
   },
   videoInlineWrapMessenger: {
-    borderRadius: 8,
+    borderRadius: 6,
   },
   messengerFileCard: {
     flexDirection: 'row',
     alignItems: 'center',
     maxWidth: '100%',
     minWidth: 200,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    marginBottom: 4,
-    borderRadius: 8,
-    backgroundColor: RavenLight.messengerFileBg,
+    paddingVertical: 8,
+    paddingHorizontal: 9,
+    marginBottom: 2,
+    borderRadius: 6,
+    backgroundColor: RavenLight.panel,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: RavenLight.messengerFileBorder,
+    borderColor: RavenLight.border,
   },
   messengerFileCardMine: {
     alignSelf: 'flex-end',

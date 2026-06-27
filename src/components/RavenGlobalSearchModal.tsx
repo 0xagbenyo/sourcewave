@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Modal,
   Platform,
@@ -12,6 +11,7 @@ import {
   View,
   KeyboardAvoidingView,
 } from 'react-native';
+import { appAlert as Alert } from '../services/appAlert';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -23,6 +23,7 @@ import {
   fetchRavenUserProfilesByIds,
   fetchRavenWorkspaces,
   getRavenSearchResults,
+  ravenSearchResultRowChannelId,
   type RavenSearchFilterType,
   type RavenSearchResultRow,
   type RavenWorkspaceRow,
@@ -45,7 +46,7 @@ export type RavenGlobalSearchModalProps = {
   inChannelId?: string | null;
   inChannelLabel?: string | null;
   /** After persisting last-chat; parent opens workspace/channel or navigates. */
-  onChannelPicked: (workspaceId: string, channelId: string) => void;
+  onChannelPicked: (workspaceId: string, channelId: string, messageId?: string) => void;
   /** Modal title (e.g. "Search" in chat, "Team search" from main header). */
   title?: string;
   userDisplayProfiles?: RavenUserDisplayProfiles;
@@ -55,6 +56,7 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
   visible,
   onClose,
   inChannelId,
+  inChannelLabel,
   onChannelPicked,
   title = 'Search',
   userDisplayProfiles,
@@ -88,6 +90,7 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
   }, [visible, inChannelId, searchTab]);
 
   const scopedToChannel = Boolean(inChannelId?.trim());
+  const scopedChannelLabel = (inChannelLabel || '').trim();
 
   useEffect(() => {
     if (!visible || scopedToChannel) return;
@@ -221,12 +224,14 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
   );
 
   const resolveAndPick = useCallback(
-    async (workspaceId: string, channelId: string) => {
+    async (workspaceId: string, channelId: string, messageId?: string) => {
       const ws = workspaceId.trim();
       const ch = channelId.trim();
-      if (!ws || !ch) return;
-      void setRavenLastChat(user?.email, { workspace: ws, channelId: ch });
-      onChannelPicked(ws, ch);
+      if (!ch) return;
+      if (ws) {
+        void setRavenLastChat(user?.email, { workspace: ws, channelId: ch });
+      }
+      onChannelPicked(ws, ch, messageId?.trim() || undefined);
       onClose();
     },
     [user?.email, onClose, onChannelPicked]
@@ -234,6 +239,8 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
 
   const openSearchRowFromHit = useCallback(
     async (row: RavenSearchResultRow, tab: RavenSearchFilterType) => {
+      const inch = inChannelId != null ? String(inChannelId).trim() : '';
+
       if (tab === 'Channel') {
         const chId = String(row.name || '').trim();
         if (!chId) return;
@@ -245,12 +252,25 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
         await resolveAndPick(ws, chId);
         return;
       }
-      const chId = String(row.channel_id || '').trim();
-      let ws = String(row.workspace || '').trim();
+
+      const messageId = String(row.name || '').trim();
+      const chId = ravenSearchResultRowChannelId(row) || inch;
+      if (!messageId) {
+        Alert.alert('Search', 'This result has no message id.');
+        return;
+      }
       if (!chId) {
         Alert.alert('Search', 'This result has no channel.');
         return;
       }
+
+      /** In-channel search (Raven `inFilter`): stay in this thread and jump to the message. */
+      if (inch && chId === inch) {
+        await resolveAndPick('', inch, messageId);
+        return;
+      }
+
+      let ws = String(row.workspace || '').trim();
       if (!ws) {
         const resolved = await fetchRavenChannelWorkspaceId(chId);
         ws = resolved || '';
@@ -259,9 +279,9 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
         Alert.alert('Search', 'Could not resolve supplier group for this result.');
         return;
       }
-      await resolveAndPick(ws, chId);
+      await resolveAndPick(ws, chId, messageId);
     },
-    [resolveAndPick]
+    [resolveAndPick, inChannelId]
   );
 
   const renderSearchItem = useCallback(
@@ -292,8 +312,8 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
         );
       }
       const wsId = String(item.workspace || '').trim();
-      const chId = String(item.channel_id || '').trim();
-      const wsLab = wsId ? workspaceLabelForId(wsId) : '';
+      const chId = ravenSearchResultRowChannelId(item);
+      const wsLab = !scopedToChannel && wsId ? workspaceLabelForId(wsId) : '';
       if (tab === 'File') {
         const filePath = String(item.file || '').trim();
         const base = filePath.split('/').filter(Boolean).pop() || filePath || 'File';
@@ -310,7 +330,7 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
                 {base}
               </Text>
               <Text style={styles.searchRowMeta} numberOfLines={1}>
-                {[mt, wsLab, chId ? `${chId.slice(0, 10)}…` : ''].filter(Boolean).join(' · ')}
+                {[mt, wsLab].filter(Boolean).join(' · ')}
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={RavenLight.textMuted} />
@@ -321,6 +341,9 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
       const preview = replySnippet(plainTextFromMaybeHtml(raw));
       const owner = String(item.owner || '').trim();
       const time = formatMessageHeaderTime(String(item.creation || '')) || '';
+      const metaParts = scopedToChannel
+        ? [owner ? resolveRavenUserDisplayName(owner, mergedUserProfiles) : '', time]
+        : [owner ? resolveRavenUserDisplayName(owner, mergedUserProfiles) : '', time, wsLab];
       return (
         <TouchableOpacity
           style={styles.searchRow}
@@ -333,14 +356,14 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
               {preview}
             </Text>
             <Text style={styles.searchRowMeta} numberOfLines={1}>
-              {[owner ? resolveRavenUserDisplayName(owner, mergedUserProfiles) : '', time, wsLab].filter(Boolean).join(' · ')}
+              {metaParts.filter(Boolean).join(' · ')}
             </Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color={RavenLight.textMuted} />
         </TouchableOpacity>
       );
     },
-    [searchTab, openSearchRowFromHit, workspaceLabelForId, mergedUserProfiles]
+    [searchTab, openSearchRowFromHit, workspaceLabelForId, mergedUserProfiles, scopedToChannel]
   );
 
   return (
@@ -371,6 +394,13 @@ export const RavenGlobalSearchModal: React.FC<RavenGlobalSearchModalProps> = ({
           autoCapitalize="none"
           clearButtonMode="while-editing"
         />
+        {scopedToChannel ? (
+          <Text style={styles.scopedHint} numberOfLines={2}>
+            {t('ravenSearch.scopedHint', {
+              channel: scopedChannelLabel || t('ravenSearch.placeholderInChannel'),
+            })}
+          </Text>
+        ) : null}
         <View style={styles.searchTabsRow}>
           {searchTabsVisible.map(({ key, label }) => {
             const on = searchTab === key;
@@ -436,6 +466,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: RavenLight.text,
     backgroundColor: RavenLight.canvas,
+  },
+  scopedHint: {
+    marginHorizontal: Spacing.MD,
+    marginTop: 8,
+    fontSize: 13,
+    lineHeight: 18,
+    color: RavenLight.textMuted,
   },
   searchTabsRow: {
     flexDirection: 'row',

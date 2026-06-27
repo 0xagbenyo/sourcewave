@@ -12,7 +12,6 @@ import {
   Pressable,
   NativeSyntheticEvent,
   NativeScrollEvent,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -26,12 +25,30 @@ import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 import { useFlyers, useOrders } from '../hooks/erpnext';
 import { useUserSession } from '../context/UserContext';
 import { useSubscription } from '../context/SubscriptionContext';
+import { formatGhanaCedis } from '../utils/currency';
+import type { OrderStatus } from '../types';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const width = SCREEN_WIDTH;
 const FLYER_H = Math.min(Math.round(SCREEN_WIDTH * 0.52), 280);
 const HOME_FLYER_CAROUSEL_HEIGHT = FLYER_H;
 const FLYER_AUTO_ADVANCE_MS = 5500;
+
+function orderStatusHomeColor(status: string): string {
+  const s = (status || 'pending') as OrderStatus;
+  if (s === 'cancelled' || s === 'returned') return '#B91C1C';
+  if (s === 'completed' || s === 'delivered') return '#15803D';
+  if (s === 'pending') return '#C2410C';
+  return '#1D4ED8';
+}
+
+function orderStatusHomeBg(status: string): string {
+  const s = (status || 'pending') as OrderStatus;
+  if (s === 'cancelled' || s === 'returned') return '#FEE2E2';
+  if (s === 'completed' || s === 'delivered') return '#DCFCE7';
+  if (s === 'pending') return '#FFEDD5';
+  return '#DBEAFE';
+}
 
 export const HomeScreen: React.FC = () => {
   const navigation = useNavigation();
@@ -159,40 +176,60 @@ export const HomeScreen: React.FC = () => {
     (navigation as any).navigate('Profile');
   };
 
-  const renderQuickActions = () => (
-    <View style={homeLayout.shortcutRow}>
-      <TouchableOpacity
-        style={[homeLayout.shortcutCell, homeLayout.shortcutCellBorder]}
-        activeOpacity={0.75}
-        onPress={goMessages}
-        accessibilityRole="button"
-        accessibilityLabel={t('home.quickMessages')}
-      >
-        <Ionicons name="chatbubbles-outline" size={22} color="#374151" />
-        <Text style={homeLayout.shortcutLabel}>{t('home.quickMessages')}</Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={[homeLayout.shortcutCell, homeLayout.shortcutCellBorder]}
-        activeOpacity={0.75}
-        onPress={goOrders}
-        accessibilityRole="button"
-        accessibilityLabel={t('home.quickOrders')}
-      >
-        <Ionicons name="receipt-outline" size={22} color="#374151" />
-        <Text style={homeLayout.shortcutLabel}>{t('home.quickOrders')}</Text>
-      </TouchableOpacity>
-      <TouchableOpacity
-        style={homeLayout.shortcutCell}
-        activeOpacity={0.75}
-        onPress={goAccount}
-        accessibilityRole="button"
-        accessibilityLabel={t('home.quickAccount')}
-      >
-        <Ionicons name="person-circle-outline" size={22} color="#374151" />
-        <Text style={homeLayout.shortcutLabel}>{t('home.quickAccount')}</Text>
-      </TouchableOpacity>
+  const renderWelcome = () => (
+    <View style={homeLayout.welcomeBlock}>
+      <Text style={homeLayout.welcomeTitle}>{t('home.welcomeTitle')}</Text>
+      <Text style={homeLayout.welcomeLead}>{t('home.heroLead')}</Text>
     </View>
   );
+
+  const renderQuickActions = () => {
+    const actions = [
+      {
+        key: 'messages',
+        label: t('home.quickMessages'),
+        icon: 'chatbubbles-outline' as const,
+        tint: '#7C3AED',
+        bg: '#F3E8FF',
+        onPress: goMessages,
+      },
+      {
+        key: 'orders',
+        label: t('home.quickOrders'),
+        icon: 'receipt-outline' as const,
+        tint: '#B45309',
+        bg: '#FEF3C7',
+        onPress: goOrders,
+      },
+      {
+        key: 'account',
+        label: t('home.quickAccount'),
+        icon: 'person-circle-outline' as const,
+        tint: '#0369A1',
+        bg: '#E0F2FE',
+        onPress: goAccount,
+      },
+    ];
+    return (
+      <View style={homeLayout.quickGrid}>
+        {actions.map((action) => (
+          <TouchableOpacity
+            key={action.key}
+            style={homeLayout.quickCard}
+            activeOpacity={0.8}
+            onPress={action.onPress}
+            accessibilityRole="button"
+            accessibilityLabel={action.label}
+          >
+            <View style={[homeLayout.quickIconWrap, { backgroundColor: action.bg }]}>
+              <Ionicons name={action.icon} size={22} color={action.tint} />
+            </View>
+            <Text style={homeLayout.quickLabel}>{action.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    );
+  };
 
   const renderFlyerCarousel = () => {
     if (flyersLoading) {
@@ -287,24 +324,51 @@ export const HomeScreen: React.FC = () => {
             <Text style={homeLayout.seeAll}>{t('home.seeAll')}</Text>
           </TouchableOpacity>
         </View>
-        {recentOrders.map((o, idx) => (
-          <TouchableOpacity
-            key={o.id}
-            style={[homeLayout.orderRow, idx === recentOrders.length - 1 && homeLayout.orderRowLast]}
-            onPress={() => (navigation as any).navigate('OrderDetails', { orderId: o.id })}
-            activeOpacity={0.7}
-          >
-            <View style={homeLayout.orderRowText}>
-              <Text style={homeLayout.orderId} numberOfLines={1}>
-                {o.orderNumber || o.id}
-              </Text>
-              <Text style={homeLayout.orderMeta} numberOfLines={1}>
-                {new Date(o.createdAt).toLocaleDateString()} · {o.status || '—'}
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
-          </TouchableOpacity>
-        ))}
+        {recentOrders.map((o, idx) => {
+          const statusKey = (o.status || 'pending') as OrderStatus;
+          const statusLabel = t(`orderDetails.status.${statusKey}`, {
+            defaultValue: statusKey,
+          });
+          return (
+            <TouchableOpacity
+              key={o.id}
+              style={[homeLayout.orderRow, idx === recentOrders.length - 1 && homeLayout.orderRowLast]}
+              onPress={() => (navigation as any).navigate('OrderDetails', { orderId: o.id })}
+              activeOpacity={0.7}
+            >
+              <View style={homeLayout.orderRowMain}>
+                <View style={homeLayout.orderRowTop}>
+                  <Text style={homeLayout.orderId} numberOfLines={1}>
+                    {o.orderNumber || o.id}
+                  </Text>
+                  <View
+                    style={[
+                      homeLayout.orderStatusPill,
+                      { backgroundColor: orderStatusHomeBg(String(o.status)) },
+                    ]}
+                  >
+                    <Text
+                      style={[homeLayout.orderStatusText, { color: orderStatusHomeColor(String(o.status)) }]}
+                      numberOfLines={1}
+                    >
+                      {statusLabel}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={homeLayout.orderMeta} numberOfLines={1}>
+                  {new Date(o.createdAt).toLocaleDateString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                  })}
+                  {' · '}
+                  {formatGhanaCedis(o.total)}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+            </TouchableOpacity>
+          );
+        })}
       </View>
     );
   };
@@ -353,6 +417,7 @@ export const HomeScreen: React.FC = () => {
       >
         {renderFlyerCarousel()}
         <View style={homeLayout.belowFlyerPanel}>
+          {renderWelcome()}
           {renderQuickActions()}
           {renderRecentOrders()}
         </View>
@@ -428,25 +493,50 @@ const homeLayout = StyleSheet.create({
     backgroundColor: Colors.WHITE,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Colors.BORDER,
+    paddingBottom: 4,
   },
-  shortcutRow: {
+  welcomeBlock: {
+    paddingHorizontal: 16,
+    paddingTop: 18,
+    paddingBottom: 4,
+  },
+  welcomeTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#111827',
+    letterSpacing: -0.4,
+  },
+  welcomeLead: {
+    marginTop: 6,
+    fontSize: 15,
+    lineHeight: 22,
+    color: '#6B7280',
+  },
+  quickGrid: {
     flexDirection: 'row',
-    alignItems: 'stretch',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 8,
   },
-  shortcutCell: {
+  quickCard: {
     flex: 1,
-    flexDirection: 'column',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 6,
+    borderRadius: 12,
+    backgroundColor: '#F9FAFB',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.BORDER,
+  },
+  quickIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 4,
-    minHeight: 76,
   },
-  shortcutCellBorder: {
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: Colors.BORDER,
-  },
-  shortcutLabel: {
+  quickLabel: {
     marginTop: 8,
     fontSize: 12,
     fontWeight: '600',
@@ -457,6 +547,7 @@ const homeLayout = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: Colors.BORDER,
     paddingBottom: 2,
+    marginTop: 8,
   },
   ordersBlockHeader: {
     flexDirection: 'row',
@@ -499,11 +590,29 @@ const homeLayout = StyleSheet.create({
   orderRowLast: {
     borderBottomWidth: 0,
   },
-  orderRowText: {
+  orderRowMain: {
     flex: 1,
     marginRight: 8,
+    minWidth: 0,
+  },
+  orderRowTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  orderStatusPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    maxWidth: '46%',
+  },
+  orderStatusText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
   orderId: {
+    flex: 1,
+    minWidth: 0,
     fontSize: 16,
     fontWeight: '600',
     color: '#111827',

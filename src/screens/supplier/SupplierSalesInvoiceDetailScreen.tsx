@@ -1,36 +1,42 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
-import { Ionicons } from '@expo/vector-icons';
-import { Colors } from '../../constants/colors';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { getERPNextClient } from '../../services/erpnext';
-import type { SupplierStackParamList } from '../../types';
+import { ErpInvoicePaymentsPanel } from '../../components/ErpInvoicePaymentsPanel';
+import {
+  ErpDocumentPreviewLayout,
+  ErpDocSheet,
+  ErpDocHero,
+  ErpDocSection,
+  ErpDocLineItem,
+  ErpDocItemsList,
+  ErpDocEmptyState,
+  ErpDocTabBar,
+  erpDocStatusAccent,
+  formatErpDocDate,
+  formatErpDocMoney,
+} from '../../components/ErpDocumentPreviewLayout';
 
-type R = RouteProp<SupplierStackParamList, 'SupplierSalesInvoiceDetail'>;
+type InvoiceTab = 'details' | 'payments';
 
-function Field({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.field}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <Text style={styles.fieldValue}>{value}</Text>
-    </View>
-  );
-}
+const INVOICE_TABS = [
+  { id: 'details' as const, label: 'Details' },
+  { id: 'payments' as const, label: 'Payments' },
+];
 
 export const SupplierSalesInvoiceDetailScreen: React.FC = () => {
   const navigation = useNavigation();
-  const route = useRoute<R>();
-  const { name } = route.params;
-  const [doc, setDoc] = useState<any | null>(null);
+  const route = useRoute();
+  const { name } = route.params as { name: string };
+  const [doc, setDoc] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<InvoiceTab>('details');
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const d = await getERPNextClient().getInvoice(name);
-        if (!cancelled) setDoc(d);
+        if (!cancelled) setDoc(d as Record<string, unknown> | null);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -40,77 +46,78 @@ export const SupplierSalesInvoiceDetailScreen: React.FC = () => {
     };
   }, [name]);
 
-  const items: any[] = Array.isArray(doc?.items) ? doc.items : [];
+  const items = Array.isArray(doc?.items) ? (doc!.items as Record<string, unknown>[]) : [];
+  const currency = String(doc?.currency || 'GHS');
+  const status = String(doc?.status || (Number(doc?.docstatus) === 0 ? 'Draft' : 'Submitted'));
+  const statusColor = useMemo(
+    () => erpDocStatusAccent(status, doc?.docstatus != null ? Number(doc.docstatus) : undefined),
+    [status, doc?.docstatus]
+  );
+  const grandTotal = formatErpDocMoney(doc?.grand_total, currency);
+  const outstanding = getERPNextClient().effectiveSalesInvoiceOutstanding(doc);
+  const invoiceName = String(doc?.name || name);
+  const customer = String(doc?.customer_name || doc?.customer || '—');
+
+  const facts = useMemo(() => {
+    const rows: { label: string; value: string }[] = [{ label: 'Customer', value: customer }];
+    if (outstanding > 0.009) {
+      rows.push({ label: 'Outstanding', value: formatErpDocMoney(outstanding, currency) });
+    }
+    return rows;
+  }, [customer, currency, outstanding]);
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={styles.topBar}>
-        <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={12} style={styles.backWrap}>
-          <Ionicons name="arrow-back" size={24} color={Colors.BLACK} />
-        </TouchableOpacity>
-        <Text style={styles.topTitle} numberOfLines={1}>
-          Sales invoice
-        </Text>
-        <View style={{ width: 32 }} />
-      </View>
+    <ErpDocumentPreviewLayout
+      screenTitle="Invoice"
+      printDoctype="Sales Invoice"
+      printDocName={name}
+      loading={loading}
+      errorMessage={!loading && !doc ? 'This invoice could not be found or you may not have access.' : null}
+      onBack={() => navigation.goBack()}
+    >
+      {doc ? (
+        <ErpDocSheet>
+          <ErpDocHero
+            docId={invoiceName}
+            statusLabel={status}
+            statusColor={statusColor}
+            amount={grandTotal}
+            amountLabel="Total"
+            subtitle={doc.posting_date ? `Posted ${formatErpDocDate(doc.posting_date)}` : undefined}
+            facts={facts}
+          />
 
-      {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={Colors.WINE} />
-        </View>
-      ) : !doc ? (
-        <View style={styles.center}>
-          <Text style={styles.muted}>Could not load this document.</Text>
-        </View>
-      ) : (
-        <ScrollView contentContainerStyle={styles.scroll}>
-          <Text style={styles.docName}>{doc.name}</Text>
-          <Field label="Customer" value={String(doc.customer || '—')} />
-          <Field label="Posting date" value={String(doc.posting_date || '—')} />
-          <Field label="Status" value={String(doc.status || '—')} />
-          <Field label="Outstanding" value={`${doc.currency || ''} ${doc.outstanding_amount ?? '—'}`.trim()} />
-          <Field label="Grand total" value={`${doc.currency || ''} ${doc.grand_total ?? '—'}`.trim()} />
+          <ErpDocTabBar tabs={INVOICE_TABS} activeId={tab} onChange={(next) => setTab(next as InvoiceTab)} />
 
-          <Text style={styles.section}>Items</Text>
-          {items.length === 0 ? (
-            <Text style={styles.muted}>No line items.</Text>
+          {tab === 'details' ? (
+            <ErpDocSection title={`Items · ${items.length}`}>
+              {items.length === 0 ? (
+                <ErpDocEmptyState title="No line items" />
+              ) : (
+                <ErpDocItemsList>
+                  {items.map((line, idx) => (
+                    <ErpDocLineItem
+                      key={String(line.name || idx)}
+                      title={String(line.item_name || line.item_code || 'Item')}
+                      qty={line.qty}
+                      rate={line.rate}
+                      amount={line.amount}
+                      currency={currency}
+                    />
+                  ))}
+                </ErpDocItemsList>
+              )}
+            </ErpDocSection>
           ) : (
-            items.map((line: any, idx: number) => (
-              <View key={String(line.name || idx)} style={styles.line}>
-                <Text style={styles.lineMain}>
-                  {String(line.item_code || line.item_name || '—')} × {String(line.qty ?? '—')}
-                </Text>
-                <Text style={styles.lineSub}>{String(line.description || '').slice(0, 120)}</Text>
-              </View>
-            ))
+            <ErpInvoicePaymentsPanel
+              invoiceName={invoiceName}
+              currency={currency}
+              active={tab === 'payments'}
+              variant="supplier"
+            />
           )}
-        </ScrollView>
-      )}
-    </SafeAreaView>
+        </ErpDocSheet>
+      ) : null}
+    </ErpDocumentPreviewLayout>
   );
 };
-
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.BACKGROUND },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.BORDER,
-  },
-  backWrap: { padding: 8 },
-  topTitle: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '800', color: Colors.BLACK },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
-  muted: { color: Colors.TEXT_SECONDARY },
-  scroll: { padding: 16, paddingBottom: 40 },
-  docName: { fontSize: 20, fontWeight: '800', color: Colors.BLACK, marginBottom: 12 },
-  field: { marginBottom: 10 },
-  fieldLabel: { fontSize: 12, color: Colors.TEXT_SECONDARY, marginBottom: 2 },
-  fieldValue: { fontSize: 15, color: Colors.BLACK, fontWeight: '600' },
-  section: { fontSize: 14, fontWeight: '800', marginTop: 16, marginBottom: 8, color: Colors.BLACK },
-  line: { paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: Colors.BORDER },
-  lineMain: { fontSize: 14, fontWeight: '600', color: Colors.BLACK },
-  lineSub: { fontSize: 12, color: Colors.TEXT_SECONDARY, marginTop: 2 },
-});

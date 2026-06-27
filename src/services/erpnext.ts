@@ -955,10 +955,25 @@ class ERPNextClient {
           ravenHeaders.push(userInfoResponse.headers as Record<string, unknown>);
           console.log('User info response:', userInfoResponse.data);
 
-          // Extract user info from response
+          // Extract user info from response (Frappe returns username string or object)
           const userInfo = userInfoResponse?.data?.message;
-          const userName = userInfo?.user || email;
-          const fullName = userInfo?.full_name || userInfo?.name || undefined;
+          let userName: string;
+          if (typeof userInfo === 'string') {
+            userName = userInfo.trim();
+          } else if (userInfo && typeof userInfo === 'object') {
+            userName = String(
+              (userInfo as { user?: string; name?: string }).user ||
+                (userInfo as { user?: string; name?: string }).name ||
+                email
+            ).trim();
+          } else {
+            userName = String(email || '').trim();
+          }
+          const fullName =
+            (userInfo && typeof userInfo === 'object'
+              ? (userInfo as { full_name?: string; name?: string }).full_name ||
+                (userInfo as { full_name?: string; name?: string }).name
+              : undefined) || undefined;
 
           const { establishFrappeRavenSessionFromLoginResponses } = await import('./frappeRavenSession');
           establishFrappeRavenSessionFromLoginResponses(this.config.baseUrl, ...ravenHeaders);
@@ -1596,6 +1611,36 @@ class ERPNextClient {
       }
       throw this.handleError(error);
     }
+  }
+
+  async getUserByUsername(username: string): Promise<any | null> {
+    const trimmed = username.trim();
+    if (!trimmed) return null;
+
+    const fields = ['name', 'email', 'full_name', 'username', 'phone', 'mobile_no'];
+    const tryFilters: unknown[][] = [
+      ['username', '=', trimmed],
+      ['name', '=', trimmed],
+    ];
+
+    for (const filter of tryFilters) {
+      try {
+        const response = await this.client.get(`${API_VERSION}/User`, {
+          params: {
+            fields: JSON.stringify(fields),
+            filters: JSON.stringify([filter]),
+            limit_page_length: 1,
+          },
+        });
+        if (response.data.data?.length) {
+          return response.data.data[0];
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return null;
   }
 
   // Get User by email
@@ -2451,6 +2496,23 @@ class ERPNextClient {
       if (status === 404 || msg.includes('does not exist') || msg.includes('not found')) {
         return false;
       }
+      throw this.handleError(error);
+    }
+  }
+
+  /** Find Item code by exact item_name (any item group). */
+  async findItemCodeByName(itemName: string): Promise<string | null> {
+    const name = String(itemName || '').trim();
+    if (!name) return null;
+    try {
+      const filters = [['Item', 'item_name', '=', name]];
+      let url = `${API_VERSION}/Item?fields=${encodeURIComponent(JSON.stringify(['name', 'item_group']))}`;
+      url += `&filters=${encodeURIComponent(JSON.stringify(filters))}`;
+      url += '&limit_page_length=1';
+      const response = await this.client.get(url);
+      const row = response.data?.data?.[0];
+      return row?.name ? String(row.name) : null;
+    } catch (error) {
       throw this.handleError(error);
     }
   }
@@ -5549,17 +5611,34 @@ class ERPNextClient {
     supplier: string;
     q: string;
     limit?: number;
+    /** Optional Item Group ids (parent + descendants) — narrows to items in those groups. */
+    itemGroups?: string[];
   }): Promise<
-    Array<{ name: string; item_code: string; item_name: string; stock_uom?: string; image?: string }>
+    Array<{
+      name: string;
+      item_code: string;
+      item_name: string;
+      item_group?: string;
+      stock_uom?: string;
+      image?: string;
+    }>
   > {
     const supplier = String(opts.supplier || '').trim();
     if (!supplier) return [];
 
-    const limit = Math.min(Math.max(opts.limit ?? 25, 1), 50);
+    const limit = Math.min(Math.max(opts.limit ?? 25, 1), 200);
     const q = String(opts.q || '').trim();
+    const itemGroups = (opts.itemGroups || [])
+      .map((g) => String(g || '').trim())
+      .filter(Boolean);
     /** Item master Attach field only (not Website Item / `website_image`). */
-    const fields = ['name', 'item_code', 'item_name', 'stock_uom', 'image'];
+    const fields = ['name', 'item_code', 'item_name', 'item_group', 'stock_uom', 'image'];
     const baseDisabled: any[] = [['disabled', '=', 0], ['custom_supplier', '=', supplier]];
+    if (itemGroups.length === 1) {
+      baseDisabled.push(['item_group', '=', itemGroups[0]]);
+    } else if (itemGroups.length > 1) {
+      baseDisabled.push(['item_group', 'in', itemGroups]);
+    }
 
     const pickItemImage = (r: any): string | undefined => {
       const v = r?.image;
@@ -5569,12 +5648,20 @@ class ERPNextClient {
 
     const mergeDedupe = (
       rows: any[]
-    ): Array<{ name: string; item_code: string; item_name: string; stock_uom?: string; image?: string }> => {
+    ): Array<{
+      name: string;
+      item_code: string;
+      item_name: string;
+      item_group?: string;
+      stock_uom?: string;
+      image?: string;
+    }> => {
       const seen = new Set<string>();
       const out: Array<{
         name: string;
         item_code: string;
         item_name: string;
+        item_group?: string;
         stock_uom?: string;
         image?: string;
       }> = [];
@@ -5583,10 +5670,15 @@ class ERPNextClient {
         if (!code || seen.has(code)) continue;
         seen.add(code);
         const img = pickItemImage(r);
+        const itemGroup =
+          r.item_group != null && String(r.item_group).trim() !== ''
+            ? String(r.item_group).trim()
+            : undefined;
         const row: {
           name: string;
           item_code: string;
           item_name: string;
+          item_group?: string;
           stock_uom?: string;
           image?: string;
         } = {
@@ -5595,6 +5687,7 @@ class ERPNextClient {
           item_name: String(r.item_name ?? '').trim() || code,
           stock_uom: r.stock_uom != null ? String(r.stock_uom).trim() : undefined,
         };
+        if (itemGroup) row.item_group = itemGroup;
         if (img) row.image = img;
         out.push(row);
         if (out.length >= limit) break;
@@ -5642,7 +5735,9 @@ class ERPNextClient {
     currency?: string;
     /** Shown on the in-chat quotation card */
     referenceTitle?: string;
-    lines: Array<{ item_code: string; qty: number; rate: number; uom?: string | null }>;
+    /** When quoting from a buyer Sales Order, link **`custom_order`**. */
+    salesOrderName?: string;
+    lines: Array<{ item_code: string; qty: number; rate: number; uom?: string | null; description?: string | null }>;
   }): Promise<{ name: string; grand_total: number; currency: string }> {
     const supplier = String(args.supplier || '').trim();
     if (!supplier) throw new Error('Supplier is required');
@@ -5654,6 +5749,7 @@ class ERPNextClient {
         qty: Number(l.qty),
         rate: Number(l.rate),
         uom: l.uom != null ? String(l.uom).trim() : '',
+        description: l.description != null ? String(l.description).trim() : '',
       }))
       .filter((l) => l.item_code.length > 0 && Number.isFinite(l.qty) && l.qty > 0 && Number.isFinite(l.rate) && l.rate >= 0);
 
@@ -5681,6 +5777,7 @@ class ERPNextClient {
         rate: l.rate,
       };
       if (l.uom) row.uom = l.uom;
+      if (l.description) row.description = l.description;
       return row;
     });
 
@@ -5696,6 +5793,20 @@ class ERPNextClient {
       items: itemRows,
     };
     if (referenceTitle) payload.title = referenceTitle;
+    const salesOrderName = String(args.salesOrderName || '').trim();
+    if (salesOrderName) {
+      const soRaw = await this.getSalesOrder(salesOrderName);
+      const soDs = Number(soRaw?.docstatus ?? 0);
+      if (soDs === 1) {
+        throw new Error(
+          'This sales order was already submitted after a supplier quotation. Create a new sourcing request to quote again.'
+        );
+      }
+      if (soDs === 2) {
+        throw new Error('This sales order is cancelled.');
+      }
+      payload[this.supplierQuotationOrderLinkField()] = salesOrderName;
+    }
 
     /** Child rows for `frappe.client.insert` fallback (no `amount` — ERPNext recalculates). */
     const insertItems = itemRows.map((row, idx) => ({
@@ -5715,6 +5826,7 @@ class ERPNextClient {
       items: insertItems,
     };
     if (referenceTitle) insertDoc.title = referenceTitle;
+    if (salesOrderName) insertDoc[this.supplierQuotationOrderLinkField()] = salesOrderName;
 
     const { hasFrappeRavenSession, ravenCreateResourceDoc, ravenCallFrappeMethod } = await import('./frappeRavenSession');
 
@@ -5762,6 +5874,16 @@ class ERPNextClient {
     }
     const sumLines = lines.reduce((s, l) => s + l.qty * l.rate, 0);
     const grand_total = doc?.grand_total != null ? Number(doc.grand_total) : sumLines;
+
+    if (salesOrderName) {
+      try {
+        await this.linkSalesOrderToSupplierQuotationAndSubmit(salesOrderName, name, supplier);
+      } catch (linkErr) {
+        console.warn('[SupplierQuotation] link/submit sales order failed:', linkErr);
+        throw this.handleError(linkErr);
+      }
+    }
+
     return {
       name,
       grand_total: Number.isFinite(grand_total) ? grand_total : sumLines,
@@ -5817,16 +5939,141 @@ class ERPNextClient {
     return f || 'custom_quotation';
   }
 
+  /** Supplier Quotation Link → Customer (default **`custom_customer`**). */
+  private supplierQuotationCustomerLinkField(): string {
+    const f = String(process.env.EXPO_PUBLIC_ERPNEXT_SQ_CUSTOMER_LINK_FIELD || 'custom_customer').trim();
+    return f || 'custom_customer';
+  }
+
+  /** Supplier Quotation Link → Sales Order (default **`custom_order`**). */
+  private supplierQuotationOrderLinkField(): string {
+    const f = String(process.env.EXPO_PUBLIC_ERPNEXT_SQ_ORDER_LINK_FIELD || 'custom_order').trim();
+    return f || 'custom_order';
+  }
+
+  /** Sales Order Link → Supplier Quotation (default **`custom_quotation`**). */
+  private salesOrderQuotationLinkField(): string {
+    const f = String(process.env.EXPO_PUBLIC_ERPNEXT_SO_QUOTATION_LINK_FIELD || 'custom_quotation').trim();
+    return f || 'custom_quotation';
+  }
+
+  /** Sales Order Link → Supplier (default **`custom_supplier`**). */
+  private salesOrderSupplierLinkField(): string {
+    const f = String(process.env.EXPO_PUBLIC_ERPNEXT_SO_SUPPLIER_LINK_FIELD || 'custom_supplier').trim();
+    return f || 'custom_supplier';
+  }
+
+  /** Throws when a buyer tries to share a Sales Order that is no longer draft. */
+  async assertSalesOrderShareable(orderName: string): Promise<void> {
+    const n = String(orderName || '').trim();
+    if (!n) throw new Error('Order name required');
+    const raw = await this.getSalesOrder(n);
+    const ds = Number(raw?.docstatus ?? 0);
+    if (ds === 2) {
+      const err = new Error('SALES_ORDER_CANCELLED');
+      (err as { code?: string }).code = 'SALES_ORDER_CANCELLED';
+      throw err;
+    }
+    if (ds === 1) {
+      const err = new Error('SALES_ORDER_ALREADY_SUBMITTED');
+      (err as { code?: string }).code = 'SALES_ORDER_ALREADY_SUBMITTED';
+      throw err;
+    }
+  }
+
+  /**
+   * When a supplier quotes against a draft Sales Order: set **`custom_quotation`** + **`custom_supplier`**, then submit the order.
+   */
+  async linkSalesOrderToSupplierQuotationAndSubmit(
+    salesOrderName: string,
+    supplierQuotationName: string,
+    supplierDocName: string
+  ): Promise<void> {
+    const so = String(salesOrderName || '').trim();
+    const sq = String(supplierQuotationName || '').trim();
+    const sup = String(supplierDocName || '').trim();
+    if (!so || !sq || !sup) {
+      throw new Error('Sales order, quotation, and supplier are required.');
+    }
+
+    const raw = await this.getSalesOrder(so);
+    const ds = Number(raw?.docstatus ?? 0);
+    if (ds === 2) throw new Error('This sales order is cancelled.');
+    if (ds === 1) {
+      throw new Error('This sales order is already submitted.');
+    }
+
+    await this.updateSalesOrder(so, {
+      [this.salesOrderQuotationLinkField()]: sq,
+      [this.salesOrderSupplierLinkField()]: sup,
+    });
+    await this.submitSalesOrder(so);
+  }
+
+  private async setDocFieldValue(
+    doctype: string,
+    docName: string,
+    fieldname: string,
+    value: string
+  ): Promise<void> {
+    const dt = String(doctype || '').trim();
+    const name = String(docName || '').trim();
+    const field = String(fieldname || '').trim();
+    const val = String(value ?? '').trim();
+    if (!dt || !name || !field || !val) return;
+    const { hasFrappeRavenSession, ravenCallFrappeMethod } = await import('./frappeRavenSession');
+    const kwargs = { doctype: dt, name, fieldname: field, value: val };
+    if (hasFrappeRavenSession()) {
+      await ravenCallFrappeMethod('frappe.client.set_value', kwargs);
+    } else {
+      await this.callFrappeMethod('frappe.client.set_value', kwargs);
+    }
+  }
+
+  /**
+   * When a quotation is shared with a buyer in chat, link the recipient **Customer** on the SQ (**`custom_customer`**).
+   */
+  async linkSupplierQuotationToCustomerForShare(
+    supplierQuotationName: string,
+    billToFrappeUserId: string
+  ): Promise<{ customer: string | null; updated: boolean }> {
+    const sqName = String(supplierQuotationName || '').trim();
+    const billTo = String(billToFrappeUserId || '').trim();
+    if (!sqName || !billTo) return { customer: null, updated: false };
+
+    const sq = await this.getSupplierQuotationByName(sqName);
+    const customer = await this.resolveCustomerForSupplierQuotationBilling(
+      (sq || {}) as Record<string, unknown>,
+      { billToFrappeUserId: billTo }
+    );
+    if (!customer) return { customer: null, updated: false };
+
+    await this.setDocFieldValue(
+      'Supplier Quotation',
+      sqName,
+      this.supplierQuotationCustomerLinkField(),
+      customer
+    );
+    return { customer, updated: true };
+  }
+
   /**
    * Sales Invoices linked to a Supplier Quotation via custom field **`custom_quotation`** (Link → Supplier Quotation).
    * Requires that field on Sales Invoice in ERPNext.
    */
-  async listSalesInvoicesByCustomQuotation(supplierQuotationName: string): Promise<any[]> {
+  async listSalesInvoicesByCustomQuotation(
+    supplierQuotationName: string,
+    opts?: { customerId?: string; limit?: number }
+  ): Promise<any[]> {
     const n = String(supplierQuotationName || '').trim();
     if (!n) return [];
     const linkField = this.salesInvoiceSupplierQuotationLinkField();
+    const customerId = String(opts?.customerId || '').trim();
+    const lim = Math.min(Math.max(1, opts?.limit ?? 15), 50);
+    const filters: any[][] = [[linkField, '=', n]];
+    if (customerId) filters.push(['customer', '=', customerId]);
     return await this.listResourceRows('Sales Invoice', {
-      filters: [[linkField, '=', n]],
+      filters,
       fields: [
         'name',
         'customer',
@@ -5838,9 +6085,73 @@ class ERPNextClient {
         'status',
         'posting_date',
       ],
-      limit_page_length: 15,
+      limit_page_length: lim,
       order_by: 'modified desc',
     });
+  }
+
+  /**
+   * Supplier Quotations linked to a **Sales Order** via **`custom_order`**, optionally scoped to **`custom_customer`**.
+   */
+  async listSupplierQuotationsBySalesOrder(
+    salesOrderName: string,
+    opts?: { customerId?: string; limit?: number }
+  ): Promise<any[]> {
+    const so = String(salesOrderName || '').trim();
+    if (!so) return [];
+    const orderField = this.supplierQuotationOrderLinkField();
+    const customerField = this.supplierQuotationCustomerLinkField();
+    const customerId = String(opts?.customerId || '').trim();
+    const lim = Math.min(Math.max(1, opts?.limit ?? 20), 50);
+    const baseFields = [
+      'name',
+      'supplier',
+      'supplier_name',
+      'grand_total',
+      'currency',
+      'status',
+      'docstatus',
+      'transaction_date',
+      'workflow_state',
+    ];
+
+    const query = async (filters: any[][], fields: string[]) =>
+      this.listResourceRows('Supplier Quotation', {
+        filters,
+        fields,
+        limit_page_length: lim,
+        order_by: 'modified desc',
+      });
+
+    const matchCustomer = (rows: any[]) => {
+      if (!customerId) return rows;
+      return (rows || []).filter((r) => {
+        const linked = String(r?.[customerField] ?? '').trim();
+        return !linked || linked === customerId;
+      });
+    };
+
+    if (customerId) {
+      try {
+        const scoped = await query(
+          [
+            [orderField, '=', so],
+            [customerField, '=', customerId],
+          ],
+          [...baseFields, customerField]
+        );
+        if (scoped.length) return scoped;
+      } catch {
+        /* custom_customer may be absent from list filters on some sites */
+      }
+    }
+
+    try {
+      const rows = await query([[orderField, '=', so]], baseFields);
+      return matchCustomer(rows);
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -6001,6 +6312,112 @@ class ERPNextClient {
   }
 
   /**
+   * **Payment Entries** allocated to a **Sales Invoice** (both buyer and supplier views).
+   */
+  async listPaymentEntriesForSalesInvoice(
+    salesInvoiceName: string,
+    opts?: { fromDate?: string; toDate?: string; limit?: number; customerId?: string }
+  ): Promise<any[]> {
+    const siName = String(salesInvoiceName || '').trim();
+    if (!siName) return [];
+    const customerId = String(opts?.customerId || '').trim();
+    const maxOut = Math.min(Math.max(1, opts?.limit ?? 40), 150);
+    const fromD = (opts?.fromDate || '').trim();
+    const toD = (opts?.toDate || '').trim();
+    const peFields = [
+      'name',
+      'posting_date',
+      'party',
+      'party_type',
+      'paid_amount',
+      'received_amount',
+      'payment_type',
+      'docstatus',
+      'status',
+    ];
+
+    const passesDate = (pe: any): boolean => {
+      const pd = String(pe?.posting_date || '').trim().slice(0, 10);
+      if (fromD && pd && pd < fromD) return false;
+      if (toD && pd && pd > toD) return false;
+      return true;
+    };
+
+    const annotate = (pe: any) => ({ ...pe, _linked_sales_invoice: siName });
+
+    const scopeToCustomer = (rows: any[]): any[] => {
+      if (!customerId) return rows;
+      return (rows || []).filter((pe) => {
+        const partyType = String(pe?.party_type || 'Customer').trim();
+        const party = String(pe?.party || '').trim();
+        return partyType === 'Customer' && party === customerId;
+      });
+    };
+
+    const filterSets: any[][][] = [
+      [
+        ['Payment Entry Reference', 'reference_doctype', '=', 'Sales Invoice'],
+        ['Payment Entry Reference', 'reference_name', '=', siName],
+        ['docstatus', '!=', 2],
+      ],
+      [
+        ['references', 'reference_doctype', '=', 'Sales Invoice'],
+        ['references', 'reference_name', '=', siName],
+        ['docstatus', '!=', 2],
+      ],
+    ];
+    for (const filters of filterSets) {
+      try {
+        const rows = await this.listResourceRows('Payment Entry', {
+          filters,
+          fields: peFields,
+          limit_page_length: maxOut,
+          order_by: 'posting_date desc',
+        });
+        const out = scopeToCustomer((rows || []).filter(passesDate).map(annotate));
+        if (out.length) return out.slice(0, maxOut);
+      } catch {
+        /* try next filter shape */
+      }
+    }
+
+    try {
+      const refs = await this.listResourceRows('Payment Entry Reference', {
+        filters: [
+          ['reference_doctype', '=', 'Sales Invoice'],
+          ['reference_name', '=', siName],
+        ],
+        fields: ['parent', 'allocated_amount'],
+        limit_page_length: maxOut,
+      });
+      const parentNames = [
+        ...new Set(
+          (refs || [])
+            .map((r) => String(r?.parent || '').trim())
+            .filter(Boolean)
+        ),
+      ];
+      if (parentNames.length) {
+        const peRows = await this.listResourceRows('Payment Entry', {
+          filters: [
+            ['name', 'in', parentNames],
+            ['docstatus', '!=', 2],
+          ],
+          fields: peFields,
+          limit_page_length: maxOut,
+          order_by: 'posting_date desc',
+        });
+        const out = scopeToCustomer((peRows || []).filter(passesDate).map(annotate));
+        if (out.length) return out.slice(0, maxOut);
+      }
+    } catch {
+      /* ignore */
+    }
+
+    return [];
+  }
+
+  /**
    * **Payment Entries** that reference a **Sales Invoice** linked to this supplier’s quotations (Receive / pay flows).
    */
   async listPaymentEntriesForSupplier(
@@ -6074,13 +6491,16 @@ class ERPNextClient {
 
     const siFocus = String(opts?.salesInvoiceName || '').trim();
     if (siFocus) {
-      const siRow = {
-        customer: opts?.salesInvoiceCustomer,
-        customer_name: opts?.salesInvoiceCustomerName,
-      };
-      await tryListPeForSi(siFocus, siRow, 80);
-      out.sort((a, b) => String(b.posting_date || '').localeCompare(String(a.posting_date || '')));
-      return out.slice(0, maxOut);
+      const rows = await this.listPaymentEntriesForSalesInvoice(siFocus, {
+        fromDate: opts?.fromDate,
+        toDate: opts?.toDate,
+        limit: maxOut,
+      });
+      return rows.map((pe) => ({
+        ...pe,
+        _customer: opts?.salesInvoiceCustomer,
+        _customer_name: opts?.salesInvoiceCustomerName,
+      }));
     }
 
     const sis = await this.listSalesInvoicesForSupplier(supplierDocId, {
@@ -6348,7 +6768,9 @@ class ERPNextClient {
 
     const billTo = String(opts?.billToFrappeUserId || '').trim();
     const sqSupplier = String((sq as any).supplier || '').trim();
+    const customerField = this.supplierQuotationCustomerLinkField();
     const fromSqRaw =
+      String((sq as any)[customerField] || '').trim() ||
       String((sq as any).custom_bill_to_customer || (sq as any).customer || '').trim() ||
       String((sq as any).bill_to || '').trim();
 
@@ -6358,6 +6780,7 @@ class ERPNextClient {
       billToLength: billTo.length,
       sqSupplier: sqSupplier || null,
       sqCustomerLikeFields: {
+        [customerField]: (sq as any)[customerField] ?? null,
         custom_bill_to_customer: (sq as any).custom_bill_to_customer ?? null,
         customer: (sq as any).customer ?? null,
         bill_to: (sq as any).bill_to ?? null,
@@ -6399,6 +6822,7 @@ class ERPNextClient {
     }
 
     const fromSq =
+      String((sq as any)[customerField] || '').trim() ||
       String((sq as any).custom_bill_to_customer || (sq as any).customer || '').trim() ||
       String((sq as any).bill_to || '').trim();
     if (fromSq) {

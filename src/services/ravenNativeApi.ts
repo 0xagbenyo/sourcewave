@@ -22,6 +22,13 @@ import {
   resolveRavenUserDisplayName,
   type RavenUserDisplayProfiles,
 } from '../utils/ravenSearchPreview';
+import { dedupeRavenWorkspaceMembersByUser } from '../utils/ravenWorkspaceMemberVisibility';
+import { classifyRavenAttachment } from '../utils/ravenAttachment';
+import {
+  ravenChannelFileMatchesTypeFilter,
+  type RavenChannelFileTypeFilter,
+} from '../utils/ravenChannelFileTypeFilter';
+import { tryParseQuotationDraftFromMessage } from '../utils/chatQuotationDraftMessage';
 
 export type RavenUserProfileRecord = {
   full_name?: string;
@@ -402,6 +409,30 @@ export function ravenRowIsSupplierQuotationDocLink(linkDoctype: unknown, linkDoc
   return norm === 'supplier quotation' || norm === 'supplierquotation';
 }
 
+/** True when the row links to ERPNext **Sales Order**. */
+export function ravenRowIsSalesOrderDocLink(linkDoctype: unknown, linkDocument: unknown): boolean {
+  const dn = String(linkDocument ?? '').trim();
+  if (!dn) return false;
+  const norm = String(linkDoctype ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ');
+  return norm === 'sales order' || norm === 'salesorder';
+}
+
+/** True when the row links to ERPNext **Sales Invoice**. */
+export function ravenRowIsSalesInvoiceDocLink(linkDoctype: unknown, linkDocument: unknown): boolean {
+  const dn = String(linkDocument ?? '').trim();
+  if (!dn) return false;
+  const norm = String(linkDoctype ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ');
+  return norm === 'sales invoice' || norm === 'salesinvoice';
+}
+
 /**
  * Whether a Raven message was authored by the signed-in user. Frappe `owner` is `User.name` (often the
  * login id / email), while the app session may store that in {@link UserSession.user} and/or {@link UserSession.email}
@@ -594,6 +625,50 @@ function mapRawMessageListToRows(arr: unknown[], limit: number): RavenMessageRow
   }
   rows.sort((a, b) => ravenMessageRowSortTimeMs(b) - ravenMessageRowSortTimeMs(a));
   return rows.slice(0, limit);
+}
+
+/**
+ * Load messages around a specific message (Raven web: `?message_id=` + `chat_stream.get_messages`).
+ * Used when jumping to an in-chat search hit that is not on the current first page.
+ */
+export async function fetchChannelMessagesAroundBaseMessage(
+  channelId: string,
+  baseMessageId: string
+): Promise<{ messages: RavenMessageRow[]; hasMoreOlder: boolean; hasMoreNewer: boolean }> {
+  const cid = channelId.trim();
+  const base = baseMessageId.trim();
+  if (!cid || !base) {
+    throw new Error('Missing channel or message id.');
+  }
+
+  const data = await ravenCallFrappeMethod('raven.api.chat_stream.get_messages', {
+    channel_id: cid,
+    base_message: base,
+  });
+
+  let payload: Record<string, unknown> | null = null;
+  const raw = data?.message;
+  if (raw != null && typeof raw === 'object' && !Array.isArray(raw)) {
+    payload = raw as Record<string, unknown>;
+  } else if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        payload = parsed as Record<string, unknown>;
+      }
+    } catch {
+      payload = null;
+    }
+  }
+
+  const arr = payload?.messages;
+  const rawList = Array.isArray(arr) ? arr : [];
+  const rows = sortMessagesNewestFirst(mapMessagePlainText(mapRawMessageListToRows(rawList, rawList.length + 1)));
+
+  const hasMoreOlder = payload?.has_old_messages === true || payload?.has_old_messages === 1;
+  const hasMoreNewer = payload?.has_new_messages === true || payload?.has_new_messages === 1;
+
+  return { messages: rows, hasMoreOlder, hasMoreNewer };
 }
 
 function mapMessagePlainText(rows: RavenMessageRow[]): RavenMessageRow[] {
@@ -961,7 +1036,8 @@ async function mergeFrappeUserProfileImagesIntoMembers(
 async function finalizeWorkspaceMembersWithImages(
   members: RavenWorkspaceMemberRow[]
 ): Promise<RavenWorkspaceMemberRow[]> {
-  return mergeFrappeUserProfileImagesIntoMembers(await mergeSupplierProfileImagesIntoMembers(members));
+  const deduped = dedupeRavenWorkspaceMembersByUser(members);
+  return mergeFrappeUserProfileImagesIntoMembers(await mergeSupplierProfileImagesIntoMembers(deduped));
 }
 
 async function finalizeChannelListWithProfiles(
@@ -1290,7 +1366,42 @@ export async function listMessagesForChannel(
   return [];
 }
 
-/** One attachment shared in a channel (deduped by sanitized `file` path). */
+/** One item in channel shared lists — file attachment or linked ERP document. */
+export type RavenSharedChatItemKind = 'photo' | 'video' | 'file' | 'quotation' | 'order' | 'invoice';
+
+/** @deprecated Use {@link RavenChannelFileTypeFilter} or {@link RavenSharedDocumentFilter}. */
+export type RavenSharedChatFilter = 'all' | RavenSharedChatItemKind;
+
+export type RavenSharedDocumentFilter = 'any' | 'quotation' | 'order' | 'invoice';
+
+/** Row from Raven `get_all_files_shared_in_channel` (aligned with Raven web `FileInChannel`). */
+export type RavenChannelFileRow = {
+  messageName: string;
+  fileName: string;
+  fileUrl: string;
+  fileType?: string;
+  fileSize?: number;
+  message_type?: 'File' | 'Image' | string;
+  owner?: string;
+  creation?: string;
+  fileThumbnail?: string;
+};
+
+export type RavenSharedChatItem = {
+  messageName: string;
+  kind: RavenSharedChatItemKind;
+  /** Primary line shown in the shared list. */
+  label: string;
+  owner?: string;
+  creation?: string;
+  /** Present for file attachments. */
+  file?: string;
+  message_type?: string;
+  linkDoctype?: string;
+  linkDocument?: string;
+};
+
+/** @deprecated Prefer {@link RavenSharedChatItem}. File attachments only. */
 export type RavenSharedChatAttachment = {
   messageName: string;
   /** Sanitized `/files/…` or URL — same as Raven web uses for downloads. */
@@ -1303,16 +1414,53 @@ export type RavenSharedChatAttachment = {
 const RAVEN_SHARED_ATTACH_PAGE = 100;
 /** Cap scan (~8k messages) so opening the menu stays responsive on huge channels. */
 const RAVEN_SHARED_ATTACH_MAX_PAGES = 80;
+/** Max messages parsed when scanning a channel for shared files / ERP links. */
+const RAVEN_SHARED_SCAN_MESSAGE_LIMIT = 20000;
+const RAVEN_CHANNEL_FILES_API_PAGE = 100;
+const RAVEN_CHANNEL_FILES_API_MAX_PAGES = 50;
+
+function dedupeRavenChannelFileRows(rows: RavenChannelFileRow[]): RavenChannelFileRow[] {
+  const seen = new Set<string>();
+  const out: RavenChannelFileRow[] = [];
+  for (const row of rows) {
+    const key = `${row.messageName}::${row.fileUrl}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
 
 /**
- * All distinct file attachments in a channel (newest-first scan), for “shared in this chat” menus.
- * Uses paginated `listMessagesForChannel` with `skipChannelVisit` to avoid marking the channel read on every page.
+ * Load all channel messages for shared-content scans.
+ * Uses Raven's whitelisted `get_messages_with_dates` so every member's messages are included.
+ * The Frappe resource list (used when `skipChannelVisit` is set) often returns only the current user's rows.
  */
-export async function listSharedAttachmentsInChannel(channelId: string): Promise<RavenSharedChatAttachment[]> {
+async function fetchAllChannelMessagesForSharedScan(channelId: string): Promise<RavenMessageRow[]> {
   const cid = channelId.trim();
   if (!cid) return [];
+
+  try {
+    const data = await ravenCallFrappeMethod('raven.api.raven_message.get_messages_with_dates', {
+      channel_id: cid,
+    });
+    const arr = unwrapRavenMessageMethodPayload(data);
+    if (arr?.length) {
+      if (isBlockFormattedRavenMessages(arr)) {
+        return sortMessagesNewestFirst(
+          mapMessagePlainText(flattenMessagesFromRavenBlocks(arr, RAVEN_SHARED_SCAN_MESSAGE_LIMIT))
+        );
+      }
+      return sortMessagesNewestFirst(
+        mapMessagePlainText(mapRawMessageListToRows(arr, RAVEN_SHARED_SCAN_MESSAGE_LIMIT))
+      );
+    }
+  } catch (e) {
+    console.warn(LOG, 'fetchAllChannelMessagesForSharedScan get_messages_with_dates failed', e);
+  }
+
+  const merged: RavenMessageRow[] = [];
   const seen = new Set<string>();
-  const out: RavenSharedChatAttachment[] = [];
   for (let page = 0; page < RAVEN_SHARED_ATTACH_MAX_PAGES; page++) {
     const start = page * RAVEN_SHARED_ATTACH_PAGE;
     const rows = await listMessagesForChannel(cid, RAVEN_SHARED_ATTACH_PAGE, {
@@ -1320,28 +1468,244 @@ export async function listSharedAttachmentsInChannel(channelId: string): Promise
       skipChannelVisit: true,
     });
     if (!rows.length) break;
-    for (const m of rows) {
-      const raw = m.file?.trim();
-      if (!raw) continue;
-      const key = sanitizeRavenWebMessageFileUrl(raw);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      out.push({
-        messageName: m.name,
-        file: key,
-        owner: m.owner,
-        creation: m.creation,
-        message_type: m.message_type,
-      });
+    for (const row of rows) {
+      const id = String(row.name || '').trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      merged.push(row);
     }
     if (rows.length < RAVEN_SHARED_ATTACH_PAGE) break;
   }
+  return sortMessagesNewestFirst(mapMessagePlainText(merged));
+}
+
+function collectSharedItemsFromMessages(rows: RavenMessageRow[]): RavenSharedChatItem[] {
+  const seenFiles = new Set<string>();
+  const seenQuotations = new Set<string>();
+  const seenOrders = new Set<string>();
+  const seenInvoices = new Set<string>();
+  const out: RavenSharedChatItem[] = [];
+
+  for (const m of rows) {
+    const rawFile = m.file?.trim();
+    if (rawFile) {
+      const key = sanitizeRavenWebMessageFileUrl(rawFile);
+      if (key && !seenFiles.has(key)) {
+        seenFiles.add(key);
+        const { kind, displayName } = classifyRavenAttachment(key, m.message_type);
+        out.push({
+          messageName: m.name,
+          kind: ravenAttachmentKindToSharedKind(kind),
+          label: displayName || 'Attachment',
+          owner: m.owner,
+          creation: m.creation,
+          file: key,
+          message_type: m.message_type,
+        });
+      }
+    }
+
+    const linkDt = String(m.link_doctype || '').trim();
+    const linkDn = String(m.link_document || '').trim();
+    if (linkDn) {
+      if (ravenRowIsSupplierQuotationDocLink(linkDt, linkDn)) {
+        if (!seenQuotations.has(linkDn)) {
+          seenQuotations.add(linkDn);
+          out.push({
+            messageName: m.name,
+            kind: 'quotation',
+            label: linkDn,
+            owner: m.owner,
+            creation: m.creation,
+            linkDoctype: linkDt,
+            linkDocument: linkDn,
+          });
+        }
+      } else if (ravenRowIsSalesOrderDocLink(linkDt, linkDn)) {
+        if (!seenOrders.has(linkDn)) {
+          seenOrders.add(linkDn);
+          out.push({
+            messageName: m.name,
+            kind: 'order',
+            label: linkDn,
+            owner: m.owner,
+            creation: m.creation,
+            linkDoctype: linkDt,
+            linkDocument: linkDn,
+          });
+        }
+      } else if (ravenRowIsSalesInvoiceDocLink(linkDt, linkDn)) {
+        if (!seenInvoices.has(linkDn)) {
+          seenInvoices.add(linkDn);
+          out.push({
+            messageName: m.name,
+            kind: 'invoice',
+            label: linkDn,
+            owner: m.owner,
+            creation: m.creation,
+            linkDoctype: linkDt,
+            linkDocument: linkDn,
+          });
+        }
+      }
+    }
+
+    const qDraft = tryParseQuotationDraftFromMessage(m.text);
+    if (qDraft?.name && !seenQuotations.has(qDraft.name)) {
+      seenQuotations.add(qDraft.name);
+      out.push({
+        messageName: m.name,
+        kind: 'quotation',
+        label: qDraft.title?.trim() || qDraft.name,
+        owner: m.owner,
+        creation: m.creation,
+        linkDocument: qDraft.name,
+      });
+    }
+  }
+
   out.sort(
     (a, b) =>
       ravenMessageRowSortTimeMs({ name: b.messageName, creation: b.creation }) -
       ravenMessageRowSortTimeMs({ name: a.messageName, creation: a.creation })
   );
   return out;
+}
+
+function ravenAttachmentKindToSharedKind(
+  attachmentKind: ReturnType<typeof classifyRavenAttachment>['kind']
+): RavenSharedChatItemKind {
+  if (attachmentKind === 'image') return 'photo';
+  if (attachmentKind === 'video') return 'video';
+  return 'file';
+}
+
+/**
+ * All shared content in a channel: photos, videos, files, and linked quotations / orders / invoices.
+ * Newest-first scan with dedupe per file path or document name.
+ */
+export async function listSharedItemsInChannel(channelId: string): Promise<RavenSharedChatItem[]> {
+  const cid = channelId.trim();
+  if (!cid) return [];
+  const rows = await fetchAllChannelMessagesForSharedScan(cid);
+  return collectSharedItemsFromMessages(rows);
+}
+
+function mapRavenApiFileInChannelRow(raw: Record<string, unknown>): RavenChannelFileRow | null {
+  const messageName = String(raw.message_id ?? raw.name ?? '').trim();
+  const fileUrl = sanitizeRavenWebMessageFileUrl(String(raw.file_url ?? ''));
+  const fileName = String(raw.file_name ?? '').trim() || fileUrl.split('/').pop() || 'File';
+  if (!messageName || !fileUrl) return null;
+  return {
+    messageName,
+    fileName,
+    fileUrl,
+    fileType: raw.file_type != null ? String(raw.file_type) : undefined,
+    fileSize: typeof raw.file_size === 'number' ? raw.file_size : undefined,
+    message_type: raw.message_type != null ? String(raw.message_type) : undefined,
+    owner: raw.owner != null ? String(raw.owner) : undefined,
+    creation: raw.creation != null ? String(raw.creation) : undefined,
+    fileThumbnail: raw.file_thumbnail != null ? String(raw.file_thumbnail) : undefined,
+  };
+}
+
+function sharedChatItemToChannelFileRow(row: RavenSharedChatItem): RavenChannelFileRow | null {
+  const fileUrl = row.file?.trim();
+  if (!fileUrl) return null;
+  const { ext } = classifyRavenAttachment(fileUrl, row.message_type);
+  return {
+    messageName: row.messageName,
+    fileName: row.label || fileUrl.split('/').pop() || 'File',
+    fileUrl,
+    fileType: ext || undefined,
+    message_type: row.message_type,
+    owner: row.owner,
+    creation: row.creation,
+  };
+}
+
+/**
+ * Files shared in a channel — same API as Raven web “View Files”.
+ * @see raven.api.raven_message.get_all_files_shared_in_channel
+ */
+export async function listRavenFilesSharedInChannel(
+  channelId: string,
+  opts?: {
+    fileName?: string;
+    fileType?: RavenChannelFileTypeFilter;
+    startAfter?: number;
+    pageLength?: number;
+  }
+): Promise<RavenChannelFileRow[]> {
+  const cid = channelId.trim();
+  if (!cid) return [];
+
+  const fileType = opts?.fileType && opts.fileType !== 'any' ? opts.fileType : undefined;
+  const pageLength = opts?.pageLength ?? RAVEN_CHANNEL_FILES_API_PAGE;
+  const search = opts?.fileName?.trim();
+
+  try {
+    const aggregated: RavenChannelFileRow[] = [];
+    let startAfter = Math.max(0, Math.floor(opts?.startAfter ?? 0));
+    for (let page = 0; page < RAVEN_CHANNEL_FILES_API_MAX_PAGES; page++) {
+      const body: Record<string, unknown> = {
+        channel_id: cid,
+        start_after: startAfter,
+        page_length: pageLength,
+      };
+      if (search) body.file_name = search;
+      if (fileType) body.file_type = fileType;
+
+      const data = await ravenCallFrappeMethod('raven.api.raven_message.get_all_files_shared_in_channel', body);
+      const rows = Array.isArray(data?.message) ? data.message : [];
+      const mapped = (rows as Record<string, unknown>[])
+        .map(mapRavenApiFileInChannelRow)
+        .filter((row): row is RavenChannelFileRow => row != null);
+      aggregated.push(...mapped);
+      if (rows.length < pageLength) break;
+      startAfter += pageLength;
+    }
+
+    if (aggregated.length > 0) {
+      return dedupeRavenChannelFileRows(aggregated);
+    }
+  } catch (e) {
+    console.warn(LOG, 'listRavenFilesSharedInChannel fallback scan', e);
+  }
+
+  const scanned = await listSharedItemsInChannel(cid);
+  const filter = opts?.fileType ?? 'any';
+  return scanned
+    .filter((row) => row.kind === 'photo' || row.kind === 'video' || row.kind === 'file')
+    .map(sharedChatItemToChannelFileRow)
+    .filter((row): row is RavenChannelFileRow => row != null)
+    .filter((row) => ravenChannelFileMatchesTypeFilter(row.fileType, row.message_type, filter))
+    .filter((row) => {
+      if (!search) return true;
+      return row.fileName.toLowerCase().includes(search.toLowerCase());
+    });
+}
+
+/** Linked ERP documents and quotation drafts shared in a channel. */
+export async function listSharedDocumentsInChannel(channelId: string): Promise<RavenSharedChatItem[]> {
+  const items = await listSharedItemsInChannel(channelId);
+  return items.filter((row) => row.kind === 'quotation' || row.kind === 'order' || row.kind === 'invoice');
+}
+
+/**
+ * All distinct file attachments in a channel (newest-first scan), for legacy callers.
+ */
+export async function listSharedAttachmentsInChannel(channelId: string): Promise<RavenSharedChatAttachment[]> {
+  const items = await listSharedItemsInChannel(channelId);
+  return items
+    .filter((row): row is RavenSharedChatItem & { file: string } => !!row.file?.trim())
+    .map((row) => ({
+      messageName: row.messageName,
+      file: row.file,
+      owner: row.owner,
+      creation: row.creation,
+      message_type: row.message_type,
+    }));
 }
 
 const RAVEN_INBOX_TEXT_SCAN_PAGE = 40;
@@ -1803,17 +2167,22 @@ export async function fetchWorkspaceMembers(workspaceId: string): Promise<RavenW
     /** Raven whitelist API omits custom fields; resource rows carry the Supplier link. */
     const supplierByUser = new Map<string, string | null>();
     const supplierByMemberDocName = new Map<string, string | null>();
+    const resourceByUser = new Map<string, RavenWorkspaceMemberRow>();
     for (const r of res) {
       const rec = r as unknown as Record<string, unknown>;
       const sup = parseLinkedSupplierFromWorkspaceMemberResourceRow(rec);
       const u = (r.user || '').trim().toLowerCase();
-      if (u) supplierByUser.set(u, sup);
+      if (u) {
+        supplierByUser.set(u, sup);
+        resourceByUser.set(u, r);
+      }
       const mn = String(r.name ?? '').trim();
       if (mn) supplierByMemberDocName.set(mn, sup);
     }
-    const merged = base.map((m) => {
+    const merged: RavenWorkspaceMemberRow[] = base.map((m) => {
       const uid = (m.user || '').trim().toLowerCase();
       const memberDoc = String(m.name ?? '').trim();
+      const resourceRow = uid ? resourceByUser.get(uid) : undefined;
       const candidates: (string | null | undefined)[] = [];
       if (uid && supplierByUser.has(uid)) candidates.push(supplierByUser.get(uid) ?? undefined);
       if (memberDoc && supplierByMemberDocName.has(memberDoc)) {
@@ -1828,9 +2197,20 @@ export async function fetchWorkspaceMembers(workspaceId: string): Promise<RavenW
           break;
         }
       }
-      if (!linked) return m;
-      return { ...m, custom_supplier: linked };
+      const withAdmin =
+        resourceRow?.is_admin != null && m.is_admin == null
+          ? { ...m, is_admin: resourceRow.is_admin }
+          : m;
+      if (!linked) return withAdmin;
+      return { ...withAdmin, custom_supplier: linked };
     });
+    const baseUsers = new Set(
+      base.map((m) => (m.user || '').trim().toLowerCase()).filter((u) => u.length > 0)
+    );
+    for (const r of res) {
+      const u = (r.user || '').trim().toLowerCase();
+      if (u && !baseUsers.has(u)) merged.push(r);
+    }
     return finalizeWorkspaceMembersWithImages(merged);
   } catch (e) {
     console.warn(LOG, 'fetchWorkspaceMembers resource merge', e);

@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert, Linking } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, RouteProp, useFocusEffect } from '@react-navigation/native';
@@ -14,6 +14,7 @@ import { SourceWaveStackHeader } from '../components/SourceWaveStackHeader';
 import { useAutoNavigateToSubscriptionWhenInactive } from '../hooks/useAutoNavigateToSubscriptionWhenInactive';
 import { resetToAuthScreen } from '../navigation/rootNavigation';
 import type { RootStackParamList } from '../types';
+import { appAlert as Alert } from '../services/appAlert';
 
 function dash(v: string | null | undefined): string {
   const t = (v ?? '').trim();
