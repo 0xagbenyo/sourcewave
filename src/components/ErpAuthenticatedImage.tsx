@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Image, type ImageContentFit, type ImageErrorEventData, type ImageLoadEventData } from 'expo-image';
-import { ActivityIndicator, Platform, View, type StyleProp, type ImageStyle } from 'react-native';
+import { ActivityIndicator, View, type StyleProp, type ImageStyle } from 'react-native';
 import { buildAuthenticatedErpImageSource } from '../utils/erpImageUrl';
 import { fetchErpSiteFileAsDataUri, getERPNextAuthorizationHeader } from '../services/erpnext';
 import { hasFrappeRavenSession } from '../services/frappeRavenSession';
@@ -51,9 +51,9 @@ export const ErpAuthenticatedImage: React.FC<ErpAuthenticatedImageProps> = ({
   const useBinaryFetchPath = useMemo(() => {
     if (!src?.uri) return false;
     const low = src.uri.toLowerCase();
-    if (low.includes('/private/files/')) return true;
-    if (Platform.OS !== 'android') return false;
     if (!low.includes('/files/')) return false;
+    // Native image loaders often ignore `headers` (iOS + Android) and never send session cookies.
+    if (low.includes('/private/files/')) return true;
     if (src.headers?.Authorization) return true;
     let auth: string | undefined;
     try {

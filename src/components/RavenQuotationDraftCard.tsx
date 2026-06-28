@@ -25,7 +25,7 @@ type Props = {
   onCardLongPress?: () => void;
 };
 
-/** Chip colors: approved & pending green, rejected red. */
+/** Chip colors: approved green, rejected red, pending amber. */
 type StatusKind = 'rejected' | 'pending' | 'approved' | 'neutral';
 
 function formatQuotationDate(iso?: string): string {
@@ -74,11 +74,11 @@ function deriveQuotationUiStatus(
 function chipColors(kind: StatusKind): { bg: string; fg: string; border: string } {
   switch (kind) {
     case 'rejected':
-      return { bg: '#FFEBEE', fg: '#B71C1C', border: '#E57373' };
+      return { bg: '#FFEBEE', fg: Colors.ERROR, border: '#EF9A9A' };
     case 'pending':
-      return { bg: '#E8F5E9', fg: '#2E7D32', border: '#81C784' };
+      return { bg: '#FFF8E1', fg: '#E65100', border: '#FFCC80' };
     case 'approved':
-      return { bg: '#E8F5E9', fg: '#1B5E20', border: '#66BB6A' };
+      return { bg: '#E8F5E9', fg: '#1B5E20', border: Colors.SUCCESS };
     default:
       return { bg: '#F5F5F5', fg: RavenLight.textMuted, border: '#E0E0E0' };
   }
@@ -140,6 +140,8 @@ export const RavenQuotationDraftCard: React.FC<Props> = ({
           <TouchableOpacity
             style={[styles.btn, styles.rejectBtn]}
             onPress={onReject}
+            onLongPress={onCardLongPress}
+            delayLongPress={380}
             disabled={busy}
             accessibilityLabel="Reject quotation"
           >
@@ -148,11 +150,13 @@ export const RavenQuotationDraftCard: React.FC<Props> = ({
           <TouchableOpacity
             style={[styles.btn, styles.acceptBtn]}
             onPress={onAccept}
+            onLongPress={onCardLongPress}
+            delayLongPress={380}
             disabled={busy}
             accessibilityLabel="Accept and submit quotation"
           >
             {busy ? (
-              <ActivityIndicator color={Colors.WINE} size="small" />
+              <ActivityIndicator color={Colors.WHITE} size="small" />
             ) : (
               <Text style={styles.acceptText}>Accept</Text>
             )}
@@ -213,10 +217,10 @@ const styles = StyleSheet.create({
   },
   rejectBtn: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: RavenLight.border,
-    backgroundColor: RavenLight.panel,
+    borderColor: '#EF9A9A',
+    backgroundColor: '#FFEBEE',
   },
-  rejectText: { fontSize: 14, fontWeight: '700', color: RavenLight.text },
-  acceptBtn: { backgroundColor: RavenLight.accent },
-  acceptText: { fontSize: 14, fontWeight: '800', color: RavenLight.bubbleMineText },
+  rejectText: { fontSize: 14, fontWeight: '700', color: Colors.ERROR },
+  acceptBtn: { backgroundColor: Colors.SUCCESS },
+  acceptText: { fontSize: 14, fontWeight: '800', color: Colors.WHITE },
 });

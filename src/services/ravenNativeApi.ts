@@ -172,6 +172,10 @@ export type RavenMessageRow = {
   /** ERPNext / Frappe doc shared into chat (“Send a Raven” from Desk). */
   link_doctype?: string;
   link_document?: string;
+  /** JSON map of emoji reactions (Raven `message_reactions`). */
+  message_reactions?: string;
+  /** Raven Check — forwarded copy of another message. */
+  is_forwarded?: number | boolean;
 };
 
 /** Unix ms for sorting (creation, then modified). Handles Frappe datetimes, numeric unix, and missing `T`. */
@@ -549,6 +553,9 @@ function mapApiRecordToRavenMessageRow(m: Record<string, unknown>): RavenMessage
     replied_message_details: m.replied_message_details,
     link_doctype: ldt,
     link_document: ldn,
+    message_reactions:
+      m.message_reactions != null ? String(m.message_reactions) : undefined,
+    is_forwarded: m.is_forwarded as RavenMessageRow['is_forwarded'],
   };
 }
 
@@ -770,10 +777,86 @@ export function ravenMergeMessageRowFromSendResponse(rows: RavenMessageRow[], se
   return mapMessagePlainText([sent, ...rows]);
 }
 
-function workspaceMatches(channelWorkspace: unknown, expected: string): boolean {
-  if (!expected?.trim()) return true;
-  if (channelWorkspace == null || channelWorkspace === '') return false;
-  return String(channelWorkspace).trim().toLowerCase() === expected.trim().toLowerCase();
+function workspaceMatches(
+  channelWorkspace: unknown,
+  expectedDocId: string,
+  aliasKeys?: Iterable<string>
+): boolean {
+  if (!expectedDocId?.trim()) return true;
+  const cw = channelWorkspace == null ? '' : String(channelWorkspace).trim().toLowerCase();
+  if (!cw) return false;
+  const exp = expectedDocId.trim().toLowerCase();
+  if (cw === exp) return true;
+  if (aliasKeys) {
+    for (const a of aliasKeys) {
+      const key = String(a).trim().toLowerCase();
+      if (key && cw === key) return true;
+    }
+  }
+  return false;
+}
+
+/** Match Raven Workspace by document `name` or display `workspace_name`. */
+export function matchRavenWorkspaceRow(
+  hint: string,
+  rows: RavenWorkspaceRow[]
+): RavenWorkspaceRow | null {
+  const h = hint.trim().toLowerCase();
+  if (!h || !rows.length) return null;
+  return (
+    rows.find((w) => String(w.name || '').trim().toLowerCase() === h) ??
+    rows.find((w) => String(w.workspace_name || '').trim().toLowerCase() === h) ??
+    null
+  );
+}
+
+/** Resolve env / UI label to Raven Workspace document `name` when possible. */
+export function resolveRavenWorkspaceDocId(hint: string, rows?: RavenWorkspaceRow[]): string {
+  const t = hint.trim();
+  if (!t) return '';
+  if (rows?.length) {
+    const m = matchRavenWorkspaceRow(t, rows);
+    if (m?.name) return String(m.name).trim();
+  }
+  return t;
+}
+
+function workspaceAliasKeys(hint: string, rows: RavenWorkspaceRow[]): Set<string> {
+  const keys = new Set<string>();
+  const t = hint.trim().toLowerCase();
+  if (t) keys.add(t);
+  const row = matchRavenWorkspaceRow(hint, rows);
+  if (row) {
+    const n = String(row.name || '').trim().toLowerCase();
+    const wn = String(row.workspace_name || '').trim().toLowerCase();
+    if (n) keys.add(n);
+    if (wn) keys.add(wn);
+  }
+  return keys;
+}
+
+const workspaceChannelMismatchWarned = new Set<string>();
+
+function filterChannelsForWorkspace(
+  list: RavenChannelRow[],
+  docId: string,
+  aliasKeys: Set<string>
+): RavenChannelRow[] {
+  const inWs = list.filter((c) => workspaceMatches(c.workspace, docId, aliasKeys));
+  if (inWs.length > 0) return inWs;
+  const orphanDms = list.filter(
+    (c) => isDMChannelRow(c) && (c.workspace == null || String(c.workspace).trim() === '')
+  );
+  if (orphanDms.length > 0) return orphanDms;
+  const channelWorkspaceIds = [
+    ...new Set(list.map((c) => String(c.workspace || '').trim()).filter(Boolean)),
+  ];
+  if (channelWorkspaceIds.length === 1) {
+    const onlyWs = channelWorkspaceIds[0];
+    const matched = list.filter((c) => workspaceMatches(c.workspace, onlyWs, aliasKeys));
+    if (matched.length > 0) return matched;
+  }
+  return list;
 }
 
 /** Raven channel list methods return either `message: [...]` or `message: { channels, dm_channels }`. */
@@ -1058,6 +1141,13 @@ export async function listChannelsForWorkspace(
   workspace: string,
   currentUserEmail?: string | null
 ): Promise<RavenChannelRow[]> {
+  const wsHint = workspace.trim();
+  if (!wsHint) return [];
+
+  const wsRows = await fetchRavenWorkspaces();
+  const docId = resolveRavenWorkspaceDocId(wsHint, wsRows);
+  const aliasKeys = workspaceAliasKeys(wsHint, wsRows);
+
   // Prefer Raven's whitelisted API — uses the same membership/workspace rules as the web app.
   // Plain GET /api/resource/Raven Channel often returns [] for the integration user (permissions / link fields).
   try {
@@ -1071,24 +1161,31 @@ export async function listChannelsForWorkspace(
       });
       list = channelsFromMethodResponse(data);
     }
-    const inWs = list.filter((c) => workspaceMatches(c.workspace, workspace));
-    if (inWs.length > 0) return finalizeChannelListWithProfiles(inWs, currentUserEmail);
-    if (list.length > 0) {
-      console.warn(
-        LOG,
-        'get_channels returned',
-        list.length,
-        'channels but none matched workspace',
-        JSON.stringify(workspace),
-        '- using full list (check EXPO_PUBLIC_RAVEN_WORKSPACE spelling vs Raven Workspace.name)'
-      );
-      return finalizeChannelListWithProfiles(list, currentUserEmail);
+    const filtered = filterChannelsForWorkspace(list, docId, aliasKeys);
+    if (filtered.length > 0) {
+      const usedFallback =
+        filtered.length === list.length &&
+        list.length > 0 &&
+        !list.some((c) => workspaceMatches(c.workspace, docId, aliasKeys));
+      if (usedFallback && !workspaceChannelMismatchWarned.has(docId)) {
+        workspaceChannelMismatchWarned.add(docId);
+        console.warn(
+          LOG,
+          'get_channels returned',
+          list.length,
+          'channels but none matched workspace',
+          JSON.stringify(docId),
+          wsHint !== docId ? `(from ${JSON.stringify(wsHint)})` : '',
+          '- showing all session channels'
+        );
+      }
+      return finalizeChannelListWithProfiles(filtered, currentUserEmail);
     }
   } catch (e) {
     console.warn(LOG, 'get_channels / get_all_channels failed, trying resource API', e);
   }
 
-  const filters: any[][] = [['workspace', '=', workspace]];
+  const filters: any[][] = [['workspace', '=', docId]];
   try {
     const rows = await ravenListResourceRows('Raven Channel', {
       filters,
@@ -1271,10 +1368,11 @@ export function getConfiguredRavenWorkspace(): string | undefined {
 }
 
 export async function resolveRavenWorkspaceId(explicit?: string): Promise<string | null> {
-  if (explicit?.trim()) return explicit.trim();
-  const fromEnv = getConfiguredRavenWorkspace();
-  if (fromEnv) return fromEnv;
+  const hint = (explicit?.trim() || getConfiguredRavenWorkspace() || '').trim();
   const rows = await fetchRavenWorkspaces();
+  if (hint) {
+    return resolveRavenWorkspaceDocId(hint, rows) || hint;
+  }
   return pickRavenWorkspaceId(rows);
 }
 
@@ -1331,6 +1429,8 @@ export async function listMessagesForChannel(
     'replied_message_details',
     'link_doctype',
     'link_document',
+    'message_reactions',
+    'is_forwarded',
   ];
   const tryFilters: any[][][] = [
     [['channel_id', '=', channelId]],
@@ -1775,6 +1875,8 @@ async function scanInboxFromResource(
     'replied_message_details',
     'link_doctype',
     'link_document',
+    'message_reactions',
+    'is_forwarded',
   ];
   const tryFilters: any[][][] = [
     [['channel_id', '=', cid]],
@@ -2117,8 +2219,10 @@ export async function uploadRavenFileWithMessage(
 }
 
 /** Workspace members (whitelist API), merged with resource rows for `custom_supplier` / Supplier link. */
-export async function fetchWorkspaceMembers(workspaceId: string): Promise<RavenWorkspaceMemberRow[]> {
-  const ws = workspaceId.trim();
+const workspaceMembersInflight = new Map<string, Promise<RavenWorkspaceMemberRow[]>>();
+
+async function fetchWorkspaceMembersResolved(workspaceDocId: string): Promise<RavenWorkspaceMemberRow[]> {
+  const ws = workspaceDocId.trim();
   if (!ws) return [];
   let base: RavenWorkspaceMemberRow[] = [];
   try {
@@ -2136,7 +2240,11 @@ export async function fetchWorkspaceMembers(workspaceId: string): Promise<RavenW
       }
     }
   } catch (e) {
-    console.warn(LOG, 'fetch_workspace_members', e);
+    const status = (e as { response?: { status?: number } })?.response?.status;
+    // Missing workspace / permission — resource list below is the fallback.
+    if (status !== 404 && status !== 403) {
+      console.warn(LOG, 'fetch_workspace_members', e);
+    }
   }
 
   try {
@@ -2215,6 +2323,26 @@ export async function fetchWorkspaceMembers(workspaceId: string): Promise<RavenW
   } catch (e) {
     console.warn(LOG, 'fetchWorkspaceMembers resource merge', e);
     return finalizeWorkspaceMembersWithImages(base);
+  }
+}
+
+export async function fetchWorkspaceMembers(workspaceId: string): Promise<RavenWorkspaceMemberRow[]> {
+  const hint = workspaceId.trim();
+  if (!hint) return [];
+
+  const wsRows = await fetchRavenWorkspaces();
+  const ws = resolveRavenWorkspaceDocId(hint, wsRows) || hint;
+  const inflight = workspaceMembersInflight.get(ws);
+  if (inflight) return inflight;
+
+  const promise = fetchWorkspaceMembersResolved(ws);
+  workspaceMembersInflight.set(ws, promise);
+  try {
+    return await promise;
+  } finally {
+    if (workspaceMembersInflight.get(ws) === promise) {
+      workspaceMembersInflight.delete(ws);
+    }
   }
 }
 
@@ -2518,4 +2646,57 @@ export async function fetchRavenChannelWorkspaceId(channelId: string): Promise<s
     console.warn(LOG, 'fetchRavenChannelWorkspaceId', e);
     return null;
   }
+}
+
+/** Receiver for `raven.api.raven_message.forward_message` — user DM or channel. */
+export type RavenForwardReceiver = {
+  name: string;
+  type: string;
+};
+
+/** Build Frappe payload for forward API from a loaded message row. */
+export function ravenMessageRowToForwardPayload(row: RavenMessageRow): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    doctype: 'Raven Message',
+    text: row.text ?? '',
+    message_type: row.message_type ?? 'Text',
+    channel_id: row.channel_id,
+  };
+  if (row.file) payload.file = row.file;
+  if (row.file_thumbnail) payload.file_thumbnail = row.file_thumbnail;
+  if (row.thumbnail_width != null) payload.thumbnail_width = row.thumbnail_width;
+  if (row.thumbnail_height != null) payload.thumbnail_height = row.thumbnail_height;
+  if (row.image_width != null) payload.image_width = row.image_width;
+  if (row.image_height != null) payload.image_height = row.image_height;
+  if (row.link_doctype) payload.link_doctype = row.link_doctype;
+  if (row.link_document) payload.link_document = row.link_document;
+  return payload;
+}
+
+export async function forwardRavenMessage(
+  receivers: RavenForwardReceiver[],
+  message: RavenMessageRow
+): Promise<void> {
+  const list = Array.isArray(receivers) ? receivers.filter((r) => String(r?.name || '').trim()) : [];
+  if (!list.length) throw new Error('Select at least one person or channel.');
+  await ravenCallFrappeMethod('raven.api.raven_message.forward_message', {
+    message_receivers: list,
+    forwarded_message: ravenMessageRowToForwardPayload(message),
+  });
+}
+
+export async function reactToRavenMessage(
+  messageId: string,
+  reaction: string,
+  opts?: { isCustom?: boolean; emojiName?: string }
+): Promise<void> {
+  const id = String(messageId || '').trim();
+  const emoji = String(reaction || '').trim();
+  if (!id || !emoji) throw new Error('Message and reaction are required.');
+  await ravenCallFrappeMethod('raven.api.reactions.react', {
+    message_id: id,
+    reaction: emoji,
+    is_custom: opts?.isCustom ? 1 : 0,
+    emoji_name: opts?.emojiName ?? null,
+  });
 }

@@ -5,6 +5,7 @@
  */
 
 import { encodeErpFileUrl } from '../utils/erpImageUrl';
+import { readErpDocLineImage } from '../utils/erpDocLineImageField';
 
 import {
   User,
@@ -526,17 +527,57 @@ const isNewProduct = (erpItem: any): boolean => {
 /**
  * Map ERPNext Sales Order to Order type
  */
-export const mapERPSalesOrderToOrder = (erpOrder: any): Order => {
-  const shippingAddr = mapERPAddressToUserAddress(erpOrder.shipping_address_doc);
-  const billingAddr = mapERPAddressToUserAddress(erpOrder.billing_address_doc);
+function mapFormattedErpAddressText(text: string, addressName?: string): UserAddress | undefined {
+  const cleaned = String(text || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .trim();
+  if (!cleaned) return undefined;
 
-  console.log('📦 Raw ERPNext order shipping address data:', {
-    name: erpOrder.name,
-    shipping_address_name: erpOrder.shipping_address_name,
-    shipping_address_doc: erpOrder.shipping_address_doc,
-    shipping_address_doc_keys: erpOrder.shipping_address_doc ? Object.keys(erpOrder.shipping_address_doc) : null,
-    mapped_shippingAddr: shippingAddr,
-  });
+  const lines = cleaned
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return undefined;
+
+  let phone = '';
+  const bodyLines: string[] = [];
+  for (const line of lines) {
+    const phoneMatch = line.match(/^phone:\s*(.+)$/i);
+    if (phoneMatch) {
+      phone = phoneMatch[1].trim();
+    } else {
+      bodyLines.push(line);
+    }
+  }
+
+  const [line1 = '', ...rest] = bodyLines;
+  const cityState = rest.length ? rest[rest.length - 1] : '';
+  const [city = '', state = ''] = cityState.split(',').map((part) => part.trim());
+
+  return {
+    id: addressName || '',
+    userId: '',
+    type: 'home',
+    firstName: '',
+    lastName: '',
+    addressLine1: line1,
+    city,
+    state,
+    postalCode: '',
+    country: rest.length > 1 ? rest.slice(0, -1).join(', ') : '',
+    phone,
+    isDefault: false,
+  };
+}
+
+export const mapERPSalesOrderToOrder = (erpOrder: any): Order => {
+  const shippingAddr =
+    mapERPAddressToUserAddress(erpOrder.shipping_address_doc) ||
+    mapFormattedErpAddressText(erpOrder.shipping_address, erpOrder.shipping_address_name);
+  const billingAddr =
+    mapERPAddressToUserAddress(erpOrder.billing_address_doc) ||
+    mapFormattedErpAddressText(erpOrder.billing_address, erpOrder.billing_address_name);
 
   // Create default address if not found
   const defaultAddress: UserAddress = {
@@ -555,12 +596,6 @@ export const mapERPSalesOrderToOrder = (erpOrder: any): Order => {
   };
 
   const status = mapERPOrderStatusFromDocstatus(erpOrder.docstatus, erpOrder.status);
-  console.log('📦 Mapping ERPNext order:', {
-    name: erpOrder.name,
-    docstatus: erpOrder.docstatus,
-    workflow_status: erpOrder.status,
-    mappedStatus: status,
-  });
 
   return {
     id: erpOrder.name,
@@ -577,6 +612,7 @@ export const mapERPSalesOrderToOrder = (erpOrder: any): Order => {
     total: erpOrder.grand_total || 0,
     shippingAddress: shippingAddr || defaultAddress,
     billingAddress: billingAddr || defaultAddress,
+    shippingAddressName: String(erpOrder.shipping_address_name || '').trim() || undefined,
     paymentMethod: {
       id: erpOrder.name,
       userId: erpOrder.customer,
@@ -625,18 +661,23 @@ const mapERPOrderStatusFromDocstatus = (docstatus: number, workflowStatus?: stri
  * Map ERPNext Sales Order Item to OrderItem
  */
 const mapERPSalesOrderItemToOrderItem = (erpItem: any): OrderItem => {
+  const lineImageRaw = readErpDocLineImage(erpItem);
+  const lineImage = lineImageRaw ? encodeErpFileUrl(lineImageRaw) : '';
+  const customColor = String(erpItem.custom_color ?? '').trim();
+  const customSize = String(erpItem.custom_size ?? '').trim();
+  const itemName = String(erpItem.item_name || erpItem.item_code || '').trim();
   return {
     id: erpItem.name,
     productId: erpItem.item_code,
     product: {
       id: erpItem.item_code,
-      name: erpItem.item_name,
+      name: itemName,
       description: '',
       price: erpItem.rate,
       category: '',
       subcategory: '',
       brand: '',
-      images: [],
+      images: lineImage ? [lineImage] : [],
       colors: [],
       sizes: [],
       inStock: true,
@@ -649,17 +690,25 @@ const mapERPSalesOrderItemToOrderItem = (erpItem: any): OrderItem => {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     },
-    color: {
-      id: erpItem.custom_color_id || '1',
-      name: erpItem.custom_color || 'Default',
-      hexCode: '#000000',
-      inStock: true,
-    },
-    size: {
-      id: erpItem.custom_size_id || '1',
-      name: erpItem.custom_size || 'M',
-      inStock: true,
-    },
+    ...(customColor
+      ? {
+          color: {
+            id: String(erpItem.custom_color_id || customColor),
+            name: customColor,
+            hexCode: '#000000',
+            inStock: true,
+          },
+        }
+      : {}),
+    ...(customSize
+      ? {
+          size: {
+            id: String(erpItem.custom_size_id || customSize),
+            name: customSize,
+            inStock: true,
+          },
+        }
+      : {}),
     quantity: erpItem.qty,
     price: erpItem.rate,
   };
@@ -671,11 +720,18 @@ const mapERPSalesOrderItemToOrderItem = (erpItem: any): OrderItem => {
 export const mapERPAddressToUserAddress = (erpAddress: any): UserAddress | undefined => {
   if (!erpAddress) return undefined;
 
+  const line1 = String(erpAddress.address_line1 || '').trim();
+  const city = String(erpAddress.city || '').trim();
+  const state = String(erpAddress.state || '').trim();
+  if (!line1 && !city && !state && !String(erpAddress.address_title || '').trim()) {
+    return undefined;
+  }
+
   return {
     id: erpAddress.name || '',
     userId: erpAddress.customer || '',
     type: 'home',
-    firstName: erpAddress.first_name || '',
+    firstName: erpAddress.first_name || erpAddress.address_title || '',
     lastName: erpAddress.last_name || '',
     addressLine1: erpAddress.address_line1 || '',
     addressLine2: erpAddress.address_line2,
@@ -785,13 +841,18 @@ export const mapCartToERPSalesOrder = (
   return {
     customer: customerId,
     company: company,
-    items: cart.map((item) => ({
-      item_code: item.productId,
-      qty: item.quantity,
-      rate: item.price,
-      custom_color: item.color.name,
-      custom_size: item.size.name,
-    })),
+    items: cart.map((item) => {
+      const row: Record<string, unknown> = {
+        item_code: item.productId,
+        qty: item.quantity,
+        rate: item.price,
+      };
+      const color = item.color?.name?.trim();
+      const size = item.size?.name?.trim();
+      if (color) row.custom_color = color;
+      if (size) row.custom_size = size;
+      return row;
+    }),
   };
 };
 

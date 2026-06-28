@@ -1,10 +1,22 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
+import { Ionicons } from '@expo/vector-icons';
 import { getERPNextClient } from '../../services/erpnext';
 import { useUserSession } from '../../context/UserContext';
 import { useSessionCustomerId } from '../../hooks/useSessionCustomerId';
 import { navigateToSalesInvoiceDetail } from '../../utils/erpDocumentNavigation';
+import {
+  supplierQuotationAllowsSupplierEdit,
+  supplierQuotationAllowsSupplierResend,
+  supplierQuotationStatusLabelAndKind,
+  type SupplierQuotationUiStatusKind,
+} from '../../utils/chatQuotationDraftMessage';
+import { Colors } from '../../constants/colors';
+import { Spacing } from '../../constants/spacing';
+import { pickLineDisplayImageUri } from '../../utils/erpLineItemImages';
+import { erpLineItemTitle } from '../../utils/erpLineItemDisplay';
 import {
   ErpDocumentPreviewLayout,
   ErpDocSheet,
@@ -19,6 +31,23 @@ import {
   formatErpDocDate,
   formatErpDocMoney,
 } from '../../components/ErpDocumentPreviewLayout';
+
+function quotationStatusAccent(
+  kind: SupplierQuotationUiStatusKind,
+  fallbackStatus: string,
+  docstatus?: number
+): string {
+  switch (kind) {
+    case 'rejected':
+      return Colors.ERROR;
+    case 'pending':
+      return Colors.WARNING;
+    case 'approved':
+      return Colors.SUCCESS;
+    default:
+      return erpDocStatusAccent(fallbackStatus, docstatus);
+  }
+}
 
 export const SupplierQuotationDetailScreen: React.FC = () => {
   const navigation = useNavigation();
@@ -36,6 +65,7 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [linkedInvoices, setLinkedInvoices] = useState<Record<string, unknown>[]>([]);
   const [linksLoading, setLinksLoading] = useState(false);
+  const [lineImages, setLineImages] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -74,12 +104,55 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
     };
   }, [name, customerScope]);
 
-  const items = Array.isArray(doc?.items) ? (doc!.items as Record<string, unknown>[]) : [];
+  const items = useMemo(
+    () => (Array.isArray(doc?.items) ? (doc!.items as Record<string, unknown>[]) : []),
+    [doc]
+  );
+
+  const linkedSalesOrderName = useMemo(() => {
+    const orderField =
+      String(process.env.EXPO_PUBLIC_ERPNEXT_SQ_ORDER_LINK_FIELD || 'custom_order').trim() || 'custom_order';
+    return String(doc?.[orderField] || '').trim();
+  }, [doc]);
+
+  useEffect(() => {
+    if (!doc || !items.length) {
+      setLineImages({});
+      return;
+    }
+    let cancelled = false;
+    void getERPNextClient()
+      .resolveSupplierQuotationLineImages(name, items, linkedSalesOrderName)
+      .then(({ supplier, fallback }) => {
+        if (cancelled) return;
+        const merged: Record<string, string> = {};
+        for (const line of items) {
+          const code = String(line.item_code || '').trim();
+          if (!code) continue;
+          const uri = pickLineDisplayImageUri(supplier[code], fallback[code]);
+          if (uri) merged[code] = uri;
+        }
+        setLineImages(merged);
+      })
+      .catch(() => {
+        if (!cancelled) setLineImages({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [doc, name, items, linkedSalesOrderName]);
+
   const currency = String(doc?.currency || 'GHS');
-  const status = String(doc?.status || (Number(doc?.docstatus) === 0 ? 'Draft' : 'Submitted'));
+  const quotationStatus = useMemo(() => supplierQuotationStatusLabelAndKind(doc), [doc]);
+  const status = quotationStatus.label;
   const statusColor = useMemo(
-    () => erpDocStatusAccent(status, doc?.docstatus != null ? Number(doc.docstatus) : undefined),
-    [status, doc?.docstatus]
+    () =>
+      quotationStatusAccent(
+        quotationStatus.kind,
+        status,
+        doc?.docstatus != null ? Number(doc.docstatus) : undefined
+      ),
+    [quotationStatus.kind, status, doc?.docstatus]
   );
   const grandTotal = formatErpDocMoney(doc?.grand_total, currency);
   const supplierLabel = String(doc?.supplier_name || doc?.supplier || '—');
@@ -93,6 +166,20 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
 
   const primaryInvoice = linkedInvoices[0];
   const primaryInvoiceName = String(primaryInvoice?.name || '').trim();
+  const canEdit = isSupplierPortal && supplierQuotationAllowsSupplierEdit(doc);
+  const canResend = isSupplierPortal && supplierQuotationAllowsSupplierResend(doc);
+
+  const onEditQuotation = () => {
+    (navigation as { navigate: (n: string, p?: object) => void }).navigate('SupplierQuotationCompose', {
+      quotationName: name,
+    });
+  };
+
+  const onResendQuotation = () => {
+    (navigation as { navigate: (n: string, p?: object) => void }).navigate('SupplierQuotationCompose', {
+      resendFromQuotation: name,
+    });
+  };
 
   return (
     <ErpDocumentPreviewLayout
@@ -110,7 +197,7 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
             statusLabel={status}
             statusColor={statusColor}
             amount={grandTotal}
-            amountLabel="Quoted total"
+            amountLabel="Quote budget"
             subtitle={
               doc.transaction_date ? `Submitted ${formatErpDocDate(doc.transaction_date)}` : undefined
             }
@@ -164,21 +251,49 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
             </ErpDocLinkedSection>
           ) : null}
 
+          {canEdit || canResend ? (
+            <View style={styles.actionRow}>
+              {canEdit ? (
+                <TouchableOpacity style={styles.actionBtn} onPress={onEditQuotation} activeOpacity={0.85}>
+                  <Ionicons name="create-outline" size={20} color={Colors.WHITE} />
+                  <Text style={styles.actionBtnText}>Edit quotation</Text>
+                </TouchableOpacity>
+              ) : null}
+              {canResend ? (
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.actionBtnSecondary]}
+                  onPress={onResendQuotation}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="refresh-outline" size={20} color={Colors.WINE} />
+                  <Text style={[styles.actionBtnText, styles.actionBtnTextSecondary]}>Revise & resend</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : null}
+
           <ErpDocSection title={`Items · ${items.length}`}>
             {items.length === 0 ? (
               <ErpDocEmptyState title="No line items" />
             ) : (
               <ErpDocItemsList>
-                {items.map((line, idx) => (
+                {items.map((line, idx) => {
+                  const code = String(line.item_code || '').trim();
+                  return (
                   <ErpDocLineItem
                     key={String(line.name || idx)}
-                    title={String(line.item_name || line.description || line.item_code || 'Item')}
+                    title={erpLineItemTitle(line.item_name, {
+                      description: line.description,
+                      itemCode: line.item_code,
+                    })}
                     qty={line.qty}
                     rate={line.rate}
                     amount={line.amount}
                     currency={currency}
+                    imageUri={code ? lineImages[code] : undefined}
                   />
-                ))}
+                );
+                })}
               </ErpDocItemsList>
             )}
           </ErpDocSection>
@@ -187,3 +302,37 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
     </ErpDocumentPreviewLayout>
   );
 };
+
+const styles = StyleSheet.create({
+  actionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: Spacing.MD,
+  },
+  actionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    flexGrow: 1,
+    flexBasis: '45%',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: Colors.WINE,
+  },
+  actionBtnSecondary: {
+    backgroundColor: Colors.WHITE,
+    borderWidth: 1,
+    borderColor: Colors.WINE,
+  },
+  actionBtnText: {
+    color: Colors.WHITE,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  actionBtnTextSecondary: {
+    color: Colors.WINE,
+  },
+});

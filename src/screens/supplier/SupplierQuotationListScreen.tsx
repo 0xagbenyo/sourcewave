@@ -17,9 +17,8 @@ import { Spacing } from '../../constants/spacing';
 import { useSupplierDocumentId } from '../../hooks/useSupplierDocumentId';
 import { getERPNextClient } from '../../services/erpnext';
 import {
-  supplierQuotationWorkflowStateAllowsBuyerReview,
-  supplierQuotationWorkflowStateIsApprovedLike,
-  supplierQuotationWorkflowStateIsRejectedLike,
+  supplierQuotationStatusLabelAndKind,
+  type SupplierQuotationUiStatusKind,
 } from '../../utils/chatQuotationDraftMessage';
 import { SupplierQuotationPdfModal } from '../../components/SupplierQuotationPdfModal';
 import { SupplierQuotationComposeScreen } from './SupplierQuotationComposeScreen';
@@ -28,7 +27,7 @@ import type { SupplierStackParamList } from '../../types';
 
 type R = RouteProp<SupplierStackParamList, 'SupplierQuotationList'>;
 
-type WfKind = 'rejected' | 'pending' | 'approved' | 'neutral';
+type WfKind = SupplierQuotationUiStatusKind;
 type SortMode = 'recent' | 'status_az' | 'status_za';
 type StatusFilter = 'all' | WfKind;
 
@@ -43,17 +42,7 @@ function workflowListLabelAndKind(row: {
   status?: string;
   docstatus?: number;
 }): { label: string; kind: WfKind } {
-  const wf = String(row.workflow_state ?? '').trim();
-  if (wf) {
-    if (supplierQuotationWorkflowStateIsRejectedLike(wf)) return { label: wf, kind: 'rejected' };
-    if (supplierQuotationWorkflowStateAllowsBuyerReview(wf)) return { label: wf, kind: 'pending' };
-    if (supplierQuotationWorkflowStateIsApprovedLike(wf)) return { label: wf, kind: 'approved' };
-    return { label: wf, kind: 'neutral' };
-  }
-  if (row.docstatus === 0) return { label: 'Draft', kind: 'neutral' };
-  const st = String(row.status ?? '').trim();
-  if (st) return { label: st, kind: 'neutral' };
-  return { label: '—', kind: 'neutral' };
+  return supplierQuotationStatusLabelAndKind(row as Record<string, unknown>);
 }
 
 function chipColors(kind: WfKind): { bg: string; fg: string; bd: string } {
@@ -292,7 +281,10 @@ export const SupplierQuotationListScreen: React.FC = () => {
                       style={[styles.rowTouchable, active && styles.rowTouchableActive]}
                       onPress={() => {
                         setActiveRowName(name);
-                        setPdfModalDoc(name);
+                        (navigation as { navigate: (n: string, p?: object) => void }).navigate(
+                          'SupplierQuotationDetail',
+                          { name }
+                        );
                       }}
                       activeOpacity={0.72}
                     >

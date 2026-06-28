@@ -37,12 +37,22 @@ export function navigateToSalesInvoiceDetail(
   navigation.navigate('InvoiceDetails', { invoiceId: name });
 }
 
-export function navigateToSalesOrderDetail(navigation: Nav, orderName: string): void {
+export function navigateToSalesOrderDetail(
+  navigation: Nav,
+  orderName: string,
+  options?: { replace?: boolean }
+): void {
   const orderId = orderName.trim();
   if (!orderId) return;
-  if (rootNavigationRef.isReady()) {
-    rootNavigationRef.navigate('OrderDetails', { orderId });
+  const params = { orderId };
+  const nav = navigation as Nav & { replace?: (name: string, params?: object) => void };
+  if (options?.replace && typeof nav.replace === 'function') {
+    nav.replace('OrderDetails', params);
     return;
   }
-  navigation.navigate('OrderDetails', { orderId });
+  if (rootNavigationRef.isReady()) {
+    rootNavigationRef.navigate('OrderDetails', params);
+    return;
+  }
+  navigation.navigate('OrderDetails', params);
 }

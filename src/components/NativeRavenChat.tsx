@@ -36,6 +36,14 @@ import { RavenMessageAttachmentBody } from './RavenMessageAttachmentBody';
 import { RavenChannelPeerAvatar } from './RavenChannelPeerAvatar';
 import { RavenInlineReplyQuote } from './RavenInlineReplyQuote';
 import { RavenSharedInChatList } from './RavenSharedInChatList';
+import { RavenMessageReactionsRow } from './RavenMessageReactionsRow';
+import { RavenMessageActionSheet } from './RavenMessageActionSheet';
+import { RavenForwardMessageModal } from './RavenForwardMessageModal';
+import { RavenComposerEmojiSheet } from './RavenComposerEmojiSheet';
+import { RavenChatAttachTrigger } from './RavenChatAttachTrigger';
+import { useRavenMessageActions } from '../hooks/useRavenMessageActions';
+import { useSqPaymentActionRegistry } from '../hooks/useSqPaymentActionRegistry';
+import { ravenMessageIsForwarded } from '../utils/ravenMessageReactions';
 import { ravenMessageHasVisualMedia, ravenSameMessageOwner } from '../utils/ravenAttachment';
 import {
   formatChatDateSeparator,
@@ -86,6 +94,11 @@ import {
   type RavenPendingAttachment,
 } from '../utils/ravenMediaPick';
 import { tryParseQuotationDraftFromMessage } from '../utils/chatQuotationDraftMessage';
+import {
+  notifyQuotationAcceptedInChat,
+  notifyQuotationRejectedInChat,
+  type ErpDocChatContext,
+} from '../utils/erpDocChatStatusReply';
 import { RavenQuotationDraftCard } from './RavenQuotationDraftCard';
 import { RavenLinkedSupplierQuotationMessage } from './RavenLinkedSupplierQuotationMessage';
 import { RavenLinkedSalesOrderMessage } from './RavenLinkedSalesOrderMessage';
@@ -93,6 +106,7 @@ import { RavenLinkedSalesInvoiceMessage } from './RavenLinkedSalesInvoiceMessage
 import { RavenLinkedGenericDocMessage } from './RavenLinkedGenericDocMessage';
 import { getERPNextClient } from '../services/erpnext';
 import { userFacingError } from '../utils/userFacingError';
+import { userFacingFrappeError } from '../utils/frappeHttpError';
 import type { RootStackParamList } from '../types';
 import type { NavigationProp } from '@react-navigation/native';
 
@@ -147,6 +161,37 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   const [error, setError] = useState<string | null>(null);
   const [quotationActionByName, setQuotationActionByName] = useState<Record<string, 'accepted' | 'rejected'>>({});
   const [quotationActionBusy, setQuotationActionBusy] = useState<string | null>(null);
+  const viewerFrappeName = String(user?.user || user?.email || '').trim();
+  const {
+    actionsMessage,
+    actionsExtras,
+    forwardMessage,
+    setForwardMessage,
+    openMessageActions,
+    closeMessageActions,
+    onActionReply,
+    onActionForward,
+    onActionReact,
+    toggleReaction,
+  } = useRavenMessageActions(setMessages, viewerFrappeName, setReplyTo);
+
+  const { registerSqPaymentAction, resolveSqPayment } = useSqPaymentActionRegistry();
+
+  const [composerEmojiOpen, setComposerEmojiOpen] = useState(false);
+  const insertComposerEmoji = useCallback((emoji: string) => {
+    setDraft((d) => d + emoji);
+    setComposerEmojiOpen(false);
+  }, []);
+
+  const openMessageActionsForItem = useCallback(
+    (item: RavenMessageRow, sqLink?: string | null) => {
+      const sq = String(sqLink || '').trim();
+      openMessageActions(item, sq ? { sqName: sq } : undefined);
+    },
+    [openMessageActions]
+  );
+
+  const isSupplierPortalChat = user?.appMode === 'supplier' || !!user?.supplierId?.trim();
   const [ravenUserProfilesById, setRavenUserProfilesById] = useState<
     Record<string, { full_name?: string; user_image?: string | null }>
   >({});
@@ -521,7 +566,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   }, [channel?.name]);
 
   const handleAcceptQuotationDraft = useCallback(
-    async (sqName: string) => {
+    async (sqName: string, chat?: ErpDocChatContext) => {
       const n = sqName.trim();
       if (!n) return;
       setQuotationActionBusy(n);
@@ -536,11 +581,16 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
         } catch (invErr) {
           console.warn('[Supplier Quotation] Could not auto-create sales invoice:', invErr);
         }
+        notifyQuotationAcceptedInChat(n, {
+          ravenChannelId: chat?.ravenChannelId ?? channel?.name,
+          linkMessageId: chat?.linkMessageId,
+          sessionEmail: user?.email ?? null,
+        });
         setQuotationActionByName((prev) => ({ ...prev, [n]: 'accepted' }));
         const ch = channel?.name;
         if (ch) await loadMessages(ch, { silent: true });
       } catch (e: unknown) {
-        Alert.alert('Quotation', e instanceof Error ? e.message : 'Could not submit.');
+        Alert.error('Quotation', userFacingFrappeError(e, userFacingError(e, 'Could not submit.')));
       } finally {
         setQuotationActionBusy(null);
       }
@@ -549,22 +599,27 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   );
 
   const handleRejectQuotationDraft = useCallback(
-    async (sqName: string) => {
+    async (sqName: string, chat?: ErpDocChatContext) => {
       const n = sqName.trim();
       if (!n) return;
       setQuotationActionBusy(n);
       try {
         await getERPNextClient().rejectSupplierQuotationDraft(n);
+        notifyQuotationRejectedInChat(n, {
+          ravenChannelId: chat?.ravenChannelId ?? channel?.name,
+          linkMessageId: chat?.linkMessageId,
+          sessionEmail: user?.email ?? null,
+        });
         setQuotationActionByName((prev) => ({ ...prev, [n]: 'rejected' }));
         const ch = channel?.name;
         if (ch) await loadMessages(ch, { silent: true });
       } catch (e: unknown) {
-        Alert.alert('Quotation', e instanceof Error ? e.message : 'Could not reject.');
+        Alert.error('Quotation', userFacingFrappeError(e, userFacingError(e, 'Could not reject.')));
       } finally {
         setQuotationActionBusy(null);
       }
     },
-    [channel?.name, loadMessages]
+    [channel?.name, loadMessages, user?.email]
   );
 
   const openQuotationComposeFromChat = useCallback(() => {
@@ -592,7 +647,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       }));
       setPendingAttachments((prev) => [...prev, ...picked]);
     } catch (e: any) {
-      Alert.alert('File', e?.message || 'Could not pick a file.');
+      Alert.error('File', e?.message || 'Could not pick a file.');
     }
   }, [channel?.name]);
 
@@ -645,7 +700,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       setHasMoreOlderMessages(result.hasMoreOlder);
     } catch (e: any) {
       const msg = e?.message || 'Send failed';
-      Alert.alert('Message not sent', msg);
+      Alert.error('Message not sent', msg);
     } finally {
       setSending(false);
     }
@@ -696,10 +751,13 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       const showDateSep = shouldShowChatDateSeparator(index, messages);
       const dateSepLabel = formatChatDateSeparator(item.creation || item.modified);
       const showPlainTextBubble = !!item.text?.trim() && !qDraft && !sqLink && !soLink && !siLink && !genericDocLink;
+
+      const quotationPayKey = sqLink ?? (qDraft?.name?.trim() || null);
+      const openThisMessageActions = () => openMessageActionsForItem(item, quotationPayKey);
+
       /**
        * Frappe User for SI **customer** resolution (Raven User.custom_customer, portal, etc.).
-       * Use signed-in user for **both** buyer chat and supplier approve-payment — supplier flow used to pass `null`, which
-       * skipped all bill-to resolution and always failed when SQ had no `customer` / `custom_bill_to_customer`.
+       * Use signed-in user for **both** buyer chat and supplier approve-payment.
        */
       const customerPartyFrappeUserForSq = String(user?.user || user?.email || '').trim() || null;
 
@@ -708,14 +766,33 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
           <RavenLinkedSupplierQuotationMessage
             sqName={sqLink}
             billToFrappeUserId={customerPartyFrappeUserForSq}
+            ravenChannelId={channel?.name}
+            linkMessageId={item.name}
             supplierSelfServeUx={supplierSqLinkSelfServeUx}
             showBuyerActions={showBuyerQuotationActions}
             viewerSupplierDocId={user?.supplierId}
             handled={quotationActionByName[sqLink] ?? null}
             busy={quotationActionBusy === sqLink}
-            onAccept={showBuyerQuotationActions ? () => void handleAcceptQuotationDraft(sqLink) : undefined}
-            onReject={showBuyerQuotationActions ? () => void handleRejectQuotationDraft(sqLink) : undefined}
-            onSupplierReplyToQuotation={supplierSqLinkSelfServeUx ? () => setReplyTo(item) : undefined}
+            onMessageLongPress={openThisMessageActions}
+            onAccept={
+              showBuyerQuotationActions
+                ? () =>
+                    void handleAcceptQuotationDraft(sqLink, {
+                      ravenChannelId: channel?.name,
+                      linkMessageId: item.name,
+                    })
+                : undefined
+            }
+            onReject={
+              showBuyerQuotationActions
+                ? () =>
+                    void handleRejectQuotationDraft(sqLink, {
+                      ravenChannelId: channel?.name,
+                      linkMessageId: item.name,
+                    })
+                : undefined
+            }
+            registerSqPaymentAction={supplierSqLinkSelfServeUx ? registerSqPaymentAction : undefined}
           />
         ) : soLink != null ? (
           <RavenLinkedSalesOrderMessage orderName={soLink} ravenChannelId={channel?.name} />
@@ -734,14 +811,23 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
             busy={quotationActionBusy === qDraft.name}
             onAccept={
               showBuyerQuotationActions && qDraft.buyerReviewEligible !== false
-                ? () => void handleAcceptQuotationDraft(qDraft.name)
+                ? () =>
+                    void handleAcceptQuotationDraft(qDraft.name, {
+                      ravenChannelId: channel?.name,
+                      linkMessageId: item.name,
+                    })
                 : undefined
             }
             onReject={
               showBuyerQuotationActions && qDraft.buyerReviewEligible !== false
-                ? () => void handleRejectQuotationDraft(qDraft.name)
+                ? () =>
+                    void handleRejectQuotationDraft(qDraft.name, {
+                      ravenChannelId: channel?.name,
+                      linkMessageId: item.name,
+                    })
                 : undefined
             }
+            onCardLongPress={openThisMessageActions}
           />
         ) : null;
       const inner = (
@@ -759,13 +845,16 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
           {!showReplyQuote && !!item.is_reply ? (
             <Text style={[styles.replyBadge, mine && styles.replyBadgeMine]}>Reply</Text>
           ) : null}
+          {ravenMessageIsForwarded(item) ? (
+            <Text style={[styles.forwardedBadge, mine && styles.forwardedBadgeMine]}>Forwarded</Text>
+          ) : null}
           {hasAttach ? (
             <RavenMessageAttachmentBody
               item={item}
               mine={mine}
               variant="wine"
               mediaGroupNeighbor={mediaGroupNeighbor}
-              onReplyLongPress={() => setReplyTo(item)}
+              onReplyLongPress={openThisMessageActions}
             />
           ) : null}
           {linkedOrQuotationCard}
@@ -774,11 +863,15 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
           ) : !hasAttach && !qDraft && !sqLink && !genericDocLink ? (
             <Text style={[styles.bubbleText, mine && styles.bubbleTextMine]}> </Text>
           ) : null}
+          <RavenMessageReactionsRow
+            messageReactions={item.message_reactions}
+            currentUserId={viewerFrappeName}
+            variant="wine"
+            onToggleReaction={(emoji) => void toggleReaction(item, emoji)}
+          />
           <Text style={[styles.bubbleTime, mine && styles.bubbleTimeMine]}>{tLine}</Text>
         </>
       );
-
-      const blockBubbleLongPressForSupplierSq = !!sqLink && isSupplierLike;
 
       return (
         <View>
@@ -791,7 +884,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
           ) : null}
           <Pressable
             style={[styles.bubbleWrap, mine ? styles.bubbleWrapMine : styles.bubbleWrapTheirs]}
-            onLongPress={blockBubbleLongPressForSupplierSq ? undefined : () => setReplyTo(item)}
+            onLongPress={openThisMessageActions}
             delayLongPress={380}
           >
             <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
@@ -817,6 +910,10 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       quotationActionBusy,
       handleAcceptQuotationDraft,
       handleRejectQuotationDraft,
+      openMessageActionsForItem,
+      toggleReaction,
+      viewerFrappeName,
+      registerSqPaymentAction,
     ]
   );
 
@@ -963,32 +1060,15 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
         ) : null}
         <View style={styles.composer}>
           <View style={styles.attachRow}>
-            <TouchableOpacity
-              style={[styles.attachBtn, (!channel || sending) && styles.attachBtnOff]}
-              onPress={() => void pickMedia()}
+            <RavenChatAttachTrigger
               disabled={!channel || sending}
-              accessibilityLabel="Attach photos or videos"
-            >
-              <Ionicons name="images-outline" size={24} color={Colors.WINE} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.attachBtn, (!channel || sending) && styles.attachBtnOff]}
-              onPress={() => void pickDocument()}
-              disabled={!channel || sending}
-              accessibilityLabel="Attach file"
-            >
-              <Ionicons name="attach-outline" size={24} color={Colors.WINE} />
-            </TouchableOpacity>
-            {user?.appMode === 'supplier' ? (
-              <TouchableOpacity
-                style={[styles.attachBtn, (!channel || sending) && styles.attachBtnOff]}
-                onPress={openQuotationComposeFromChat}
-                disabled={!channel || sending}
-                accessibilityLabel="New quotation"
-              >
-                <Ionicons name="document-text-outline" size={24} color={Colors.WINE} />
-              </TouchableOpacity>
-            ) : null}
+              isSupplierPortalChat={isSupplierPortalChat}
+              onPickEmoji={() => setComposerEmojiOpen(true)}
+              onPickMedia={() => void pickMedia()}
+              onPickDocument={() => void pickDocument()}
+              onNewQuotation={openQuotationComposeFromChat}
+              onSourcingRequest={() => {}}
+            />
           </View>
           <TextInput
             style={styles.input}
@@ -1055,6 +1135,31 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
           </Pressable>
         </Pressable>
       </Modal>
+
+      <RavenMessageActionSheet
+        visible={!!actionsMessage}
+        message={actionsMessage}
+        extras={actionsExtras}
+        resolveSqPayment={resolveSqPayment}
+        onClose={closeMessageActions}
+        onReply={onActionReply}
+        onForward={onActionForward}
+        onReact={onActionReact}
+      />
+      <RavenForwardMessageModal
+        visible={!!forwardMessage}
+        message={forwardMessage}
+        channels={channels}
+        currentUserEmail={user?.email}
+        userProfiles={ravenUserProfilesById}
+        variant="wine"
+        onClose={() => setForwardMessage(null)}
+      />
+      <RavenComposerEmojiSheet
+        visible={composerEmojiOpen}
+        onClose={() => setComposerEmojiOpen(false)}
+        onPick={insertComposerEmoji}
+      />
     </View>
   );
 };
@@ -1135,6 +1240,8 @@ const styles = StyleSheet.create({
   chatDateSepText: { fontSize: 11, fontWeight: '600', color: Colors.TEXT_SECONDARY },
   replyBadge: { fontSize: 11, fontWeight: '700', color: Colors.WINE, marginBottom: 4 },
   replyBadgeMine: { color: 'rgba(255,255,255,0.9)' },
+  forwardedBadge: { fontSize: 10, fontWeight: '700', color: Colors.TEXT_SECONDARY, marginBottom: 4, textTransform: 'uppercase' },
+  forwardedBadgeMine: { color: 'rgba(255,255,255,0.75)' },
   replyStrip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1176,7 +1283,7 @@ const styles = StyleSheet.create({
     borderColor: '#E0E0E0',
     backgroundColor: '#F8F8F8',
   },
-  attachRow: { flexDirection: 'row', alignItems: 'flex-end', marginRight: 6 },
+  attachRow: { flexDirection: 'row', alignItems: 'flex-end', marginRight: 6, flexShrink: 0, zIndex: 4 },
   attachBtn: { paddingRight: 4, paddingVertical: 4, justifyContent: 'center' },
   attachBtnOff: { opacity: 0.35 },
   composerWrap: {

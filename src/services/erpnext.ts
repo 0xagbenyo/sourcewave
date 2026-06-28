@@ -19,6 +19,12 @@ import {
   buildAppliedSubscriptionPromo,
   isPricingRuleValidForPromo,
 } from '../utils/subscriptionPromoCode';
+import { ERP_DOC_LINE_IMAGE_FIELD, readErpDocLineImage } from '../utils/erpDocLineImageField';
+import {
+  mapSupplierQuotationLineFilesToItemCodes,
+  type ErpDocAttachmentRow,
+} from '../utils/erpLineItemImages';
+import { logFrappeHttpError, parseFrappeResponseData } from '../utils/frappeHttpError';
 
 // Configuration
 const ERPNEXT_BASE_URL = process.env.EXPO_PUBLIC_ERPNEXT_URL || 'http://localhost:8000';
@@ -949,10 +955,17 @@ class ERPNextClient {
       // Check if login was successful
       if (response.data && (response.data.message === 'Logged In' || response.data.message === 'No App')) {
         const ravenHeaders: Array<Record<string, unknown>> = [response.headers as Record<string, unknown>];
+        let loginCsrfToken: string | undefined;
         // Optionally verify the logged-in user
         try {
           const userInfoResponse = await loginClient.get('/api/method/frappe.auth.get_logged_user');
           ravenHeaders.push(userInfoResponse.headers as Record<string, unknown>);
+          const csrfFromHeaders =
+            (userInfoResponse.headers as Record<string, unknown>)['x-frappe-csrf-token'] ??
+            (userInfoResponse.headers as Record<string, unknown>)['X-Frappe-CSRF-Token'];
+          if (typeof csrfFromHeaders === 'string' && csrfFromHeaders.trim()) {
+            loginCsrfToken = csrfFromHeaders.trim();
+          }
           console.log('User info response:', userInfoResponse.data);
 
           // Extract user info from response (Frappe returns username string or object)
@@ -975,8 +988,9 @@ class ERPNextClient {
                 (userInfo as { full_name?: string; name?: string }).name
               : undefined) || undefined;
 
-          const { establishFrappeRavenSessionFromLoginResponses } = await import('./frappeRavenSession');
-          establishFrappeRavenSessionFromLoginResponses(this.config.baseUrl, ...ravenHeaders);
+          const { adoptFrappeSessionFromLoginClient, applyFrappeSessionCsrfToken } = await import('./frappeRavenSession');
+          await adoptFrappeSessionFromLoginClient(this.config.baseUrl, loginClient, ...ravenHeaders);
+          if (loginCsrfToken) applyFrappeSessionCsrfToken(loginCsrfToken);
 
           return {
             ...response.data,
@@ -986,8 +1000,8 @@ class ERPNextClient {
         } catch (userInfoError) {
           // If getting user info fails, still return login success
           console.warn('Login successful but could not fetch user info:', userInfoError);
-          const { establishFrappeRavenSessionFromLoginResponses } = await import('./frappeRavenSession');
-          establishFrappeRavenSessionFromLoginResponses(this.config.baseUrl, ...ravenHeaders);
+          const { adoptFrappeSessionFromLoginClient } = await import('./frappeRavenSession');
+          await adoptFrappeSessionFromLoginClient(this.config.baseUrl, loginClient, ...ravenHeaders);
           return {
             ...response.data,
             user: email,
@@ -1223,7 +1237,7 @@ class ERPNextClient {
       return 'Invalid email or password. Please check your credentials and try again.';
     }
     if (error.response?.status === 403) {
-      return 'Access denied. Please contact support.';
+      return 'Access denied. Sign out and sign in again, then retry. If this continues, your account may need permission for this action on the server.';
     }
     if (error.response?.status === 404) {
       return 'Login endpoint not found. Please check your server configuration.';
@@ -2578,12 +2592,14 @@ class ERPNextClient {
     customer: string;
     company: string;
     transaction_date?: string;
+    shipping_address_name?: string;
     items: Array<{
       item_code: string;
       qty: number;
       rate?: number;
       amount?: number;
       description?: string;
+      custom_new_image?: string;
     }>;
     delivery_date?: string;
   }): Promise<any> {
@@ -3201,9 +3217,46 @@ class ERPNextClient {
   async getSalesOrder(orderName: string): Promise<any> {
     try {
       const response = await this.client.get(`${API_VERSION}/Sales Order/${orderName}`);
-      return response.data.data;
+      const data = response.data.data;
+      await this.hydrateSalesOrderAddresses(data);
+      return data;
     } catch (error) {
       throw this.handleError(error);
+    }
+  }
+
+  async getAddress(addressName: string): Promise<any | null> {
+    const name = String(addressName || '').trim();
+    if (!name) return null;
+    try {
+      const response = await this.client.get(`${API_VERSION}/Address/${encodeURIComponent(name)}`);
+      return response.data?.data ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private addressRowHasMappableFields(doc: unknown): boolean {
+    if (!doc || typeof doc !== 'object') return false;
+    const row = doc as Record<string, unknown>;
+    return !!(
+      String(row.address_line1 || '').trim() ||
+      String(row.city || '').trim() ||
+      String(row.state || '').trim()
+    );
+  }
+
+  private async hydrateSalesOrderAddresses(order: Record<string, unknown>): Promise<void> {
+    const shipName = String(order.shipping_address_name || '').trim();
+    if (shipName && !this.addressRowHasMappableFields(order.shipping_address_doc)) {
+      const doc = await this.getAddress(shipName);
+      if (doc) order.shipping_address_doc = doc;
+    }
+
+    const billName = String(order.billing_address_name || '').trim();
+    if (billName && !this.addressRowHasMappableFields(order.billing_address_doc)) {
+      const doc = await this.getAddress(billName);
+      if (doc) order.billing_address_doc = doc;
     }
   }
 
@@ -4155,15 +4208,13 @@ class ERPNextClient {
     }
   }
 
-  /**
-   * Upload image/file and attach it to a document (e.g. Sales Order)
-   */
   async uploadFileToDoc(
     fileUri: string,
     fileName: string,
     doctype: string,
     docname: string,
-    isPrivate: boolean = true,
+    /** Public by default so buyers/suppliers can preview line images without private File permissions. */
+    isPrivate: boolean = false,
     mimeType: string = 'image/jpeg'
   ): Promise<any> {
     try {
@@ -4188,6 +4239,130 @@ class ERPNextClient {
     } catch (error) {
       throw this.handleError(error);
     }
+  }
+
+  /** Build minimal child rows for Sales Order line `custom_new_image` updates. */
+  private salesOrderItemPatchRow(row: Record<string, unknown>, image?: string): Record<string, unknown> {
+    const patch: Record<string, unknown> = {
+      name: row.name,
+      item_code: row.item_code,
+      item_name: row.item_name,
+      qty: row.qty,
+      rate: row.rate,
+      uom: row.uom,
+      description: row.description,
+    };
+    const img = String(image || '').trim();
+    if (img) patch[ERP_DOC_LINE_IMAGE_FIELD] = img;
+    return patch;
+  }
+
+  /** Set `custom_new_image` on Sales Order item rows (by line index). */
+  async applySalesOrderLineImagesByIndex(
+    orderName: string,
+    lineImages: Array<string | null | undefined>
+  ): Promise<void> {
+    const name = String(orderName || '').trim();
+    if (!name || !lineImages.some((u) => String(u || '').trim())) return;
+
+    const raw = await this.getSalesOrder(name);
+    const items = Array.isArray(raw?.items) ? (raw.items as Record<string, unknown>[]) : [];
+    if (!items.length) return;
+
+    const patched = items.map((row, idx) => {
+      const image = String(lineImages[idx] || '').trim();
+      return this.salesOrderItemPatchRow(row, image || undefined);
+    });
+    await this.updateSalesOrder(name, { items: patched });
+  }
+
+  /** Read `custom_new_image` from each Sales Order item row. */
+  async resolveSalesOrderLineImages(orderName: string): Promise<Record<string, string>> {
+    const name = String(orderName || '').trim();
+    if (!name) return {};
+
+    const raw = await this.getSalesOrder(name);
+    const items = Array.isArray(raw?.items) ? (raw.items as Record<string, unknown>[]) : [];
+    const out: Record<string, string> = {};
+    for (const row of items) {
+      const code = String(row.item_code || '').trim();
+      const img = readErpDocLineImage(row);
+      if (code && img) out[code] = img;
+    }
+    return out;
+  }
+
+  /** File rows attached to an ERPNext document (e.g. `sq-line-*` on Supplier Quotation). */
+  async listErpDocFileAttachments(doctype: string, docname: string): Promise<ErpDocAttachmentRow[]> {
+    const dt = String(doctype || '').trim();
+    const dn = String(docname || '').trim();
+    if (!dt || !dn) return [];
+    try {
+      const rows = await this.listResourceRows('File', {
+        filters: [
+          ['attached_to_doctype', '=', dt],
+          ['attached_to_name', '=', dn],
+        ],
+        fields: ['name', 'file_name', 'file_url', 'is_private'],
+        limit_page_length: 100,
+      });
+      return (rows || [])
+        .map((r) => ({
+          file_name: String(r.file_name ?? r.file_url ?? ''),
+          file_url: String(r.file_url ?? ''),
+        }))
+        .filter((a) => a.file_url.length > 0);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Quotation line `custom_new_image` (supplier) with fallback to linked Sales Order line image.
+   * When the custom field is empty (permissions / save timing), also maps `sq-line-{itemCode}-*` attachments.
+   */
+  async resolveSupplierQuotationLineImages(
+    quotationName: string,
+    lineRows: Array<Record<string, unknown>>,
+    salesOrderName?: string
+  ): Promise<{ supplier: Record<string, string>; fallback: Record<string, string> }> {
+    const supplier: Record<string, string> = {};
+    const codes: string[] = [];
+    for (const row of lineRows) {
+      const code = String(row.item_code || '').trim();
+      if (!code) continue;
+      codes.push(code);
+      const img = readErpDocLineImage(row);
+      if (img) supplier[code] = img;
+    }
+
+    const qn = String(quotationName || '').trim();
+    const missingCodes = [...new Set(codes.filter((c) => !supplier[c]))];
+    if (qn && missingCodes.length) {
+      const files = await this.listErpDocFileAttachments('Supplier Quotation', qn);
+      const fromFiles = mapSupplierQuotationLineFilesToItemCodes(files, missingCodes);
+      for (const [code, url] of Object.entries(fromFiles)) {
+        if (!supplier[code]) supplier[code] = url;
+      }
+    }
+
+    const soName = String(salesOrderName || '').trim();
+    const fallback = soName ? await this.resolveSalesOrderLineImages(soName) : {};
+
+    return { supplier, fallback };
+  }
+
+  async uploadDocLineImage(
+    fileUri: string,
+    fileName: string,
+    doctype: string,
+    docname: string
+  ): Promise<string> {
+    /** Public files so buyers can load line images without private File permissions. */
+    return this.uploadFileToDoc(fileUri, fileName, doctype, docname, false).then(
+      (uploadResponse) =>
+        String(uploadResponse?.message?.file_url || uploadResponse?.file_url || '').trim()
+    );
   }
 
   async updateSalesOrder(orderName: string, data: Record<string, any>): Promise<any> {
@@ -4954,6 +5129,17 @@ class ERPNextClient {
       
       const st = error.response?.status;
       const base = erpError.message || erpError.exc || 'Request failed';
+      if (st === 403) {
+        logFrappeHttpError('ERPNext/handleError', error);
+        const parsed = parseFrappeResponseData(raw);
+        if (parsed) {
+          console.error('[ERPNext/handleError] 403 detail:', parsed);
+          return new Error(parsed);
+        }
+        return new Error(
+          'Access denied (HTTP 403). Sign out and sign in again, then retry. Workflow actions must run as your logged-in user, not the API integration account.'
+        );
+      }
       return new Error(st && st !== 200 ? `${base} (HTTP ${st})` : base);
     }
     
@@ -5737,7 +5923,7 @@ class ERPNextClient {
     referenceTitle?: string;
     /** When quoting from a buyer Sales Order, link **`custom_order`**. */
     salesOrderName?: string;
-    lines: Array<{ item_code: string; qty: number; rate: number; uom?: string | null; description?: string | null }>;
+    lines: Array<{ item_code: string; qty: number; rate: number; uom?: string | null; description?: string | null; custom_new_image?: string | null }>;
   }): Promise<{ name: string; grand_total: number; currency: string }> {
     const supplier = String(args.supplier || '').trim();
     if (!supplier) throw new Error('Supplier is required');
@@ -5750,6 +5936,7 @@ class ERPNextClient {
         rate: Number(l.rate),
         uom: l.uom != null ? String(l.uom).trim() : '',
         description: l.description != null ? String(l.description).trim() : '',
+        custom_new_image: l.custom_new_image != null ? String(l.custom_new_image).trim() : '',
       }))
       .filter((l) => l.item_code.length > 0 && Number.isFinite(l.qty) && l.qty > 0 && Number.isFinite(l.rate) && l.rate >= 0);
 
@@ -5778,6 +5965,7 @@ class ERPNextClient {
       };
       if (l.uom) row.uom = l.uom;
       if (l.description) row.description = l.description;
+      if (l.custom_new_image) row[ERP_DOC_LINE_IMAGE_FIELD] = l.custom_new_image;
       return row;
     });
 
@@ -5875,15 +6063,6 @@ class ERPNextClient {
     const sumLines = lines.reduce((s, l) => s + l.qty * l.rate, 0);
     const grand_total = doc?.grand_total != null ? Number(doc.grand_total) : sumLines;
 
-    if (salesOrderName) {
-      try {
-        await this.linkSalesOrderToSupplierQuotationAndSubmit(salesOrderName, name, supplier);
-      } catch (linkErr) {
-        console.warn('[SupplierQuotation] link/submit sales order failed:', linkErr);
-        throw this.handleError(linkErr);
-      }
-    }
-
     return {
       name,
       grand_total: Number.isFinite(grand_total) ? grand_total : sumLines,
@@ -5892,17 +6071,192 @@ class ERPNextClient {
   }
 
   /**
-   * Submit a Supplier Quotation (e.g. buyer accepts draft in chat).
-   * Uses the Frappe **session** user when logged in with password so submit / workflow runs as that user.
+   * Update a draft Supplier Quotation (supplier edits before buyer accepts).
    */
-  async submitSupplierQuotation(name: string): Promise<any> {
+  async updateSupplierQuotationDraft(
+    name: string,
+    args: {
+      currency?: string;
+      referenceTitle?: string;
+      lines: Array<{ item_code: string; qty: number; rate: number; uom?: string | null; description?: string | null; custom_new_image?: string | null }>;
+    }
+  ): Promise<{ name: string; grand_total: number; currency: string }> {
     const n = String(name || '').trim();
     if (!n) throw new Error('Quotation name required');
-    const { hasFrappeRavenSession, ravenCallFrappeMethod } = await import('./frappeRavenSession');
-    const submitDoc = async (doc: Record<string, unknown>) =>
-      hasFrappeRavenSession()
-        ? ravenCallFrappeMethod('frappe.client.submit', { doc })
-        : this.callFrappeMethod('frappe.client.submit', { doc });
+
+    const fresh = await this.getSupplierQuotationByName(n);
+    if (!fresh) throw new Error('Quotation not found.');
+    const ds = Number(fresh?.docstatus ?? 0);
+    if (ds !== 0) throw new Error('Only draft quotations can be edited.');
+
+    const linesIn = Array.isArray(args.lines) ? args.lines : [];
+    const lines = linesIn
+      .map((l) => ({
+        item_code: String(l.item_code || '').trim(),
+        qty: Number(l.qty),
+        rate: Number(l.rate),
+        uom: l.uom != null ? String(l.uom).trim() : '',
+        description: l.description != null ? String(l.description).trim() : '',
+        custom_new_image: l.custom_new_image != null ? String(l.custom_new_image).trim() : '',
+      }))
+      .filter((l) => l.item_code.length > 0 && Number.isFinite(l.qty) && l.qty > 0 && Number.isFinite(l.rate) && l.rate >= 0);
+
+    if (lines.length === 0) {
+      throw new Error('Add at least one line with an item, quantity greater than zero, and a rate.');
+    }
+
+    const itemRows: Record<string, unknown>[] = lines.map((l) => {
+      const row: Record<string, unknown> = {
+        item_code: l.item_code,
+        qty: l.qty,
+        rate: l.rate,
+      };
+      if (l.uom) row.uom = l.uom;
+      if (l.description) row.description = l.description;
+      if (l.custom_new_image) row[ERP_DOC_LINE_IMAGE_FIELD] = l.custom_new_image;
+      return row;
+    });
+
+    const payload: Record<string, unknown> = { items: itemRows };
+    const currency = String(args.currency || fresh.currency || 'GHS').trim() || 'GHS';
+    payload.currency = currency;
+    const referenceTitle = String(args.referenceTitle || fresh.title || '').trim();
+    if (referenceTitle) payload.title = referenceTitle;
+
+    await this.client.put(
+      `${API_VERSION}/Supplier Quotation/${encodeURIComponent(n)}?ignore_version=1`,
+      payload
+    );
+
+    const refreshed = await this.getSupplierQuotationByName(n);
+    const sumLines = lines.reduce((s, l) => s + l.qty * l.rate, 0);
+    const grand_total =
+      refreshed?.grand_total != null ? Number(refreshed.grand_total) : sumLines;
+
+    return {
+      name: n,
+      grand_total: Number.isFinite(grand_total) ? grand_total : sumLines,
+      currency,
+    };
+  }
+
+  /**
+   * Submit a Supplier Quotation (e.g. buyer accepts draft in chat).
+   * When the site runs a workflow on Supplier Quotation, applies the Approve/Accept transition first.
+   * Uses the Frappe **session** user when logged in with password so submit / workflow runs as that user.
+   */
+  private async callFrappeMethodRavenOrApi(method: string, kwargs: Record<string, unknown>): Promise<any> {
+    const needsPortalSession =
+      method.includes('workflow') ||
+      method.includes('submit') ||
+      method === 'frappe.client.set_value';
+    const {
+      hasFrappeRavenSession,
+      ravenCallFrappeMethod,
+      ensureFrappeRavenSessionReady,
+      getFrappeRavenSessionDebug,
+    } = await import('./frappeRavenSession');
+    if (needsPortalSession) {
+      try {
+        await ensureFrappeRavenSessionReady(this.config.baseUrl);
+      } catch (error) {
+        const { logFrappeHttpError } = await import('../utils/frappeHttpError');
+        logFrappeHttpError(`SupplierQuotation/session-ready/${method}`, error, {
+          session: getFrappeRavenSessionDebug(),
+        });
+        throw error;
+      }
+    }
+    const useSession = hasFrappeRavenSession();
+    console.log('[SupplierQuotation] callFrappeMethod', method, {
+      useSession,
+      session: getFrappeRavenSessionDebug(),
+    });
+    try {
+      if (useSession) {
+        return await ravenCallFrappeMethod(method, kwargs);
+      }
+      return await this.callFrappeMethod(method, kwargs);
+    } catch (error) {
+      const { logFrappeHttpError } = await import('../utils/frappeHttpError');
+      logFrappeHttpError(`SupplierQuotation/${method}`, error, {
+        useSession,
+        session: getFrappeRavenSessionDebug(),
+      });
+      throw error;
+    }
+  }
+
+  private parseWorkflowTransitionsResponse(data: unknown): Array<{ action: string }> {
+    const raw = (data as { message?: unknown })?.message ?? data;
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((t) => {
+        const rec = t as Record<string, unknown>;
+        const action = String(rec.action ?? '').trim();
+        return action ? { action } : null;
+      })
+      .filter((x): x is { action: string } => x != null);
+  }
+
+  private pickSupplierQuotationWorkflowAction(
+    transitions: Array<{ action: string }>,
+    intent: 'accept' | 'reject'
+  ): string | null {
+    const actions = transitions.map((t) => t.action);
+    const lower = (s: string) => s.trim().toLowerCase();
+    if (intent === 'reject') {
+      const exact = actions.find((a) => lower(a) === 'reject');
+      if (exact) return exact;
+      const alt = actions.find((a) => ['decline', 'cancel', 'cancelled', 'canceled'].includes(lower(a)));
+      if (alt) return alt;
+      return actions.find((a) => /\breject\b/i.test(a) || /\bdecline\b/i.test(a)) ?? null;
+    }
+    const exact = actions.find((a) => lower(a) === 'approve' || lower(a) === 'accept');
+    if (exact) return exact;
+    return actions.find((a) => /\bapprove\b/i.test(a) || /\baccept\b/i.test(a)) ?? null;
+  }
+
+  private async getSupplierQuotationWorkflowTransitions(name: string): Promise<Array<{ action: string }>> {
+    const n = name.trim();
+    const data = await this.callFrappeMethodRavenOrApi('frappe.model.workflow.get_transitions', {
+      doc: { doctype: 'Supplier Quotation', name: n },
+    });
+    return this.parseWorkflowTransitionsResponse(data);
+  }
+
+  private async applySupplierQuotationWorkflowAction(name: string, action: string): Promise<unknown> {
+    const n = name.trim();
+    const act = action.trim();
+    const data = await this.callFrappeMethodRavenOrApi('frappe.model.workflow.apply_workflow', {
+      doc: { doctype: 'Supplier Quotation', name: n },
+      action: act,
+    });
+    return (data as { message?: unknown })?.message ?? data;
+  }
+
+  private async linkSalesOrderAfterQuotationAcceptance(
+    quotationName: string,
+    fresh?: Record<string, unknown> | null
+  ): Promise<void> {
+    const n = quotationName.trim();
+    const doc =
+      fresh && typeof fresh === 'object'
+        ? fresh
+        : ((await this.getSupplierQuotationByName(n)) as Record<string, unknown> | null);
+    const linkedSo = String(doc?.[this.supplierQuotationOrderLinkField()] || '').trim();
+    const supplierDoc = String(doc?.supplier || '').trim();
+    if (linkedSo && supplierDoc) {
+      try {
+        await this.linkSalesOrderToSupplierQuotationAndSubmit(linkedSo, n, supplierDoc);
+      } catch (linkErr) {
+        console.warn('[SupplierQuotation] link/submit sales order on accept failed:', linkErr);
+      }
+    }
+  }
+
+  private async submitSupplierQuotationDocument(name: string): Promise<unknown> {
+    const n = String(name || '').trim();
 
     const maxAttempts = 6;
     let lastError: unknown;
@@ -5916,18 +6270,55 @@ class ERPNextClient {
           fresh && typeof fresh === 'object' && String((fresh as { name?: unknown }).name || '').trim() === n
             ? (fresh as Record<string, unknown>)
             : { doctype: 'Supplier Quotation', name: n };
-        return await submitDoc(doc);
+        return await this.callFrappeMethodRavenOrApi('frappe.client.submit', { doc });
       } catch (error) {
         lastError = error;
         const err = this.handleError(error);
-        const msg = err.message;
-        const retryable = attempt < maxAttempts && isFrappeTimestampMismatchMessage(msg);
+        const retryable = attempt < maxAttempts && isFrappeTimestampMismatchMessage(err.message);
         if (!retryable) {
           throw err;
         }
       }
     }
     throw this.handleError(lastError);
+  }
+
+  async submitSupplierQuotation(name: string): Promise<any> {
+    const n = String(name || '').trim();
+    if (!n) throw new Error('Quotation name required');
+
+    const fresh0 = (await this.getSupplierQuotationByName(n)) as Record<string, unknown> | null;
+    const wf = String(fresh0?.workflow_state ?? '').trim();
+
+    if (wf.length > 0) {
+      const transitions = await this.getSupplierQuotationWorkflowTransitions(n).catch((e) => {
+        throw this.handleError(e);
+      });
+      if (transitions.length > 0) {
+        const action = this.pickSupplierQuotationWorkflowAction(transitions, 'accept');
+        if (!action) {
+          throw new Error(
+            `Cannot accept this quotation. Available actions: ${transitions.map((t) => t.action).join(', ')}`
+          );
+        }
+        const applied = await this.applySupplierQuotationWorkflowAction(n, action);
+        const fresh1 = (await this.getSupplierQuotationByName(n)) as Record<string, unknown> | null;
+        const ds = fresh1?.docstatus != null ? Number(fresh1.docstatus) : 0;
+        const result =
+          Number.isFinite(ds) && ds === 0 ? await this.submitSupplierQuotationDocument(n) : applied;
+        await this.linkSalesOrderAfterQuotationAcceptance(n, fresh1);
+        return result;
+      }
+      const { hasFrappeRavenSession } = await import('./frappeRavenSession');
+      if (!hasFrappeRavenSession()) {
+        throw new Error('Sign in with your buyer account to accept this quotation.');
+      }
+      // Workflow configured but no transitions for this user — still try document submit.
+    }
+
+    const result = await this.submitSupplierQuotationDocument(n);
+    await this.linkSalesOrderAfterQuotationAcceptance(n);
+    return result;
   }
 
   /**
@@ -5977,6 +6368,12 @@ class ERPNextClient {
     if (ds === 1) {
       const err = new Error('SALES_ORDER_ALREADY_SUBMITTED');
       (err as { code?: string }).code = 'SALES_ORDER_ALREADY_SUBMITTED';
+      throw err;
+    }
+    const shipTo = String(raw?.shipping_address_name || '').trim();
+    if (!shipTo) {
+      const err = new Error('SALES_ORDER_MISSING_SHIP_TO');
+      (err as { code?: string }).code = 'SALES_ORDER_MISSING_SHIP_TO';
       throw err;
     }
   }
@@ -7028,13 +7425,6 @@ class ERPNextClient {
     }
   }
 
-  private async callFrappeMethodRavenOrApi(method: string, kwargs: Record<string, unknown>): Promise<any> {
-    const { hasFrappeRavenSession, ravenCallFrappeMethod } = await import('./frappeRavenSession');
-    if (hasFrappeRavenSession()) {
-      return ravenCallFrappeMethod(method, kwargs);
-    }
-    return this.callFrappeMethod(method, kwargs);
-  }
 
   /**
    * Record a **Receive** payment against a submitted Sales Invoice (partial or full).
@@ -7118,25 +7508,43 @@ class ERPNextClient {
   }
 
   /**
-   * Buyer rejects a draft Supplier Quotation: set **`workflow_state`** to **Rejected** (workflow on site).
-   * Uses Frappe session when logged in with password; otherwise API key.
+   * Buyer rejects a draft Supplier Quotation via workflow **Reject** when configured,
+   * otherwise sets **`workflow_state`** to **Rejected**.
    */
   async rejectSupplierQuotationDraft(name: string): Promise<void> {
     const n = String(name || '').trim();
     if (!n) return;
+
+    const fresh = (await this.getSupplierQuotationByName(n)) as Record<string, unknown> | null;
+    const wf = String(fresh?.workflow_state ?? '').trim();
+
+    if (wf.length > 0) {
+      const transitions = await this.getSupplierQuotationWorkflowTransitions(n).catch((e) => {
+        throw this.handleError(e);
+      });
+      if (transitions.length > 0) {
+        const action = this.pickSupplierQuotationWorkflowAction(transitions, 'reject');
+        if (!action) {
+          throw new Error(
+            `Cannot reject this quotation. Available actions: ${transitions.map((t) => t.action).join(', ')}`
+          );
+        }
+        await this.applySupplierQuotationWorkflowAction(n, action);
+        return;
+      }
+      const { hasFrappeRavenSession } = await import('./frappeRavenSession');
+      if (!hasFrappeRavenSession()) {
+        throw new Error('Sign in with your buyer account to reject this quotation.');
+      }
+    }
+
     try {
-      const { hasFrappeRavenSession, ravenCallFrappeMethod } = await import('./frappeRavenSession');
-      const kwargs = {
+      await this.callFrappeMethodRavenOrApi('frappe.client.set_value', {
         doctype: 'Supplier Quotation',
         name: n,
         fieldname: 'workflow_state',
         value: 'Rejected',
-      };
-      if (hasFrappeRavenSession()) {
-        await ravenCallFrappeMethod('frappe.client.set_value', kwargs);
-      } else {
-        await this.callFrappeMethod('frappe.client.set_value', kwargs);
-      }
+      });
     } catch (e) {
       throw this.handleError(e);
     }

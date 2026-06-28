@@ -3,13 +3,14 @@ import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
-import { bindAppAlert, type AppAlertButton } from '../services/appAlert';
+import { bindAppAlert, type AppAlertButton, type AppAlertTone } from '../services/appAlert';
 
 type AlertState = {
   visible: boolean;
   title: string;
   message?: string;
   buttons: AppAlertButton[];
+  tone: AppAlertTone;
 };
 
 const DEFAULT_BUTTON: AppAlertButton = { text: 'OK', style: 'default' };
@@ -21,20 +22,25 @@ export const AppAlertHost: React.FC = () => {
     title: '',
     message: '',
     buttons: [DEFAULT_BUTTON],
+    tone: 'default',
   });
 
   const close = useCallback(() => {
     setState((prev) => ({ ...prev, visible: false }));
   }, []);
 
-  const show = useCallback((title: string, message?: string, buttons?: AppAlertButton[]) => {
-    setState({
-      visible: true,
-      title,
-      message,
-      buttons: buttons && buttons.length > 0 ? buttons : [DEFAULT_BUTTON],
-    });
-  }, []);
+  const show = useCallback(
+    (title: string, message?: string, buttons?: AppAlertButton[], tone: AppAlertTone = 'default') => {
+      setState({
+        visible: true,
+        title,
+        message,
+        buttons: buttons && buttons.length > 0 ? buttons : [DEFAULT_BUTTON],
+        tone,
+      });
+    },
+    []
+  );
 
   useEffect(() => {
     bindAppAlert(show);
@@ -42,6 +48,8 @@ export const AppAlertHost: React.FC = () => {
   }, [show]);
 
   const useRowButtons = state.buttons.length === 2;
+  const isError = state.tone === 'error';
+  const isSuccess = state.tone === 'success';
 
   const modalButtons = useMemo(() => {
     return state.buttons.map((button, index) => {
@@ -56,6 +64,8 @@ export const AppAlertHost: React.FC = () => {
             useRowButtons ? styles.buttonRowItem : index > 0 && styles.buttonGap,
             isCancel && styles.buttonSecondary,
             isDestructive && styles.buttonDestructive,
+            isError && !isCancel && !isDestructive && styles.buttonError,
+            isSuccess && !isCancel && !isDestructive && styles.buttonSuccess,
           ]}
           activeOpacity={0.85}
           onPress={() => {
@@ -75,7 +85,7 @@ export const AppAlertHost: React.FC = () => {
         </TouchableOpacity>
       );
     });
-  }, [close, state.buttons, useRowButtons]);
+  }, [close, isError, isSuccess, state.buttons, useRowButtons]);
 
   return (
     <Modal
@@ -87,8 +97,17 @@ export const AppAlertHost: React.FC = () => {
       presentationStyle="overFullScreen"
     >
       <View style={styles.overlay}>
-        <View style={[styles.card, { marginTop: insets.top + 48, marginBottom: Math.max(insets.bottom, 24) }]}>
-          <Text style={styles.title}>{state.title}</Text>
+        <View
+          style={[
+            styles.card,
+            isError && styles.cardError,
+            isSuccess && styles.cardSuccess,
+            { marginTop: insets.top + 48, marginBottom: Math.max(insets.bottom, 24) },
+          ]}
+        >
+          <Text style={[styles.title, isError && styles.titleError, isSuccess && styles.titleSuccess]}>
+            {state.title}
+          </Text>
           {state.message ? <Text style={styles.message}>{state.message}</Text> : null}
           <View style={[styles.buttons, useRowButtons && styles.buttonsRow]}>{modalButtons}</View>
         </View>
@@ -110,10 +129,26 @@ const styles = StyleSheet.create({
     padding: Spacing.LG,
     ...Spacing.SHADOW_LG,
   },
+  cardError: {
+    borderWidth: 1,
+    borderColor: '#FFCDD2',
+    backgroundColor: '#FFFBFB',
+  },
+  cardSuccess: {
+    borderWidth: 1,
+    borderColor: '#C8E6C9',
+    backgroundColor: '#FAFFFA',
+  },
   title: {
     fontSize: 19,
     fontWeight: '800',
     color: Colors.BRAND_NAVY,
+  },
+  titleError: {
+    color: Colors.ERROR,
+  },
+  titleSuccess: {
+    color: Colors.SUCCESS,
   },
   message: {
     marginTop: Spacing.SM,
@@ -147,6 +182,12 @@ const styles = StyleSheet.create({
   },
   buttonDestructive: {
     backgroundColor: '#FFF0F0',
+  },
+  buttonError: {
+    backgroundColor: Colors.ERROR,
+  },
+  buttonSuccess: {
+    backgroundColor: Colors.SUCCESS,
   },
   buttonText: {
     color: Colors.WHITE,

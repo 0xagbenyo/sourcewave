@@ -37,6 +37,7 @@ import { userFacingError } from '../utils/userFacingError';
 import { useAutoNavigateToSubscriptionWhenInactive } from '../hooks/useAutoNavigateToSubscriptionWhenInactive';
 import { resetToAuthScreen } from '../navigation/rootNavigation';
 import { useTranslation } from 'react-i18next';
+import { getSalesOrderShareUiState } from '../utils/salesOrderShareState';
 
 type IoniconsName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -104,7 +105,32 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
   const { width: windowWidth } = useWindowDimensions();
   const { supplierDocName, workspaceAdminUser, ravenWorkspaceId, ravenWorkspaceName, shareSalesOrderName } =
     route.params;
-  const shareOrderName = (shareSalesOrderName || '').trim();
+  const shareOrderNameParam = (shareSalesOrderName || '').trim();
+  const [shareOrderStillPending, setShareOrderStillPending] = useState(!!shareOrderNameParam);
+  const shareOrderName = shareOrderStillPending ? shareOrderNameParam : '';
+
+  const refreshShareOrderState = useCallback(async () => {
+    if (!shareOrderNameParam) {
+      setShareOrderStillPending(false);
+      return;
+    }
+    try {
+      const state = await getSalesOrderShareUiState(shareOrderNameParam);
+      setShareOrderStillPending(state.canShare);
+    } catch {
+      setShareOrderStillPending(true);
+    }
+  }, [shareOrderNameParam]);
+
+  useEffect(() => {
+    void refreshShareOrderState();
+  }, [refreshShareOrderState]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshShareOrderState();
+    }, [refreshShareOrderState])
+  );
 
   const [profile, setProfile] = useState<ErpSupplierProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -293,8 +319,9 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
       peerUserId: adminId,
       salesOrderName: shareOrderName,
       supplierLabel: profile?.supplier_name || profile?.name || '',
+      ravenWorkspaceId: wsId,
     });
-  }, [adminId, adminIdLower, viewerId, shareOrderName, navigation, profile?.supplier_name, profile?.name, t]);
+  }, [adminId, adminIdLower, viewerId, shareOrderName, wsId, navigation, profile?.supplier_name, profile?.name, t]);
 
   const onOpenFile = (att: ErpSupplierFileAttachment) => {
     const t = att.file_url.trim();
@@ -503,6 +530,19 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
 
                   {user?.appMode !== 'supplier' ? (
                     <>
+                      {shareOrderName ? (
+                        <View style={styles.shareOrderBanner}>
+                          <Ionicons name="document-text-outline" size={18} color={RavenLight.accent} />
+                          <View style={styles.shareOrderBannerText}>
+                            <Text style={styles.shareOrderBannerTitle}>
+                              {t('supplierProfile.sharingOrderTitle')}
+                            </Text>
+                            <Text style={styles.shareOrderBannerSub} numberOfLines={1}>
+                              {shareOrderName}
+                            </Text>
+                          </View>
+                        </View>
+                      ) : null}
                       <View style={styles.actionRow}>
                         <TouchableOpacity
                           style={[
@@ -529,18 +569,16 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
                           disabled={!adminId}
                           activeOpacity={0.85}
                           accessibilityLabel={
-                            shareOrderName ? t('supplierProfile.shareOrder') : t('supplierProfile.sendRequest')
+                            shareOrderName ? t('supplierProfile.sendThisOrder') : t('supplierProfile.sendRequest')
                           }
                         >
                           <Ionicons
-                            name={shareOrderName ? 'share-outline' : 'cart-outline'}
+                            name={shareOrderName ? 'paper-plane-outline' : 'cart-outline'}
                             size={20}
                             color={RavenLight.panel}
                           />
-                          <Text style={styles.actionBtnPrimaryText} numberOfLines={2}>
-                            {shareOrderName
-                              ? t('supplierProfile.shareOrder', { order: shareOrderName })
-                              : t('supplierProfile.sendRequest')}
+                          <Text style={styles.actionBtnPrimaryText} numberOfLines={1}>
+                            {shareOrderName ? t('supplierProfile.sendThisOrder') : t('supplierProfile.sendRequest')}
                           </Text>
                         </TouchableOpacity>
                       </View>
@@ -986,6 +1024,22 @@ const styles = StyleSheet.create({
     backgroundColor: RavenLight.canvas,
   },
   statPillText: { fontSize: 12, fontWeight: '600', color: RavenLight.textMuted },
+  shareOrderBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    marginTop: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: RavenLight.accentSoft,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: RavenLight.accent,
+    gap: 10,
+  },
+  shareOrderBannerText: { flex: 1, minWidth: 0 },
+  shareOrderBannerTitle: { fontSize: 12, fontWeight: '700', color: RavenLight.text },
+  shareOrderBannerSub: { marginTop: 2, fontSize: 13, fontWeight: '600', color: RavenLight.accent },
   actionRow: {
     flexDirection: 'row',
     gap: 10,

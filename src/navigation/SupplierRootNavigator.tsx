@@ -6,6 +6,7 @@ import { SupplierSalesInvoiceDetailScreen } from '../screens/supplier/SupplierSa
 import { SupplierPaymentEntryDetailScreen } from '../screens/supplier/SupplierPaymentEntryDetailScreen';
 import { SupplierQuotationListScreen } from '../screens/supplier/SupplierQuotationListScreen';
 import { SupplierQuotationDetailScreen } from '../screens/supplier/SupplierQuotationDetailScreen';
+import { SupplierQuotationComposeScreen } from '../screens/supplier/SupplierQuotationComposeScreen';
 import type { SupplierStackParamList } from '../types';
 
 const Stack = createStackNavigator<SupplierStackParamList>();
@@ -38,6 +39,11 @@ export const SupplierRootNavigator: React.FC = () => {
       <Stack.Screen
         name="SupplierQuotationDetail"
         component={SupplierQuotationDetailScreen}
+        options={{ presentation: 'card', gestureEnabled: true }}
+      />
+      <Stack.Screen
+        name="SupplierQuotationCompose"
+        component={SupplierQuotationComposeScreen}
         options={{ presentation: 'card', gestureEnabled: true }}
       />
     </Stack.Navigator>

@@ -15,6 +15,7 @@ import {
 import { appAlert as Alert } from '../services/appAlert';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
@@ -22,14 +23,13 @@ import { Header } from '../components/Header';
 import { useUserSession } from '../context/UserContext';
 import { useTranslation } from 'react-i18next';
 import { getERPNextClient } from '../services/erpnext';
-import {
-  buildSourcingCategoryOptions,
-  resolveItemGroupIdsForSourcingCategory,
-} from '../utils/itemGroup';
-import { Category } from '../types';
+import { buildSourcingCategoryOptions } from '../utils/itemGroup';
 import { SearchableSelect } from '../components/SearchableSelect';
-import { withOtherItemOption, SourcingItemOption } from '../utils/sourcingItems';
+import { categoryAsSourcingItem } from '../utils/sourcingItems';
 import { buildSourcingSalesOrderLines } from '../utils/sourcingSubmit';
+import { navigateToSalesOrderDetail } from '../utils/erpDocumentNavigation';
+import { ShipToAddressField } from '../components/ShipToAddressField';
+import type { ErpCustomerAddressRow } from '../types';
 
 const hairline = StyleSheet.hairlineWidth;
 
@@ -43,7 +43,6 @@ type RequestForm = {
   referenceImageUri: string | null;
   quantity: string;
   expectedRate: string;
-  loadingProducts: boolean;
 };
 
 const newForm = (expanded: boolean): RequestForm => ({
@@ -56,10 +55,10 @@ const newForm = (expanded: boolean): RequestForm => ({
   referenceImageUri: null,
   quantity: '1',
   expectedRate: '',
-  loadingProducts: false,
 });
 
 export const SourcingRequestScreen: React.FC = () => {
+  const navigation = useNavigation();
   const { t } = useTranslation();
   const { user } = useUserSession();
   const insets = useSafeAreaInsets();
@@ -69,7 +68,11 @@ export const SourcingRequestScreen: React.FC = () => {
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [forms, setForms] = useState<RequestForm[]>([newForm(true)]);
-  const [productsByFormId, setProductsByFormId] = useState<Record<string, SourcingItemOption[]>>({});
+  const [shipToAddressName, setShipToAddressName] = useState('');
+
+  const onShipToChange = useCallback((name: string, _row: ErpCustomerAddressRow) => {
+    setShipToAddressName(name);
+  }, []);
 
   useEffect(() => {
     const fetchGroups = async () => {
@@ -100,54 +103,17 @@ export const SourcingRequestScreen: React.FC = () => {
     };
   }, []);
 
-  const categoryTree = useMemo<Category[]>(
-    () =>
-      allGroups.map((group: any) => ({
-        id: group.name,
-        name: group.item_group_name || group.name,
-        slug: group.name,
-        image: group.image || '',
-        parentId: group.parent_item_group,
-      })),
-    [allGroups]
-  );
-
   const itemCategoryList = useMemo(() => buildSourcingCategoryOptions(allGroups), [allGroups]);
 
   const updateForm = (formId: string, updates: Partial<RequestForm>) => {
     setForms((prev) => prev.map((f) => (f.id === formId ? { ...f, ...updates } : f)));
   };
 
-  const fetchItemsForForm = async (formId: string, categoryId: string) => {
-    try {
-      updateForm(formId, { loadingProducts: true });
-      const client = getERPNextClient();
-      const groupIds = resolveItemGroupIdsForSourcingCategory(categoryId, categoryTree);
-      const items = await client.getRawItemsByGroups(groupIds, 500);
-      const unique = new Map<string, any>();
-      items.forEach((item: any) => {
-        if (item?.name) unique.set(item.name, item);
-      });
-      const dropdownItems: SourcingItemOption[] = withOtherItemOption(
-        Array.from(unique.values())
-          .filter((item: any) => Number(item?.disabled) !== 1)
-          .map((item: any) => ({
-            id: item.name,
-            name: item.item_name || item.name,
-            itemCode: item.name,
-          }))
-      );
-      setProductsByFormId((prev) => ({ ...prev, [formId]: dropdownItems }));
-    } catch (error) {
-      console.error('Error fetching items for form:', error);
-      setProductsByFormId((prev) => ({ ...prev, [formId]: [] }));
-    } finally {
-      updateForm(formId, { loadingProducts: false });
-    }
-  };
-
-  const selectedProductFor = (form: RequestForm) =>
-    (productsByFormId[form.id] || []).find((p) => p.id === form.selectedProductId);
+  const lockCategoryAsItem = (categoryId: string, categoryName: string) => ({
+    selectedCategoryId: categoryId,
+    selectedCategoryName: categoryName,
+    selectedProductId: categoryId,
+  });
 
   const addAnotherLine = () => {
     setForms((prev) => [...prev.map((f) => ({ ...f, expanded: false })), newForm(true)]);
@@ -158,16 +124,10 @@ export const SourcingRequestScreen: React.FC = () => {
       if (prev.length <= 1) return prev;
       return prev.filter((f) => f.id !== formId);
     });
-    setProductsByFormId((prev) => {
-      const next = { ...prev };
-      delete next[formId];
-      return next;
-    });
   };
 
   const resetAll = useCallback(() => {
     setForms([newForm(true)]);
-    setProductsByFormId({});
   }, []);
 
   const pickImageFor = async (formId: string) => {
@@ -193,17 +153,12 @@ export const SourcingRequestScreen: React.FC = () => {
   const submitAll = async () => {
     for (let i = 0; i < forms.length; i += 1) {
       const form = forms[i];
-      const product = selectedProductFor(form);
       const qty = parseInt(form.quantity, 10);
       const rate = parseFloat(form.expectedRate);
       const requestNum = i + 1;
 
-      if (!form.selectedCategoryId) {
+      if (!form.selectedCategoryId || !form.selectedCategoryName.trim()) {
         Alert.alert('Missing Category', `Line ${requestNum}: select an item category.`);
-        return;
-      }
-      if (!product) {
-        Alert.alert('Missing Item', `Line ${requestNum}: select an item.`);
         return;
       }
       if (!form.itemDescription.trim()) {
@@ -222,6 +177,12 @@ export const SourcingRequestScreen: React.FC = () => {
         Alert.alert('Invalid budget', `Line ${requestNum}: my budget must be greater than 0.`);
         return;
       }
+    }
+
+    const shipTo = shipToAddressName.trim();
+    if (!shipTo) {
+      Alert.alert(t('orderDetails.shippingAddress'), t('sourcing.shipToRequired'));
+      return;
     }
 
     try {
@@ -256,10 +217,11 @@ export const SourcingRequestScreen: React.FC = () => {
       deliveryDate.setDate(deliveryDate.getDate() + 21);
 
       const orderLines = forms.map((form) => {
-        const product = selectedProductFor(form) as SourcingItemOption;
+        const categoryName = form.selectedCategoryName.trim();
         return {
-          product,
+          product: categoryAsSourcingItem(form.selectedCategoryId, categoryName),
           selectedCategoryId: form.selectedCategoryId,
+          itemFieldText: categoryName,
           quantity: parseInt(form.quantity, 10),
           rate: parseFloat(form.expectedRate),
           description: form.itemDescription.trim(),
@@ -273,9 +235,11 @@ export const SourcingRequestScreen: React.FC = () => {
         company: companyName,
         transaction_date: transactionDate.toISOString().split('T')[0],
         delivery_date: deliveryDate.toISOString().split('T')[0],
+        shipping_address_name: shipTo,
         items,
       });
 
+      const lineImageUrls: string[] = forms.map(() => '');
       for (let i = 0; i < forms.length; i += 1) {
         const form = forms[i];
         if (!form.referenceImageUri) continue;
@@ -285,26 +249,29 @@ export const SourcingRequestScreen: React.FC = () => {
             `sourcing-reference-${i + 1}-${Date.now()}.jpg`,
             'Sales Order',
             createdOrder.name,
-            true
+            false
           );
           const fileUrl = uploadResponse?.message?.file_url || uploadResponse?.file_url || '';
-          if (fileUrl && i === 0) {
-            try {
-              await client.updateSalesOrder(createdOrder.name, { image: fileUrl });
-            } catch {
-              await client.updateSalesOrder(createdOrder.name, { custom_image: fileUrl });
-            }
-          }
+          if (fileUrl) lineImageUrls[i] = fileUrl;
         } catch (e) {
           console.warn('Reference image upload failed:', e);
         }
       }
 
+      if (lineImageUrls.some((u) => String(u || '').trim())) {
+        try {
+          await client.applySalesOrderLineImagesByIndex(createdOrder.name, lineImageUrls);
+        } catch (e) {
+          console.warn('Could not set sales order line images:', e);
+        }
+      }
+
       const orderName = createdOrder.name;
-      Alert.alert(
-        t('sourcing.submittedTitle'),
-        t('sourcing.submittedBody', { name: orderName }),
-        [{ text: t('contactUs.ok'), onPress: () => resetAll() }]
+      resetAll();
+      setShipToAddressName('');
+      navigateToSalesOrderDetail(
+        navigation as { navigate: (name: string, params?: object) => void },
+        orderName
       );
     } catch (error: any) {
       console.error('Error creating sourcing request order:', error);
@@ -314,7 +281,7 @@ export const SourcingRequestScreen: React.FC = () => {
     }
   };
 
-  const canSubmit = forms.length > 0 && !submitting;
+  const canSubmit = forms.length > 0 && !submitting && !!shipToAddressName.trim();
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
@@ -338,8 +305,7 @@ export const SourcingRequestScreen: React.FC = () => {
           <Text style={styles.pageHint}>{t('sourcing.pageHint')}</Text>
 
           {forms.map((form, idx) => {
-            const product = selectedProductFor(form);
-            const formProducts = productsByFormId[form.id] || [];
+            const itemLabel = form.selectedCategoryName.trim() || t('sourcing.tapToExpand');
 
             return (
               <View key={form.id} style={styles.lineCard}>
@@ -353,7 +319,7 @@ export const SourcingRequestScreen: React.FC = () => {
                     <Text style={styles.lineTitle}>{t('sourcing.lineLabel', { n: idx + 1 })}</Text>
                     {!form.expanded ? (
                       <Text style={styles.linePreview} numberOfLines={1}>
-                        {product?.name || t('sourcing.tapToExpand')}
+                        {itemLabel}
                       </Text>
                     ) : null}
                   </View>
@@ -384,13 +350,8 @@ export const SourcingRequestScreen: React.FC = () => {
                       options={itemCategoryList}
                       selectedId={form.selectedCategoryId}
                       selectedLabel={form.selectedCategoryName}
-                      onSelect={async (category) => {
-                        updateForm(form.id, {
-                          selectedCategoryId: category.id,
-                          selectedCategoryName: category.name,
-                          selectedProductId: '',
-                        });
-                        await fetchItemsForForm(form.id, category.id);
+                      onSelect={(category) => {
+                        updateForm(form.id, lockCategoryAsItem(category.id, category.name));
                       }}
                       placeholder={t('sourcing.phCategory')}
                       searchPlaceholder={t('sourcing.searchCategory')}
@@ -399,20 +360,18 @@ export const SourcingRequestScreen: React.FC = () => {
                     />
 
                     <Text style={styles.fieldLabel}>{t('sourcing.fieldItem')}</Text>
-                    <SearchableSelect
-                      options={formProducts}
-                      selectedId={form.selectedProductId}
-                      selectedLabel={product?.name}
-                      onSelect={(item) => updateForm(form.id, { selectedProductId: item.id })}
-                      placeholder={
-                        form.selectedCategoryId ? t('sourcing.phItem') : t('sourcing.phItemNeedCategory')
-                      }
-                      searchPlaceholder={t('sourcing.searchItem')}
-                      disabled={!form.selectedCategoryId}
-                      loading={form.loadingProducts}
-                      emptyText={t('sourcing.emptyItems')}
-                      listMaxHeight={320}
-                    />
+                    {form.selectedCategoryId ? (
+                      <>
+                        <TextInput
+                          style={[styles.input, styles.inputLocked]}
+                          value={form.selectedCategoryName}
+                          editable={false}
+                        />
+                        <Text style={styles.fieldHint}>{t('sourcing.categoryLockedItemHint')}</Text>
+                      </>
+                    ) : (
+                      <Text style={styles.fieldHint}>{t('sourcing.phItemNeedCategory')}</Text>
+                    )}
 
                     <Text style={styles.fieldLabel}>{t('sourcing.fieldDescription')}</Text>
                     <TextInput
@@ -481,6 +440,14 @@ export const SourcingRequestScreen: React.FC = () => {
             <Ionicons name="add" size={22} color={Colors.WINE} />
             <Text style={styles.addLineText}>{t('sourcing.addAnotherLine')}</Text>
           </TouchableOpacity>
+
+          <ShipToAddressField
+            value={shipToAddressName}
+            onChange={onShipToChange}
+            userEmail={user?.email}
+            disabled={submitting}
+            required
+          />
 
           <TouchableOpacity
             style={[styles.submit, !canSubmit && styles.submitDisabled]}
@@ -566,6 +533,13 @@ const styles = StyleSheet.create({
     marginTop: 14,
     marginBottom: 8,
   },
+  fieldHint: {
+    fontSize: 12,
+    color: Colors.TEXT_SECONDARY,
+    lineHeight: 17,
+    marginTop: 6,
+    marginBottom: 4,
+  },
   input: {
     borderWidth: 0,
     borderBottomWidth: hairline,
@@ -575,6 +549,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Colors.BLACK,
     backgroundColor: Colors.WHITE,
+  },
+  inputLocked: {
+    backgroundColor: Colors.OFF_WHITE,
+    color: Colors.TEXT_SECONDARY,
   },
   textArea: {
     minHeight: 96,

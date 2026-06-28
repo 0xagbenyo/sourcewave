@@ -12,7 +12,6 @@ import {
   Modal,
   FlatList,
   Pressable,
-  SectionList,
 } from 'react-native';
 import { appAlert as Alert } from '../../services/appAlert';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -24,19 +23,24 @@ import { useSupplierDocumentId } from '../../hooks/useSupplierDocumentId';
 import { useUserSession } from '../../context/UserContext';
 import { getERPNextClient } from '../../services/erpnext';
 import {
-  getRavenChannelDisplayLabel,
   listRavenChannelsForSessionUser,
-  ravenChannelLastActivitySortTimeMs,
   sendRavenChannelDocumentLinkMessage,
   getRavenDmPeerUserId,
   type RavenChannelRow,
 } from '../../services/ravenNativeApi';
 import { setPendingRavenDocLinkMessageMerge } from '../../utils/ravenDocLinkMessageMergeBridge';
+import { notifyQuotationEditedInChat, resolveErpDocChatThread } from '../../utils/erpDocChatStatusReply';
 import { userFacingError } from '../../utils/userFacingError';
 import type { RootStackParamList } from '../../types';
 import { ErpAuthenticatedImage } from '../../components/ErpAuthenticatedImage';
+import { RavenShareToContactPicker } from '../../components/RavenShareToContactPicker';
 import { useSupplierComposeLeave } from '../../context/SupplierComposeLeaveContext';
-import { quotationLinesFromSalesOrder } from '../../utils/salesOrderToQuotationLines';
+import * as ImagePicker from 'expo-image-picker';
+import { pickLineDisplayImageUri } from '../../utils/erpLineItemImages';
+import {
+  quotationLinesFromSalesOrder,
+  quotationLinesFromSupplierQuotation,
+} from '../../utils/salesOrderToQuotationLines';
 
 type R = RouteProp<RootStackParamList, 'SupplierQuotationCompose'>;
 
@@ -50,6 +54,10 @@ type QuotationLine = {
   stock_uom?: string;
   /** Item `image` for UI only (not sent to ERPNext on save). */
   item_image?: string;
+  /** Supplier-attached image URL (persisted on quotation line). */
+  supplier_image?: string;
+  /** Local file picked by supplier before save. */
+  supplier_image_uri?: string;
   qty: string;
   rate: string;
   /** Buyer budget from linked Sales Order (hint only). */
@@ -71,70 +79,6 @@ function isDmChannel(c: RavenChannelRow): boolean {
   return !!c.is_direct_message || String(c.type || '').trim().toLowerCase() === 'direct';
 }
 
-function initialsFromDisplayLabel(label: string): string {
-  const parts = label.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '?';
-  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
-  return `${parts[0]![0] ?? ''}${parts[parts.length - 1]![0] ?? ''}`.toUpperCase() || '?';
-}
-
-/** WhatsApp-style avatar: DM photo when available, else initials (or # if not a DM). */
-function WaShareAvatar({
-  channel,
-  userEmail,
-  size,
-  selected,
-}: {
-  channel: RavenChannelRow;
-  userEmail: string | null | undefined;
-  size: number;
-  selected?: boolean;
-}) {
-  const dm = isDmChannel(channel);
-  const img = channel.peer_user_image != null ? String(channel.peer_user_image).trim() : '';
-  const r = size / 2;
-  if (dm && img) {
-    return (
-      <View
-        style={[
-          styles.waAvatarRing,
-          { width: size + 4, height: size + 4, borderRadius: (size + 4) / 2 },
-          selected && styles.waAvatarRingSelected,
-        ]}
-      >
-        <View style={{ width: size, height: size, borderRadius: r, overflow: 'hidden', backgroundColor: '#e0e0e0' }}>
-          <ErpAuthenticatedImage uri={img} style={{ width: size, height: size }} resizeMode="cover" />
-        </View>
-      </View>
-    );
-  }
-  const label = getRavenChannelDisplayLabel(channel, userEmail ?? null);
-  const initials = dm ? initialsFromDisplayLabel(label) : '#';
-  const bg = dm ? '#6B7C85' : '#00A884';
-  return (
-    <View
-      style={[
-        styles.waAvatarRing,
-        { width: size + 4, height: size + 4, borderRadius: (size + 4) / 2 },
-        selected && styles.waAvatarRingSelected,
-      ]}
-    >
-      <View
-        style={{
-          width: size,
-          height: size,
-          borderRadius: r,
-          backgroundColor: bg,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <Text style={{ color: '#fff', fontWeight: '800', fontSize: size * (dm ? 0.34 : 0.42) }}>{initials}</Text>
-      </View>
-    </View>
-  );
-}
-
 export const SupplierQuotationComposeScreen: React.FC = () => {
   const navigation = useNavigation();
   const route = useRoute<R>();
@@ -147,6 +91,11 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
   const { user } = useUserSession();
   const paramChannelId = (route.params?.ravenChannelId || '').trim();
   const paramSalesOrderName = (route.params?.salesOrderName || '').trim();
+  const paramQuotationName = (route.params?.quotationName || '').trim();
+  const paramResendFromQuotation = (route.params?.resendFromQuotation || '').trim();
+  const paramLinkMessageId = (route.params?.linkMessageId || '').trim();
+  const editMode = !!paramQuotationName;
+  const resendMode = !!paramResendFromQuotation;
   const { supplierDocId, loading: supplierLinkLoading, error: supplierLinkError } = useSupplierDocumentId();
 
   /** After ERPNext create — user picks a DM and taps Send. */
@@ -155,13 +104,14 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
   const [channelsLoading, setChannelsLoading] = useState(false);
   const [selectedShareChannelId, setSelectedShareChannelId] = useState<string>('');
   const [sharing, setSharing] = useState(false);
-  const [shareContactQuery, setShareContactQuery] = useState('');
 
   const [referenceTitle, setReferenceTitle] = useState('');
   const [currency, setCurrency] = useState('GHS');
   const [lines, setLines] = useState<QuotationLine[]>(() => [newLine()]);
   const [saving, setSaving] = useState(false);
-  const [loadingFromOrder, setLoadingFromOrder] = useState(!!paramSalesOrderName);
+  const [loadingFromOrder, setLoadingFromOrder] = useState(
+    !!paramSalesOrderName || !!paramQuotationName || !!paramResendFromQuotation
+  );
   const [orderLoadError, setOrderLoadError] = useState<string | null>(null);
 
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -195,12 +145,43 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
   }, [supplierDocId]);
 
   useEffect(() => {
-    if (!paramSalesOrderName) return;
+    if (!paramSalesOrderName && !paramQuotationName && !paramResendFromQuotation) return;
     let cancelled = false;
     setLoadingFromOrder(true);
     setOrderLoadError(null);
     void (async () => {
       try {
+        if (paramQuotationName || paramResendFromQuotation) {
+          const loadName = paramQuotationName || paramResendFromQuotation;
+          const raw = await getERPNextClient().getSupplierQuotationByName(loadName);
+          if (cancelled) return;
+          if (!raw) {
+            setOrderLoadError('Quotation not found.');
+            return;
+          }
+          const mapped = quotationLinesFromSupplierQuotation(raw as Record<string, unknown>);
+          if (mapped.lines.length === 0) {
+            setOrderLoadError('This quotation has no line items.');
+            setLines([newLine()]);
+          } else {
+            const resolved = await getERPNextClient().resolveSupplierQuotationLineImages(
+              loadName,
+              Array.isArray(raw?.items) ? (raw.items as Record<string, unknown>[]) : [],
+              mapped.salesOrderName
+            );
+            setLines(
+              mapped.lines.map((ln) => ({
+                ...ln,
+                item_image: resolved.fallback[ln.item_code] || ln.item_image,
+                supplier_image: resolved.supplier[ln.item_code] || ln.supplier_image,
+              }))
+            );
+          }
+          if (mapped.referenceTitle) setReferenceTitle(mapped.referenceTitle);
+          if (mapped.currency) setCurrency(mapped.currency);
+          return;
+        }
+
         const raw = await getERPNextClient().getSalesOrder(paramSalesOrderName);
         if (cancelled) return;
         const mapped = quotationLinesFromSalesOrder(raw);
@@ -223,7 +204,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [paramSalesOrderName]);
+  }, [paramSalesOrderName, paramQuotationName, paramResendFromQuotation]);
 
   useEffect(() => {
     if (!pickerOpen) return;
@@ -252,7 +233,6 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
     if (!createdQuotation) return;
     const pre = paramChannelId;
     setSelectedShareChannelId(pre ? pre : '');
-    setShareContactQuery('');
     void loadRavenChannels();
   }, [createdQuotation?.name, paramChannelId, loadRavenChannels]);
 
@@ -264,62 +244,28 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
     if (row && !isDmChannel(row)) setSelectedShareChannelId('');
   }, [createdQuotation, channels, channelsLoading, selectedShareChannelId]);
 
-  /** Direct messages only — no workspace / group channels in the share picker. */
-  const shareSections = useMemo(() => {
-    const dms = channels
-      .filter(isDmChannel)
-      .sort((a, b) => ravenChannelLastActivitySortTimeMs(b) - ravenChannelLastActivitySortTimeMs(a));
-    const sections: { title: string; data: RavenChannelRow[] }[] = [];
-    if (dms.length) sections.push({ title: 'People', data: dms });
-    return sections;
-  }, [channels]);
-
-  const recentChats = useMemo(() => {
-    return [...channels]
-      .filter(isDmChannel)
-      .sort((a, b) => ravenChannelLastActivitySortTimeMs(b) - ravenChannelLastActivitySortTimeMs(a))
-      .slice(0, 14);
-  }, [channels]);
-
-  const recentChatsFiltered = useMemo(() => {
-    const q = shareContactQuery.trim().toLowerCase();
-    if (!q) return recentChats;
-    return recentChats.filter((c) => {
-      const label = getRavenChannelDisplayLabel(c, user?.email ?? null).toLowerCase();
-      return (
-        label.includes(q) ||
-        String(c.name || '').toLowerCase().includes(q) ||
-        String(c.channel_name || '').toLowerCase().includes(q)
-      );
-    });
-  }, [recentChats, shareContactQuery, user?.email]);
-
-  const shareSectionsFiltered = useMemo(() => {
-    const q = shareContactQuery.trim().toLowerCase();
-    const match = (c: RavenChannelRow): boolean => {
-      if (!q) return true;
-      const label = getRavenChannelDisplayLabel(c, user?.email ?? null).toLowerCase();
-      return (
-        label.includes(q) ||
-        String(c.name || '').toLowerCase().includes(q) ||
-        String(c.channel_name || '').toLowerCase().includes(q)
-      );
-    };
-    return shareSections.map((s) => ({ ...s, data: s.data.filter(match) })).filter((s) => s.data.length > 0);
-  }, [shareSections, shareContactQuery, user?.email]);
-
-  const selectShareChannel = useCallback((channelId: string) => {
-    const id = channelId.trim();
-    if (!id) return;
-    setSelectedShareChannelId((cur) => (cur === id ? '' : id));
-  }, []);
-
   const openPickerForLine = (lineKey: string) => {
     setPickerLineKey(lineKey);
     setSearchQ('');
     setSearchHits([]);
     setPickerOpen(true);
     void runItemSearch('');
+  };
+
+  const pickLineImage = async (lineKey: string) => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Photos', 'Allow photo library access to attach an item image.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: Platform.OS === 'ios',
+      quality: 0.85,
+    });
+    if (!result.canceled && result.assets?.length) {
+      updateLine(lineKey, { supplier_image_uri: result.assets[0].uri });
+    }
   };
 
   const applyItemToLine = (hit: ItemSearchHit) => {
@@ -348,7 +294,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
 
   const updateLine = (
     key: string,
-    patch: Partial<Pick<QuotationLine, 'qty' | 'rate' | 'item_name'>>
+    patch: Partial<Pick<QuotationLine, 'qty' | 'rate' | 'item_name' | 'supplier_image_uri'>>
   ) => {
     setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   };
@@ -366,7 +312,8 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
     async (
       chId: string,
       quotation: { name: string; cardTitle: string },
-      channelRows?: RavenChannelRow[]
+      channelRows?: RavenChannelRow[],
+      opts?: { replyToMessageId?: string }
     ) => {
       const trimmed = chId.trim();
       if (!trimmed) throw new Error('No chat channel to send to.');
@@ -383,10 +330,22 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
         }
       }
 
+      let replyToMessageId = String(opts?.replyToMessageId || paramLinkMessageId || '').trim();
+      if (!replyToMessageId && paramResendFromQuotation) {
+        const thread = await resolveErpDocChatThread({
+          linkDoctype: 'Supplier Quotation',
+          linkDocument: paramResendFromQuotation,
+          ravenChannelId: trimmed,
+          sessionEmail: user?.email ?? null,
+        });
+        if (thread?.replyToMessageId) replyToMessageId = thread.replyToMessageId;
+      }
+
       let sentRaw = await sendRavenChannelDocumentLinkMessage(trimmed, {
         linkDoctype: 'Supplier Quotation',
         linkDocument: quotation.name,
         caption: quotation.cardTitle,
+        ...(replyToMessageId ? { replyToMessageId } : {}),
       });
       if (sentRaw != null && typeof sentRaw === 'object' && !Array.isArray(sentRaw)) {
         sentRaw = {
@@ -397,7 +356,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
       }
       setPendingRavenDocLinkMessageMerge(trimmed, sentRaw);
     },
-    [channels, user?.email]
+    [channels, user?.email, paramLinkMessageId, paramResendFromQuotation]
   );
 
   const onCreateQuotation = async () => {
@@ -419,6 +378,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
       rate: number;
       uom?: string | null;
       description?: string | null;
+      custom_new_image?: string | null;
     }> = [];
     for (const ln of lines) {
       const code = ln.item_code.trim();
@@ -434,12 +394,14 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
         return;
       }
       const description = ln.item_name.trim() || undefined;
+      const persistedImage = String(ln.supplier_image || '').trim() || null;
       payloadLines.push({
         item_code: code,
         qty,
         rate,
         uom: ln.stock_uom?.trim() || null,
         description: description || null,
+        custom_new_image: persistedImage,
       });
     }
 
@@ -451,29 +413,118 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
     setSaving(true);
     try {
       const client = getERPNextClient();
-      const created = await client.createSupplierQuotationFromChat({
-        supplier: supplierDocId,
-        currency: currency.trim() || 'GHS',
-        referenceTitle: referenceTitle.trim() || undefined,
-        salesOrderName: paramSalesOrderName || undefined,
-        lines: payloadLines,
-      });
+      let linkedOrderName = paramSalesOrderName;
+      if (!linkedOrderName && (resendMode || editMode)) {
+        const srcName = paramResendFromQuotation || paramQuotationName;
+        if (srcName) {
+          const src = await client.getSupplierQuotationByName(srcName);
+          const orderField =
+            String(process.env.EXPO_PUBLIC_ERPNEXT_SQ_ORDER_LINK_FIELD || 'custom_order').trim() || 'custom_order';
+          linkedOrderName = String(src?.[orderField] || '').trim();
+        }
+      }
 
-      const cardTitle =
-        referenceTitle.trim() ||
-        (lines.find((l) => l.item_name.trim())?.item_name ?? '').trim() ||
-        `${payloadLines.length} item(s)`;
+      let quotation: { name: string; cardTitle: string };
 
-      const quotation = { name: created.name, cardTitle };
-      const chatChannelId = paramChannelId.trim();
+      if (editMode && paramQuotationName) {
+        const updated = await client.updateSupplierQuotationDraft(paramQuotationName, {
+          currency: currency.trim() || 'GHS',
+          referenceTitle: referenceTitle.trim() || undefined,
+          lines: payloadLines,
+        });
+        const cardTitle =
+          referenceTitle.trim() ||
+          (lines.find((l) => l.item_name.trim())?.item_name ?? '').trim() ||
+          `${payloadLines.length} item(s)`;
+        quotation = { name: updated.name, cardTitle };
+      } else {
+        const created = await client.createSupplierQuotationFromChat({
+          supplier: supplierDocId,
+          currency: currency.trim() || 'GHS',
+          referenceTitle: referenceTitle.trim() || undefined,
+          salesOrderName: linkedOrderName || undefined,
+          lines: payloadLines,
+        });
+        const cardTitle =
+          referenceTitle.trim() ||
+          (lines.find((l) => l.item_name.trim())?.item_name ?? '').trim() ||
+          `${payloadLines.length} item(s)`;
+        quotation = { name: created.name, cardTitle };
+      }
+
+      const pendingUploads = lines.filter(
+        (ln) => ln.supplier_image_uri && ln.item_code.trim()
+      );
+      if (pendingUploads.length) {
+        const withImages = [...payloadLines];
+        for (const ln of pendingUploads) {
+          try {
+            const url = await client.uploadDocLineImage(
+              ln.supplier_image_uri!,
+              `sq-line-${ln.item_code.trim()}-${Date.now()}.jpg`,
+              'Supplier Quotation',
+              quotation.name
+            );
+            if (!url) continue;
+            const idx = withImages.findIndex((p) => p.item_code === ln.item_code.trim());
+            if (idx >= 0) withImages[idx] = { ...withImages[idx], custom_new_image: url };
+          } catch (e) {
+            console.warn('[SupplierQuotation] line image upload failed:', e);
+          }
+        }
+        try {
+          await client.updateSupplierQuotationDraft(quotation.name, {
+            currency: currency.trim() || 'GHS',
+            referenceTitle: referenceTitle.trim() || undefined,
+            lines: withImages,
+          });
+        } catch (e) {
+          console.warn('[SupplierQuotation] could not persist line images on draft:', e);
+        }
+      }
+
+      if (editMode && paramQuotationName) {
+        notifyQuotationEditedInChat(quotation.name, {
+          ravenChannelId: paramChannelId || undefined,
+          sessionEmail: user?.email ?? null,
+        });
+        Alert.success('Saved', 'Your quotation was updated. The buyer will see your reply in chat.', [
+          { text: 'OK', onPress: () => exitCompose() },
+        ]);
+        return;
+      }
+
+      const chatChannelId = await (async () => {
+        let chId = paramChannelId.trim();
+        if (chId || !resendMode || !paramResendFromQuotation) return chId;
+        const thread = await resolveErpDocChatThread({
+          linkDoctype: 'Supplier Quotation',
+          linkDocument: paramResendFromQuotation,
+          linkMessageId: paramLinkMessageId || undefined,
+          sessionEmail: user?.email ?? null,
+        });
+        return thread?.channelId?.trim() || '';
+      })();
 
       if (chatChannelId) {
         const channelRows =
           channels.find((c) => c.name === chatChannelId) != null
             ? channels
             : await listRavenChannelsForSessionUser(user?.email ?? null);
-        await shareQuotationToChannel(chatChannelId, quotation, channelRows);
-        Alert.alert('Shared', 'Your quotation was sent in this conversation.', [
+        let replyToMessageId = paramLinkMessageId;
+        if (!replyToMessageId && paramResendFromQuotation) {
+          const thread = await resolveErpDocChatThread({
+            linkDoctype: 'Supplier Quotation',
+            linkDocument: paramResendFromQuotation,
+            ravenChannelId: chatChannelId,
+            sessionEmail: user?.email ?? null,
+          });
+          if (thread?.replyToMessageId) replyToMessageId = thread.replyToMessageId;
+        }
+        await shareQuotationToChannel(chatChannelId, quotation, channelRows, {
+          replyToMessageId: replyToMessageId || undefined,
+        });
+        Alert.success('Shared', 'Your new quotation was sent as a reply in this conversation.', [
           { text: 'OK', onPress: () => exitCompose() },
         ]);
         return;
@@ -482,7 +533,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
       setCreatedQuotation(quotation);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Could not save quotation.';
-      Alert.alert('Quotation', msg);
+      Alert.error('Quotation', msg);
     } finally {
       setSaving(false);
     }
@@ -497,12 +548,12 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
     setSharing(true);
     try {
       await shareQuotationToChannel(chId, createdQuotation);
-      Alert.alert('Shared', 'Your quotation link was sent in that conversation.', [
+      Alert.success('Shared', 'Your quotation link was sent in that conversation.', [
         { text: 'OK', onPress: () => exitCompose() },
       ]);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Could not send the message.';
-      Alert.alert('Share', msg);
+      Alert.error('Share', msg);
     } finally {
       setSharing(false);
     }
@@ -537,149 +588,19 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
   return (
     <SafeAreaView style={styles.safe} edges={composeLeave ? [] : ['top']}>
       {createdQuotation ? (
-        <View style={styles.flex}>
-          <View style={styles.topBar}>
-            <TouchableOpacity onPress={onShareBack} hitSlop={12} style={styles.backWrap}>
-              <Ionicons name="arrow-back" size={24} color={Colors.BLACK} />
-            </TouchableOpacity>
-            <Text style={styles.topTitle} numberOfLines={1}>
-              Send to…
-            </Text>
-            <View style={{ width: 32 }} />
-          </View>
-
-          {channelsLoading ? (
-            <View style={styles.shareLoading}>
-              <ActivityIndicator size="large" color={Colors.WINE} />
-              <Text style={styles.shareLoadingText}>Loading your conversations…</Text>
-            </View>
-          ) : shareSections.length === 0 ? (
-            <View style={styles.shareEmpty}>
-              <Text style={styles.shareEmptyText}>
-                No direct messages found. Start a one-to-one conversation in Messages first.
-              </Text>
-            </View>
-          ) : (
-            <SectionList
-              sections={shareSectionsFiltered}
-              keyExtractor={(item) => item.name}
-              style={styles.shareList}
-              contentContainerStyle={styles.shareListContent}
-              stickySectionHeadersEnabled={false}
-              keyboardShouldPersistTaps="handled"
-              ListHeaderComponent={
-                <View>
-                  <View style={styles.shareHeroCompact}>
-                    <Ionicons name="checkmark-circle" size={26} color="#2E7D32" style={{ marginRight: 10 }} />
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={styles.shareHeroCompactTitle}>Quotation saved</Text>
-                      <Text style={styles.shareHeroCompactName} numberOfLines={1}>
-                        {createdQuotation.name}
-                      </Text>
-                    </View>
-                  </View>
-                  <Text style={styles.shareHeroHint}>
-                    Pick one person. Tap the same row again to clear. Search filters the list below.
-                  </Text>
-                  <View style={styles.waSearchWrap}>
-                    <Ionicons name="search" size={18} color="#8696A0" style={{ marginRight: 8 }} />
-                    <TextInput
-                      style={styles.waSearchInput}
-                      value={shareContactQuery}
-                      onChangeText={setShareContactQuery}
-                      placeholder="Search people"
-                      placeholderTextColor="#8696A0"
-                      autoCorrect={false}
-                      autoCapitalize="none"
-                      clearButtonMode="while-editing"
-                    />
-                  </View>
-                  {recentChatsFiltered.length > 0 ? (
-                    <View style={styles.waRecentBlock}>
-                      <Text style={styles.waRecentLabel}>Recent</Text>
-                      <ScrollView
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        contentContainerStyle={styles.waRecentRow}
-                        keyboardShouldPersistTaps="handled"
-                      >
-                        {recentChatsFiltered.map((ch) => {
-                          const nm = getRavenChannelDisplayLabel(ch, user?.email ?? null);
-                          const sel = selectedShareChannelId === ch.name;
-                          return (
-                            <TouchableOpacity
-                              key={ch.name}
-                              style={styles.waRecentItem}
-                              onPress={() => selectShareChannel(ch.name)}
-                              activeOpacity={0.75}
-                            >
-                              <WaShareAvatar channel={ch} userEmail={user?.email} size={56} selected={sel} />
-                              <Text style={styles.waRecentName} numberOfLines={2}>
-                                {nm}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </ScrollView>
-                    </View>
-                  ) : null}
-                </View>
-              }
-              ListEmptyComponent={
-                shareContactQuery.trim() ? (
-                  <Text style={styles.shareFilterEmpty}>No people match your search.</Text>
-                ) : null
-              }
-              renderSectionHeader={({ section: { title } }) => (
-                <Text style={styles.shareSectionTitle}>{title}</Text>
-              )}
-              renderItem={({ item }) => {
-                const label = getRavenChannelDisplayLabel(item, user?.email ?? null);
-                const selected = selectedShareChannelId === item.name;
-                return (
-                  <TouchableOpacity
-                    style={[styles.shareRow, selected && styles.shareRowSelected]}
-                    onPress={() => selectShareChannel(item.name)}
-                    activeOpacity={0.75}
-                  >
-                    <WaShareAvatar channel={item} userEmail={user?.email} size={48} selected={selected} />
-                    <View style={{ flex: 1, minWidth: 0, marginLeft: 12 }}>
-                      <Text style={styles.shareRowTitle} numberOfLines={2}>
-                        {label}
-                      </Text>
-                    </View>
-                    <Ionicons
-                      name={selected ? 'checkmark-circle' : 'ellipse-outline'}
-                      size={24}
-                      color={selected ? '#25D366' : Colors.TEXT_SECONDARY}
-                    />
-                  </TouchableOpacity>
-                );
-              }}
-            />
-          )}
-
-          <View style={styles.shareFooter}>
-            <TouchableOpacity style={styles.skipBtn} onPress={onShareSkip} disabled={sharing}>
-              <Text style={styles.skipBtnText}>Skip</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                styles.shareBtn,
-                styles.shareBtnWa,
-                (sharing || !selectedShareChannelId.trim()) && styles.shareBtnOff,
-              ]}
-              onPress={() => void onShareToSelected()}
-              disabled={sharing || !selectedShareChannelId.trim()}
-            >
-              {sharing ? (
-                <ActivityIndicator color={Colors.WHITE} />
-              ) : (
-                <Text style={styles.shareBtnText}>Send</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
+        <RavenShareToContactPicker
+          heroTitle="Quotation saved"
+          heroName={createdQuotation.name}
+          channels={channels}
+          channelsLoading={channelsLoading}
+          selectedChannelId={selectedShareChannelId}
+          onSelectChannel={setSelectedShareChannelId}
+          onBack={onShareBack}
+          onSkip={onShareSkip}
+          onSend={() => void onShareToSelected()}
+          sharing={sharing}
+          userEmail={user?.email}
+        />
       ) : (
       <KeyboardAvoidingView
         style={styles.flex}
@@ -692,7 +613,13 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
               <Ionicons name="arrow-back" size={24} color={Colors.BLACK} />
             </TouchableOpacity>
             <Text style={styles.topTitle} numberOfLines={1}>
-              {paramSalesOrderName ? 'Quote sourcing request' : 'New quotation'}
+              {editMode
+                ? 'Edit quotation'
+                : resendMode
+                  ? 'Revise quotation'
+                  : paramSalesOrderName
+                    ? 'Quote sourcing request'
+                    : 'New quotation'}
             </Text>
             <View style={{ width: 32 }} />
           </View>
@@ -724,6 +651,20 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
             <View style={[styles.linkBanner, styles.linkBannerErr]}>
               <Ionicons name="warning-outline" size={20} color={Colors.WINE} style={{ marginRight: 8 }} />
               <Text style={styles.linkBannerText}>{orderLoadError}</Text>
+            </View>
+          ) : editMode ? (
+            <View style={styles.linkBanner}>
+              <Ionicons name="create-outline" size={18} color="#636366" style={{ marginRight: 8 }} />
+              <Text style={styles.linkBannerText}>
+                Update lines and save. The buyer gets a chat reply on your quotation — no new file is sent.
+              </Text>
+            </View>
+          ) : resendMode ? (
+            <View style={styles.linkBanner}>
+              <Ionicons name="refresh-outline" size={18} color="#636366" style={{ marginRight: 8 }} />
+              <Text style={styles.linkBannerText}>
+                Revise your rejected quote and send a new quotation for the same order.
+              </Text>
             </View>
           ) : paramSalesOrderName ? (
             <View style={styles.linkBanner}>
@@ -795,33 +736,51 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
                   </TouchableOpacity>
                 </View>
 
-                <TouchableOpacity
-                  style={styles.itemRow}
-                  onPress={() => openPickerForLine(ln.key)}
-                  accessibilityLabel="Select item"
-                  activeOpacity={0.65}
-                >
-                  <View style={styles.itemRowThumb}>
-                    {ln.item_image ? (
-                      <ErpAuthenticatedImage uri={ln.item_image} style={styles.itemRowThumbImg} resizeMode="cover" />
+                <View style={styles.itemRow}>
+                  <TouchableOpacity
+                    style={styles.itemRowThumb}
+                    onPress={() => void pickLineImage(ln.key)}
+                    accessibilityLabel="Attach item image"
+                    activeOpacity={0.75}
+                  >
+                    {pickLineDisplayImageUri(
+                      ln.supplier_image_uri || ln.supplier_image,
+                      ln.item_image
+                    ) ? (
+                      <ErpAuthenticatedImage
+                        uri={pickLineDisplayImageUri(
+                          ln.supplier_image_uri || ln.supplier_image,
+                          ln.item_image
+                        )}
+                        style={styles.itemRowThumbImg}
+                        resizeMode="cover"
+                      />
                     ) : (
-                      <Ionicons name="cube-outline" size={20} color="#C7C7CC" />
+                      <Ionicons name="camera-outline" size={20} color="#C7C7CC" />
                     )}
-                  </View>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={styles.itemRowCode} numberOfLines={1}>
-                      {ln.item_code || 'Select item'}
-                    </Text>
-                    {ln.item_name ? (
-                      <Text style={styles.itemRowName} numberOfLines={2}>
-                        {ln.item_name}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.itemRowMain}
+                    onPress={() => openPickerForLine(ln.key)}
+                    accessibilityLabel="Select item"
+                    activeOpacity={0.65}
+                  >
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={styles.itemRowCode} numberOfLines={1}>
+                        {ln.item_code || 'Select item'}
                       </Text>
-                    ) : (
-                      <Text style={styles.itemRowPlaceholder}>Search catalogue</Text>
-                    )}
-                  </View>
-                  <Ionicons name="chevron-forward" size={16} color="#C7C7CC" />
-                </TouchableOpacity>
+                      {ln.item_name ? (
+                        <Text style={styles.itemRowName} numberOfLines={2}>
+                          {ln.item_name}
+                        </Text>
+                      ) : (
+                        <Text style={styles.itemRowPlaceholder}>Search catalogue</Text>
+                      )}
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color="#C7C7CC" />
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.itemImageHint}>Tap photo to attach your own image (buyer reference shown if none).</Text>
 
                 <View style={styles.nameFieldWrap}>
                   <Text style={styles.qtyRateLabel}>Item name</Text>
@@ -874,7 +833,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
             ))}
 
             <View style={styles.grandTotalRow}>
-              <Text style={styles.grandTotalLabel}>Grand total</Text>
+              <Text style={styles.grandTotalLabel}>Quote budget</Text>
               <Text style={styles.grandTotalValue}>
                 {currency.trim()}{' '}
                 {grandPreview.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -892,7 +851,9 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
             {saving ? (
               <ActivityIndicator color={Colors.WHITE} />
             ) : (
-              <Text style={styles.saveText}>Save quotation</Text>
+              <Text style={styles.saveText}>
+                {editMode ? 'Save changes' : resendMode ? 'Save & send new quote' : 'Save quotation'}
+              </Text>
             )}
           </TouchableOpacity>
         </View>
@@ -1083,6 +1044,15 @@ const styles = StyleSheet.create({
     borderColor: '#D1D1D6',
   },
   itemRowThumbImg: { width: 44, height: 44 },
+  itemRowMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center' },
+  itemImageHint: {
+    fontSize: 11,
+    color: '#8E8E93',
+    marginTop: -4,
+    marginBottom: 10,
+    marginLeft: 56,
+    lineHeight: 15,
+  },
   itemRowCode: { fontSize: 13, fontWeight: '600', color: '#1C1C1E' },
   itemRowName: { fontSize: 14, fontWeight: '400', color: '#3A3A3C', marginTop: 3, lineHeight: 19 },
   itemRowPlaceholder: { fontSize: 14, color: '#8E8E93', marginTop: 3 },
@@ -1127,122 +1097,6 @@ const styles = StyleSheet.create({
   },
   grandTotalLabel: { fontSize: 15, fontWeight: '600', color: '#1C1C1E' },
   grandTotalValue: { fontSize: 16, fontWeight: '600', color: '#1C1C1E', fontVariant: ['tabular-nums'] },
-  shareHeroCompact: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.MD,
-    paddingTop: Spacing.SM,
-    paddingBottom: 4,
-  },
-  shareHeroCompactTitle: { fontSize: 12, fontWeight: '700', color: Colors.TEXT_SECONDARY },
-  shareHeroCompactName: { fontSize: 15, fontWeight: '800', color: Colors.BLACK, marginTop: 2 },
-  shareHeroHint: {
-    fontSize: 12,
-    color: Colors.TEXT_SECONDARY,
-    lineHeight: 17,
-    paddingHorizontal: Spacing.MD,
-    marginBottom: Spacing.SM,
-  },
-  waSearchWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F0F2F5',
-    marginHorizontal: Spacing.MD,
-    borderRadius: 22,
-    paddingHorizontal: 14,
-    paddingVertical: Platform.OS === 'ios' ? 10 : 4,
-    marginBottom: Spacing.SM,
-  },
-  waSearchInput: { flex: 1, fontSize: 16, color: Colors.BLACK, paddingVertical: Platform.OS === 'android' ? 8 : 0 },
-  waRecentBlock: { marginBottom: Spacing.SM },
-  waRecentLabel: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: Colors.TEXT_SECONDARY,
-    textTransform: 'uppercase',
-    marginBottom: 8,
-    marginHorizontal: Spacing.MD,
-  },
-  waRecentRow: { paddingHorizontal: Spacing.MD, paddingBottom: 4, gap: 14 },
-  waRecentItem: { width: 76, alignItems: 'center' },
-  waRecentName: {
-    marginTop: 6,
-    fontSize: 11,
-    fontWeight: '600',
-    color: Colors.BLACK,
-    textAlign: 'center',
-    width: '100%',
-  },
-  waAvatarRing: { alignItems: 'center', justifyContent: 'center' },
-  waAvatarRingSelected: {
-    borderWidth: 2,
-    borderColor: '#25D366',
-    borderRadius: 999,
-    padding: 1,
-  },
-  shareFilterEmpty: {
-    textAlign: 'center',
-    color: Colors.TEXT_SECONDARY,
-    paddingVertical: Spacing.LG,
-    paddingHorizontal: Spacing.MD,
-    fontSize: 14,
-  },
-  shareLoading: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.LG },
-  shareLoadingText: { marginTop: 10, color: Colors.TEXT_SECONDARY, fontSize: 14 },
-  shareEmpty: { flex: 1, padding: Spacing.LG, justifyContent: 'center' },
-  shareEmptyText: { textAlign: 'center', color: Colors.TEXT_SECONDARY, lineHeight: 20, fontSize: 14 },
-  shareList: { flex: 1 },
-  shareListContent: { paddingBottom: Spacing.MD },
-  shareSectionTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: Colors.TEXT_SECONDARY,
-    textTransform: 'uppercase',
-    marginTop: Spacing.SM,
-    marginBottom: 6,
-    marginHorizontal: Spacing.MD,
-  },
-  shareRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: Spacing.MD,
-    backgroundColor: Colors.WHITE,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.BORDER,
-  },
-  shareRowSelected: { backgroundColor: 'rgba(37, 211, 102, 0.08)' },
-  shareRowTitle: { fontSize: 16, fontWeight: '700', color: Colors.BLACK },
-  shareFooter: {
-    flexDirection: 'row',
-    gap: 10,
-    padding: Spacing.MD,
-    borderTopWidth: 1,
-    borderTopColor: Colors.BORDER,
-    backgroundColor: Colors.WHITE,
-  },
-  skipBtn: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: Colors.BORDER,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.WHITE,
-  },
-  skipBtnText: { fontSize: 16, fontWeight: '700', color: Colors.BLACK },
-  shareBtn: {
-    flex: 2,
-    backgroundColor: Colors.WINE,
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  shareBtnWa: { backgroundColor: '#25D366' },
-  shareBtnOff: { opacity: 0.55 },
-  shareBtnText: { color: Colors.WHITE, fontSize: 16, fontWeight: '800' },
   footer: {
     paddingHorizontal: Spacing.MD,
     paddingTop: Spacing.MD,
@@ -1251,7 +1105,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   saveBtn: {
-    backgroundColor: '#1C1C1E',
+    backgroundColor: Colors.SUCCESS,
     paddingVertical: 14,
     borderRadius: 8,
     alignItems: 'center',

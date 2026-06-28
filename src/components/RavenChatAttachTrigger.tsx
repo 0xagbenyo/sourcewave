@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, ViewStyle } from 'react-native';
+import { TouchableOpacity, StyleSheet, View, ViewStyle, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { RavenLight } from '../constants/ravenLightTheme';
@@ -13,6 +13,7 @@ type Props = {
   isBuyerMessaging?: boolean;
   onPickMedia: () => void;
   onPickDocument: () => void;
+  onPickEmoji: () => void;
   onNewQuotation: () => void;
   onSourcingRequest: () => void;
 };
@@ -20,6 +21,7 @@ type Props = {
 function useStableAttachHandlers(handlers: {
   onPickMedia: () => void;
   onPickDocument: () => void;
+  onPickEmoji: () => void;
   onNewQuotation: () => void;
   onSourcingRequest: () => void;
 }) {
@@ -29,6 +31,7 @@ function useStableAttachHandlers(handlers: {
     () => ({
       onPickMedia: () => refs.current.onPickMedia(),
       onPickDocument: () => refs.current.onPickDocument(),
+      onPickEmoji: () => refs.current.onPickEmoji(),
       onNewQuotation: () => refs.current.onNewQuotation(),
       onSourcingRequest: () => refs.current.onSourcingRequest(),
     }),
@@ -36,8 +39,8 @@ function useStableAttachHandlers(handlers: {
   );
 }
 
-/** Plus button + attach sheet — local state so message list re-renders do not block the tap. */
-export const RavenChatAttachTrigger = React.memo(function RavenChatAttachTrigger({
+/** Composer + attach button — TouchableOpacity for reliable taps beside TextInput. */
+export function RavenChatAttachTrigger({
   disabled = false,
   buttonStyle,
   disabledStyle,
@@ -45,6 +48,7 @@ export const RavenChatAttachTrigger = React.memo(function RavenChatAttachTrigger
   isBuyerMessaging = false,
   onPickMedia,
   onPickDocument,
+  onPickEmoji,
   onNewQuotation,
   onSourcingRequest,
 }: Props) {
@@ -53,12 +57,19 @@ export const RavenChatAttachTrigger = React.memo(function RavenChatAttachTrigger
   const stableHandlers = useStableAttachHandlers({
     onPickMedia,
     onPickDocument,
+    onPickEmoji,
     onNewQuotation,
     onSourcingRequest,
   });
 
   const options = useMemo((): RavenChatAttachOption[] => {
     const opts: RavenChatAttachOption[] = [
+      {
+        id: 'emoji',
+        label: t('ravenAttach.emoji'),
+        icon: 'happy-outline',
+        onPress: stableHandlers.onPickEmoji,
+      },
       {
         id: 'media',
         label: t('ravenAttach.photosVideos'),
@@ -103,32 +114,44 @@ export const RavenChatAttachTrigger = React.memo(function RavenChatAttachTrigger
 
   return (
     <>
-      <Pressable
-        style={({ pressed }) => [
-          styles.plusCircleBtn,
-          buttonStyle,
-          disabled && (disabledStyle ?? styles.attachBtnOff),
-          pressed && !disabled && styles.plusCircleBtnPressed,
-        ]}
-        onPress={openMenu}
-        disabled={disabled}
-        delayPressIn={0}
-        hitSlop={6}
-        accessibilityLabel="Add attachment"
-        accessibilityRole="button"
-      >
-        <Ionicons name="add" size={26} color={RavenLight.textMuted} />
-      </Pressable>
+      <View style={styles.btnWrap} collapsable={false}>
+        <TouchableOpacity
+          style={[
+            styles.plusBtn,
+            buttonStyle,
+            disabled ? (disabledStyle ?? styles.plusBtnDisabled) : null,
+          ]}
+          onPress={openMenu}
+          disabled={disabled}
+          activeOpacity={0.65}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          accessibilityLabel={t('ravenAttach.title')}
+          accessibilityRole="button"
+          accessibilityState={{ disabled }}
+        >
+          <Ionicons name="add" size={26} color={disabled ? RavenLight.textSubtle : RavenLight.textMuted} />
+        </TouchableOpacity>
+      </View>
       <RavenChatAttachSheet visible={open} onClose={closeMenu} options={options} />
     </>
   );
-});
+}
+
+const BTN_SIZE = 44;
 
 const styles = StyleSheet.create({
-  plusCircleBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+  btnWrap: {
+    flexShrink: 0,
+    zIndex: 4,
+    ...Platform.select({
+      android: { elevation: 4 },
+      default: {},
+    }),
+  },
+  plusBtn: {
+    width: BTN_SIZE,
+    height: BTN_SIZE,
+    borderRadius: BTN_SIZE / 2,
     backgroundColor: RavenLight.panel,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: RavenLight.border,
@@ -136,9 +159,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 2,
   },
-  plusCircleBtnPressed: {
-    opacity: 0.55,
-    transform: [{ scale: 0.94 }],
+  plusBtnDisabled: {
+    opacity: 0.4,
   },
-  attachBtnOff: { opacity: 0.35 },
 });

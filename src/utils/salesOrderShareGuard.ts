@@ -12,6 +12,13 @@ function isAlreadySubmittedError(e: unknown): boolean {
   return msg.includes('SALES_ORDER_ALREADY_SUBMITTED') || /already submitted/i.test(msg);
 }
 
+function isMissingShipToError(e: unknown): boolean {
+  const code = (e as { code?: string })?.code;
+  if (code === 'SALES_ORDER_MISSING_SHIP_TO') return true;
+  const msg = e instanceof Error ? e.message : String(e ?? '');
+  return msg.includes('SALES_ORDER_MISSING_SHIP_TO');
+}
+
 /** Returns true when the order can be shared; otherwise shows an alert and returns false. */
 export async function confirmSalesOrderShareable(
   orderName: string,
@@ -24,6 +31,10 @@ export async function confirmSalesOrderShareable(
     await getERPNextClient().assertSalesOrderShareable(n);
     return true;
   } catch (e: unknown) {
+    if (isMissingShipToError(e)) {
+      Alert.alert(t('salesOrderShare.missingShipToTitle'), t('salesOrderShare.missingShipToBody'));
+      return false;
+    }
     if (isAlreadySubmittedError(e)) {
       Alert.alert(t('salesOrderShare.alreadySubmittedTitle'), t('salesOrderShare.alreadySubmittedBody'), [
         { text: t('contactUs.ok'), style: 'cancel' },

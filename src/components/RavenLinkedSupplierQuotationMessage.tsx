@@ -16,11 +16,14 @@ import { userFacingError } from '../utils/userFacingError';
 import type { SourcewaveQuotationDraftPayload } from '../utils/chatQuotationDraftMessage';
 import {
   supplierQuotationDocAllowsChatBuyerReview,
+  supplierQuotationAllowsSupplierResend,
   supplierQuotationWorkflowStateIsApprovedLike,
 } from '../utils/chatQuotationDraftMessage';
 import { RavenLight } from '../constants/ravenLightTheme';
 import { useUserSession } from '../context/UserContext';
 import { navigateToSalesInvoiceDetail } from '../utils/erpDocumentNavigation';
+import type { RootStackParamList } from '../types';
+import { notifyErpDocStatusInChat } from '../utils/erpDocChatStatusReply';
 
 type Props = {
   sqName: string;
@@ -31,10 +34,18 @@ type Props = {
    * **`customer`** on the Supplier Quotation (or env).
    */
   billToFrappeUserId?: string | null;
+  /** Raven channel when this quotation card is shown in chat. */
+  ravenChannelId?: string;
+  /** Raven message id of the original quotation share (reply target). */
+  linkMessageId?: string;
   /**
    * Supplier-only: payment row + long-press Reply / Approve payment when the linked quotation belongs to the signed-in supplier.
    */
   supplierSelfServeUx?: boolean;
+  /** Supplier: register payment handler for parent message long-press menu. */
+  registerSqPaymentAction?: (sqName: string, handler: (() => void) | null) => void;
+  /** Long-press on quotation card / supplier rows (opens message action sheet). */
+  onMessageLongPress?: () => void;
   showBuyerActions: boolean;
   /** ERPNext `Supplier.name` for the signed-in portal user — when it matches the quotation’s `supplier`, hide buyer Accept/Reject (Raven `owner` may not match session after API post). */
   viewerSupplierDocId?: string | null;
@@ -42,8 +53,6 @@ type Props = {
   busy?: boolean;
   onAccept?: () => void;
   onReject?: () => void;
-  /** Supplier: long-press “Reply” targets this Raven message. */
-  onSupplierReplyToQuotation?: () => void;
 };
 
 type LinkedInvoice = {
@@ -73,6 +82,8 @@ function formatSalesInvoiceStatusLabel(full: Record<string, unknown>): string {
 export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
   sqName,
   billToFrappeUserId,
+  ravenChannelId,
+  linkMessageId,
   supplierSelfServeUx,
   showBuyerActions,
   viewerSupplierDocId,
@@ -80,7 +91,8 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
   busy,
   onAccept,
   onReject,
-  onSupplierReplyToQuotation,
+  registerSqPaymentAction,
+  onMessageLongPress,
 }) => {
   const navigation = useNavigation();
   const { user } = useUserSession();
@@ -90,6 +102,7 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
   const [isDraft, setIsDraft] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [quotationSupplierId, setQuotationSupplierId] = useState<string | null>(null);
+  const [supplierResendEligible, setSupplierResendEligible] = useState(false);
   const [linkedInvoice, setLinkedInvoice] = useState<LinkedInvoice | null>(null);
   const [invoiceBusy, setInvoiceBusy] = useState(false);
   const [payModal, setPayModal] = useState(false);
@@ -146,6 +159,7 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
     setPayload(null);
     setLoadError(false);
     setQuotationSupplierId(null);
+    setSupplierResendEligible(false);
     (async () => {
       try {
         const doc = await getERPNextClient().getSupplierQuotationByName(name);
@@ -163,6 +177,7 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
         const txRaw = doc.transaction_date ?? doc.creation;
         const transactionDate = txRaw != null ? String(txRaw).trim() : '';
         const eligible = supplierQuotationDocAllowsChatBuyerReview(doc as Record<string, unknown>);
+        setSupplierResendEligible(supplierQuotationAllowsSupplierResend(doc as Record<string, unknown>));
         setPayload({
           name,
           currency: String(doc.currency || 'USD').trim() || 'USD',
@@ -216,13 +231,13 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
         billTo ? { billToFrappeUserId: billTo } : undefined
       );
       if (!invoice) {
-        Alert.alert('Invoice', error || 'Could not create or load a sales invoice for this quotation.');
+        Alert.error('Invoice', error || 'Could not create or load a sales invoice for this quotation.');
         return;
       }
       const snap = await pullLinkedInvoice(name);
       setLinkedInvoice(snap);
       if (!snap) {
-        Alert.alert('Invoice', 'Sales invoice was created but could not be loaded. Try Pay again in a moment.');
+        Alert.error('Invoice', 'Sales invoice was created but could not be loaded. Try Pay again in a moment.');
         return;
       }
       if (snap.outstanding <= 0.009) {
@@ -236,7 +251,7 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
       }
       setPayModal(true);
     } catch (e: unknown) {
-      Alert.alert('Invoice', userFacingError(e, 'Could not prepare the sales invoice.'));
+      Alert.error('Invoice', userFacingError(e, 'Could not prepare the sales invoice.'));
     } finally {
       setInvoiceBusy(false);
     }
@@ -252,9 +267,20 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
       });
       setPayModal(false);
       await refreshLinkedInvoice(sqName.trim());
-      Alert.alert('Payment', 'Payment recorded successfully.');
+      const cur = linkedInvoice.currency.trim() || 'GHS';
+      const amtLabel = amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      notifyErpDocStatusInChat({
+        linkDoctype: 'Sales Invoice',
+        linkDocument: linkedInvoice.name,
+        caption: `Payment of ${cur} ${amtLabel} recorded.`,
+        ravenChannelId,
+        linkMessageId,
+        sessionEmail: user?.email ?? null,
+        fallbackLink: { linkDoctype: 'Supplier Quotation', linkDocument: sqName.trim() },
+      });
+      Alert.success('Payment', 'Payment recorded successfully.');
     } catch (e: unknown) {
-      Alert.alert('Payment', userFacingError(e, 'Could not record payment.'));
+      Alert.error('Payment', userFacingError(e, 'Could not record payment.'));
     } finally {
       setPaySubmitting(false);
     }
@@ -269,9 +295,67 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
         isSupplierPortal
       );
     } catch (e: unknown) {
-      Alert.alert('Invoice', userFacingError(e, 'Could not open this invoice.'));
+      Alert.error('Invoice', userFacingError(e, 'Could not open this invoice.'));
     }
   }, [navigation, linkedInvoice?.name, isSupplierPortal]);
+
+  const onReviseResendQuotation = useCallback(() => {
+    const n = sqName.trim();
+    if (!n) return;
+    try {
+      (navigation as { navigate: (screen: keyof RootStackParamList, params?: object) => void }).navigate(
+        'SupplierQuotationCompose',
+        {
+          resendFromQuotation: n,
+          ...(ravenChannelId ? { ravenChannelId } : {}),
+          ...(linkMessageId ? { linkMessageId } : {}),
+        }
+      );
+    } catch (e: unknown) {
+      Alert.error('Quotation', userFacingError(e, 'Could not open quotation editor.'));
+    }
+  }, [navigation, sqName, ravenChannelId, linkMessageId]);
+
+  useEffect(() => {
+    if (!registerSqPaymentAction) return;
+    const n = sqName.trim();
+    if (!n) return;
+
+    if (!payload || loadError) {
+      registerSqPaymentAction(n, null);
+      return () => registerSqPaymentAction(n, null);
+    }
+
+    const submitted = !isDraft;
+    const viewerSup = (viewerSupplierDocId || '').trim();
+    const showPay =
+      enableSupplierUx &&
+      viewerSup.length > 0 &&
+      quotationSupplierId != null &&
+      viewerSup === quotationSupplierId &&
+      submitted &&
+      handled !== 'rejected';
+
+    if (showPay) {
+      registerSqPaymentAction(n, () => {
+        void startPaymentFlow();
+      });
+    } else {
+      registerSqPaymentAction(n, null);
+    }
+    return () => registerSqPaymentAction(n, null);
+  }, [
+    registerSqPaymentAction,
+    sqName,
+    payload,
+    loadError,
+    isDraft,
+    enableSupplierUx,
+    viewerSupplierDocId,
+    quotationSupplierId,
+    handled,
+    startPaymentFlow,
+  ]);
 
   if (loadError && !payload) {
     return (
@@ -316,15 +400,12 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
     handled === 'accepted' ||
     (submitted && displayHandled === 'submitted');
 
-  const showSupplierLongPressMenu =
+  const showSupplierResend =
     enableSupplierUx &&
     viewerSup.length > 0 &&
     quotationSupplierId != null &&
     viewerSup === quotationSupplierId &&
-    submitted &&
-    handled !== 'rejected' &&
-    approvedForSupplierMenu &&
-    typeof onSupplierReplyToQuotation === 'function';
+    (supplierResendEligible || handled === 'rejected');
 
   const supplierSeesPaymentRow =
     enableSupplierUx &&
@@ -339,27 +420,6 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
   const outstanding = linkedInvoice?.outstanding ?? 0;
   const showPaidInFull = supplierSeesPaymentRow && linkedInvoice && outstanding <= 0.009 && linkedInvoice.grandTotal > 0;
 
-  const openSupplierActionsMenu = () => {
-    if (!onSupplierReplyToQuotation) return;
-    const reply = () => onSupplierReplyToQuotation();
-    const pay = () => {
-      void startPaymentFlow();
-    };
-
-    Alert.alert('Quotation', 'What would you like to do?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Reply', onPress: reply },
-      { text: 'Confirm payment', onPress: pay },
-    ]);
-  };
-
-  const onQuotationCardLongPress =
-    showSupplierLongPressMenu && typeof onSupplierReplyToQuotation === 'function'
-      ? openSupplierActionsMenu
-      : enableSupplierUx && typeof onSupplierReplyToQuotation === 'function'
-        ? () => onSupplierReplyToQuotation()
-        : undefined;
-
   const cardBlock = (
     <>
       <RavenQuotationDraftCard
@@ -369,11 +429,26 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
         busy={busy}
         onAccept={cardShowBuyer ? onAccept : undefined}
         onReject={cardShowBuyer ? onReject : undefined}
-        onCardLongPress={onQuotationCardLongPress}
+        onCardLongPress={onMessageLongPress}
       />
+      {showSupplierResend ? (
+        <Pressable
+          onPress={onReviseResendQuotation}
+          onLongPress={onMessageLongPress}
+          delayLongPress={380}
+          style={({ pressed }) => [styles.resendBtn, pressed && styles.resendBtnPressed]}
+          accessibilityRole="button"
+          accessibilityLabel="Revise and send a new quotation"
+        >
+          <Ionicons name="refresh-outline" size={16} color={RavenLight.accent} />
+          <Text style={styles.resendBtnText}>Revise & resend</Text>
+        </Pressable>
+      ) : null}
       {showInvoiceStrip ? (
         <Pressable
           onPress={openLinkedInvoice}
+          onLongPress={onMessageLongPress}
+          delayLongPress={380}
           style={({ pressed }) => [styles.invoiceStrip, pressed && styles.invoiceStripPressed]}
           accessibilityRole="button"
           accessibilityLabel={`View sales invoice ${linkedInvoice!.name}`}
@@ -389,41 +464,24 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
           </View>
         </Pressable>
       ) : null}
-      {(supplierSeesPaymentRow || (showSupplierLongPressMenu && invoiceBusy)) &&
-        (showSupplierLongPressMenu ? (
-          <Pressable onLongPress={openSupplierActionsMenu} delayLongPress={380}>
-            <View style={styles.payBar}>
-              {invoiceBusy ? (
-                <ActivityIndicator color={RavenLight.accent} />
-              ) : linkedInvoice ? (
-                <Text style={styles.payMeta} numberOfLines={3}>
-                  {showPaidInFull
-                    ? `${linkedInvoice.name} — paid in full`
-                    : `${linkedInvoice.name} · Outstanding ${linkedInvoice.currency} ${outstanding.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                </Text>
-              ) : (
-                <Text style={styles.payMeta}>Preparing sales invoice…</Text>
-              )}
-            </View>
-          </Pressable>
-        ) : (
-          <View style={styles.payBar}>
-            {invoiceBusy ? (
-              <ActivityIndicator color={RavenLight.accent} />
-            ) : linkedInvoice ? (
-              <Text style={styles.payMeta} numberOfLines={3}>
-                {showPaidInFull
-                  ? `${linkedInvoice.name} — paid in full`
-                  : `${linkedInvoice.name} · Outstanding ${linkedInvoice.currency} ${outstanding.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-              </Text>
-            ) : (
-              <Text style={styles.payMeta}>Preparing sales invoice…</Text>
-            )}
-          </View>
-        ))}
-      {showSupplierLongPressMenu ? (
-        <Pressable onLongPress={openSupplierActionsMenu} delayLongPress={380}>
-          <Text style={styles.longPressHint}>Long press quotation to reply or Confirm payment</Text>
+      {(supplierSeesPaymentRow || invoiceBusy) ? (
+        <Pressable
+          onLongPress={onMessageLongPress}
+          delayLongPress={380}
+          style={styles.payBar}
+          disabled={!onMessageLongPress}
+        >
+          {invoiceBusy ? (
+            <ActivityIndicator color={RavenLight.accent} />
+          ) : linkedInvoice ? (
+            <Text style={styles.payMeta} numberOfLines={3}>
+              {showPaidInFull
+                ? `${linkedInvoice.name} — paid in full`
+                : `${linkedInvoice.name} · Outstanding ${linkedInvoice.currency} ${outstanding.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+            </Text>
+          ) : (
+            <Text style={styles.payMeta}>Preparing sales invoice…</Text>
+          )}
         </Pressable>
       ) : null}
     </>
@@ -497,11 +555,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   payMeta: { flex: 1, fontSize: 12, fontWeight: '600', color: RavenLight.textMuted },
-  longPressHint: {
-    marginTop: 6,
-    fontSize: 11,
-    fontWeight: '600',
-    color: RavenLight.textSubtle,
-    textAlign: 'center',
+  resendBtn: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: RavenLight.radiusMd,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: RavenLight.accent,
+    backgroundColor: RavenLight.accentSoft,
+  },
+  resendBtnPressed: { opacity: 0.85 },
+  resendBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: RavenLight.accent,
   },
 });

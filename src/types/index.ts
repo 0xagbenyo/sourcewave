@@ -146,6 +146,7 @@ export interface Order {
   total: number;
   shippingAddress: UserAddress;
   billingAddress: UserAddress;
+  shippingAddressName?: string;
   paymentMethod: PaymentMethod;
   trackingNumber?: string;
   estimatedDelivery?: string;
@@ -157,8 +158,8 @@ export interface OrderItem {
   id: string;
   productId: string;
   product: Product;
-  color: ProductColor;
-  size: ProductSize;
+  color?: ProductColor;
+  size?: ProductSize;
   quantity: number;
   price: number;
 }
@@ -242,6 +243,16 @@ export type SupplierStackParamList = {
   SupplierPaymentEntryDetail: { name: string };
   SupplierQuotationList: { initialTab?: 'list' | 'new' } | undefined;
   SupplierQuotationDetail: { name: string; customerId?: string };
+  SupplierQuotationCompose:
+    | {
+        ravenChannelId?: string;
+        salesOrderName?: string;
+        quotationName?: string;
+        resendFromQuotation?: string;
+        /** Raven message id of the original quotation share (reply target when resending). */
+        linkMessageId?: string;
+      }
+    | undefined;
 };
 
 export type SupplierTabParamList = {
@@ -283,6 +294,8 @@ export type RootStackParamList = {
     subCategoryId?: string;
     /** When set, the request is shared in this Raven DM after submit. */
     ravenChannelId?: string;
+    /** Raven Workspace document id (optional; used when returning to chat after share). */
+    ravenWorkspaceId?: string;
     /** Supplier representative (Frappe user); used when opening from profile. */
     peerUserId?: string;
     supplierLabel?: string;
@@ -305,13 +318,24 @@ export type RootStackParamList = {
   EditProfile: undefined;
   Settings: undefined;
   AddressBook: undefined;
-  EditAddress: { address?: ErpCustomerAddressRow; returnTo?: string } | undefined;
+  EditAddress: { address?: ErpCustomerAddressRow; returnTo?: string; orderId?: string } | undefined;
   Suppliers: undefined;
   SupplierDetail: { supplierId: string };
   AgentSupplierChat: { supplierId: string };
   SupplierChatList: undefined;
   /** Draft SQ + Raven doc link. Omit `ravenChannelId` to pick any chat/channel on the compose screen. */
-  SupplierQuotationCompose: { ravenChannelId?: string; salesOrderName?: string } | undefined;
+  SupplierQuotationCompose:
+    | {
+        ravenChannelId?: string;
+        salesOrderName?: string;
+        /** Edit an existing draft quotation (same document). */
+        quotationName?: string;
+        /** Prefill from a rejected quotation and save as a new document. */
+        resendFromQuotation?: string;
+        /** Raven message id of the original quotation share (reply target when resending). */
+        linkMessageId?: string;
+      }
+    | undefined;
   /** Buyer: pick a Sales Order (sourcing request) and share it in supplier chat. */
   BuyerSalesOrderShareCompose:
     | {
@@ -319,6 +343,8 @@ export type RootStackParamList = {
         peerUserId?: string;
         salesOrderName?: string;
         supplierLabel?: string;
+        /** Raven workspace id when sharing from a supplier group profile. */
+        ravenWorkspaceId?: string;
       }
     | undefined;
   /** Native Raven-style chat (light UI); not a WebView. */

@@ -24,6 +24,7 @@ import { Header } from '../components/Header';
 import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 import { useFlyers, useOrders } from '../hooks/erpnext';
 import { useUserSession } from '../context/UserContext';
+import { useRavenUnread } from '../context/RavenUnreadContext';
 import { useSubscription } from '../context/SubscriptionContext';
 import { formatGhanaCedis } from '../utils/currency';
 import type { OrderStatus } from '../types';
@@ -57,6 +58,7 @@ export const HomeScreen: React.FC = () => {
   const [infoModalVisible, setInfoModalVisible] = useState(false);
   const [resolvedCustomerId, setResolvedCustomerId] = useState('');
   const { user } = useUserSession();
+  const { unreadTotal, refreshUnreadCounts } = useRavenUnread();
   const { isActive: subscriptionActive, isLoading: subscriptionLoading } = useSubscription();
 
   const { data: flyers, loading: flyersLoading, error: flyersError, refetch: refetchFlyers } = useFlyers();
@@ -141,6 +143,12 @@ export const HomeScreen: React.FC = () => {
 
   useFocusEffect(
     useCallback(() => {
+      void refreshUnreadCounts();
+    }, [refreshUnreadCounts])
+  );
+
+  useFocusEffect(
+    useCallback(() => {
       const len = flyers?.length ?? 0;
       if (len < 2) return undefined;
       const id = setInterval(() => {
@@ -219,10 +227,23 @@ export const HomeScreen: React.FC = () => {
             activeOpacity={0.8}
             onPress={action.onPress}
             accessibilityRole="button"
-            accessibilityLabel={action.label}
+            accessibilityLabel={
+              action.key === 'messages' && user?.email && unreadTotal > 0
+                ? `${action.label}, ${unreadTotal} unread`
+                : action.label
+            }
           >
-            <View style={[homeLayout.quickIconWrap, { backgroundColor: action.bg }]}>
-              <Ionicons name={action.icon} size={22} color={action.tint} />
+            <View style={homeLayout.quickIconOuter}>
+              <View style={[homeLayout.quickIconWrap, { backgroundColor: action.bg }]}>
+                <Ionicons name={action.icon} size={22} color={action.tint} />
+              </View>
+              {action.key === 'messages' && user?.email && unreadTotal > 0 ? (
+                <View style={homeLayout.quickBadge} pointerEvents="none">
+                  <Text style={homeLayout.quickBadgeText}>
+                    {unreadTotal > 99 ? '99+' : String(unreadTotal)}
+                  </Text>
+                </View>
+              ) : null}
             </View>
             <Text style={homeLayout.quickLabel}>{action.label}</Text>
           </TouchableOpacity>
@@ -529,12 +550,36 @@ const homeLayout = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Colors.BORDER,
   },
+  quickIconOuter: {
+    position: 'relative',
+    width: 44,
+    height: 44,
+  },
   quickIconWrap: {
     width: 44,
     height: 44,
     borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  quickBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -4,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 5,
+    borderRadius: 9,
+    backgroundColor: Colors.SHEIN_PINK,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#F9FAFB',
+  },
+  quickBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: Colors.WHITE,
   },
   quickLabel: {
     marginTop: 8,

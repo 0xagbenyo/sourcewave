@@ -1,9 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 import { WebView } from 'react-native-webview';
-import * as FileSystem from 'expo-file-system/legacy';
 import { buildAuthenticatedErpImageSource } from '../utils/erpImageUrl';
-import { fetchAuthenticatedUriAsBase64 } from '../utils/fetchAuthenticatedUriAsBase64';
+import { fetchAuthenticatedPdfBase64 } from '../utils/fetchAuthenticatedPdfBase64';
+import { buildPdfJsViewerHtml } from '../utils/pdfJsViewerHtml';
 
 type Props = {
   /** Absolute ERP URL or path that {@link buildAuthenticatedErpImageSource} understands. */
@@ -11,72 +11,57 @@ type Props = {
   style?: object;
 };
 
+const androidPdfWebViewProps = {
+  originWhitelist: ['*'] as string[],
+  javaScriptEnabled: true,
+  domStorageEnabled: true,
+  mixedContentMode: 'always' as const,
+  setSupportMultipleWindows: false,
+  allowFileAccess: true,
+  androidLayerType: 'software' as const,
+  cacheEnabled: true,
+  thirdPartyCookiesEnabled: true,
+};
+
 /**
- * Android: remote PDF URLs often download instead of rendering, and `data:` PDF iframes often paint **black**
- * in WebView. We download to the app cache with the same auth and load `file://…` (reliable inline preview).
- * iOS: direct `uri` + headers.
+ * Android WebView cannot render PDFs via `file://` or `<embed data:…>` (blank/black screen).
+ * We fetch the PDF with ERP auth and paint pages with PDF.js in a WebView.
+ * iOS: direct authenticated `uri` + headers (native PDF support).
  */
 export const ErpAuthenticatedPdfWebView: React.FC<Props> = ({ resourceUri, style }) => {
-  const [phase, setPhase] = useState<'idle' | 'loading' | 'file' | 'html' | 'direct' | 'err'>(
+  const [phase, setPhase] = useState<'loading' | 'html' | 'direct' | 'err'>(
     Platform.OS === 'android' ? 'loading' : 'direct'
   );
-  const [localFileUri, setLocalFileUri] = useState<string | null>(null);
   const [html, setHtml] = useState<string | null>(null);
-  const localFileRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (Platform.OS !== 'android') {
       setPhase('direct');
+      setHtml(null);
       return;
     }
+
     let cancelled = false;
     const uri = resourceUri.trim();
     if (!uri) {
       setPhase('err');
+      setHtml(null);
       return;
     }
 
-    const prev = localFileRef.current;
-    if (prev?.startsWith('file')) {
-      void FileSystem.deleteAsync(prev, { idempotent: true }).catch(() => {});
-      localFileRef.current = null;
-    }
-
     setPhase('loading');
-    setLocalFileUri(null);
     setHtml(null);
 
-    (async () => {
+    void (async () => {
       try {
-        const src = buildAuthenticatedErpImageSource(uri);
-        if (!src?.uri) throw new Error('Invalid URL');
-        const base = FileSystem.cacheDirectory;
-        if (!base) throw new Error('No cache directory');
-
-        const path = `${base}erp-pdf-preview-${Date.now()}.pdf`;
-        const result = await FileSystem.downloadAsync(src.uri, path, {
-          headers: src.headers as Record<string, string> | undefined,
-        });
-        if (cancelled) {
-          void FileSystem.deleteAsync(result.uri, { idempotent: true }).catch(() => {});
-          return;
-        }
-        if (result.status < 200 || result.status >= 400) {
-          throw new Error(`HTTP ${result.status}`);
-        }
-        localFileRef.current = result.uri;
-        setLocalFileUri(result.uri);
-        setPhase('file');
-      } catch {
+        const b64 = await fetchAuthenticatedPdfBase64(uri);
         if (cancelled) return;
-        try {
-          const b64 = await fetchAuthenticatedUriAsBase64(uri);
-          if (cancelled) return;
-          const h = `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5"/><style>html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#fff}</style></head><body><embed type="application/pdf" width="100%" height="100%" style="position:fixed;left:0;top:0;right:0;bottom:0;border:0" src="data:application/pdf;base64,${b64}"/></body></html>`;
-          setHtml(h);
-          setPhase('html');
-        } catch {
-          if (!cancelled) setPhase('err');
+        setHtml(buildPdfJsViewerHtml(b64));
+        setPhase('html');
+      } catch {
+        if (!cancelled) {
+          setPhase('err');
+          setHtml(null);
         }
       }
     })();
@@ -85,17 +70,6 @@ export const ErpAuthenticatedPdfWebView: React.FC<Props> = ({ resourceUri, style
       cancelled = true;
     };
   }, [resourceUri]);
-
-  useEffect(
-    () => () => {
-      const p = localFileRef.current;
-      if (p?.startsWith('file')) {
-        void FileSystem.deleteAsync(p, { idempotent: true }).catch(() => {});
-        localFileRef.current = null;
-      }
-    },
-    []
-  );
 
   if (phase === 'loading') {
     return (
@@ -117,36 +91,12 @@ export const ErpAuthenticatedPdfWebView: React.FC<Props> = ({ resourceUri, style
 
   const webStyle = [style, styles.webBg];
 
-  if (phase === 'file' && localFileUri) {
-    return (
-      <WebView
-        source={{ uri: localFileUri }}
-        style={webStyle}
-        originWhitelist={['*']}
-        javaScriptEnabled
-        domStorageEnabled
-        mixedContentMode="always"
-        setSupportMultipleWindows={false}
-        allowFileAccess
-        allowFileAccessFromFileURLs
-        allowUniversalAccessFromFileURLs
-        androidLayerType="hardware"
-      />
-    );
-  }
-
   if (phase === 'html' && html) {
     return (
       <WebView
-        source={{ html, baseUrl: 'about:blank' }}
+        source={{ html, baseUrl: 'https://cdnjs.cloudflare.com' }}
         style={webStyle}
-        originWhitelist={['*']}
-        javaScriptEnabled
-        domStorageEnabled
-        mixedContentMode="always"
-        setSupportMultipleWindows={false}
-        allowFileAccess
-        androidLayerType="hardware"
+        {...androidPdfWebViewProps}
       />
     );
   }

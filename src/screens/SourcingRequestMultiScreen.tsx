@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -23,27 +23,24 @@ import { Header } from '../components/Header';
 import { useUserSession } from '../context/UserContext';
 import { useTranslation } from 'react-i18next';
 import { getERPNextClient } from '../services/erpnext';
-import {
-  buildSourcingCategoryOptions,
-  isTopLevelItemGroupParent,
-  resolveItemGroupIdsForSourcingCategory,
-} from '../utils/itemGroup';
-import { Category } from '../types';
-import type { RootStackParamList } from '../types';
+import { buildSourcingCategoryOptions, isTopLevelItemGroupParent } from '../utils/itemGroup';
+import type { RootStackParamList, ErpCustomerAddressRow } from '../types';
 import { SearchableSelect } from '../components/SearchableSelect';
-import { withOtherItemOption, SourcingItemOption, resolveSubcategorySourcingItem, prependSourcingItemOption } from '../utils/sourcingItems';
+import { categoryAsSourcingItem } from '../utils/sourcingItems';
 import { buildSourcingSalesOrderLines } from '../utils/sourcingSubmit';
+import { navigateToSalesOrderDetail } from '../utils/erpDocumentNavigation';
+import { ShipToAddressField } from '../components/ShipToAddressField';
 import {
   resolveRavenChannelForSupplierShare,
   shareSalesOrderInRavenChat,
 } from '../utils/shareSalesOrderInChat';
-import { userFacingError } from '../utils/userFacingError';
+import { markSalesOrderSharedLocally } from '../utils/salesOrderShareMarks';
+import { showSalesOrderShareSentAndOpenChat } from '../utils/openRavenChatAfterShare';
+import { getRavenDmPeerUserId, listRavenChannelsForSessionUser } from '../services/ravenNativeApi';
 
 type SourcingRoute = RouteProp<RootStackParamList, 'SourcingRequest'>;
 
 const hairline = StyleSheet.hairlineWidth;
-
-type DropdownItem = SourcingItemOption;
 
 function resolveCanonicalItemGroupId(raw: string, allGroups: any[]): string {
   const q = raw.trim();
@@ -75,12 +72,10 @@ type RequestForm = {
   selectedCategoryId: string;
   selectedCategoryName: string;
   selectedProductId: string;
-  itemFreeText: string;
   itemDescription: string;
   referenceImageUri: string | null;
   quantity: string;
   expectedRate: string;
-  loadingProducts: boolean;
 };
 
 const newForm = (expanded: boolean): RequestForm => ({
@@ -89,12 +84,10 @@ const newForm = (expanded: boolean): RequestForm => ({
   selectedCategoryId: '',
   selectedCategoryName: '',
   selectedProductId: '',
-  itemFreeText: '',
   itemDescription: '',
   referenceImageUri: null,
   quantity: '1',
   expectedRate: '',
-  loadingProducts: false,
 });
 
 export const SourcingRequestMultiScreen: React.FC = () => {
@@ -107,6 +100,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
 
   const paramChannelId = (route.params?.ravenChannelId || '').trim();
   const paramPeerUserId = (route.params?.peerUserId || '').trim();
+  const paramWorkspaceId = (route.params?.ravenWorkspaceId || '').trim();
   const supplierLabel = (route.params?.supplierLabel || '').trim();
   const paramSupplierDocName = (route.params?.supplierDocName || '').trim();
   const paramSupplierGroupLabel = String(
@@ -120,10 +114,14 @@ export const SourcingRequestMultiScreen: React.FC = () => {
   const [allGroups, setAllGroups] = useState<any[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [shipToAddressName, setShipToAddressName] = useState('');
   const [forms, setForms] = useState<RequestForm[]>([newForm(true)]);
-  const [productsByFormId, setProductsByFormId] = useState<Record<string, DropdownItem[]>>({});
   const [didAutoPrefill, setDidAutoPrefill] = useState(false);
-  const supplierItemsFetchGenRef = useRef<Record<string, number>>({});
+  const shareSentRef = useRef(false);
+
+  const onShipToChange = useCallback((name: string, _row: ErpCustomerAddressRow) => {
+    setShipToAddressName(name);
+  }, []);
 
   useEffect(() => {
     const fetchGroups = async () => {
@@ -154,18 +152,6 @@ export const SourcingRequestMultiScreen: React.FC = () => {
     };
   }, []);
 
-  const categoryTree = useMemo<Category[]>(
-    () =>
-      allGroups.map((group: any) => ({
-        id: group.name,
-        name: group.item_group_name || group.name,
-        slug: group.name,
-        image: group.image || '',
-        parentId: group.parent_item_group,
-      })),
-    [allGroups]
-  );
-
   const itemCategoryList = useMemo(
     () => buildSourcingCategoryOptions(allGroups),
     [allGroups]
@@ -185,104 +171,11 @@ export const SourcingRequestMultiScreen: React.FC = () => {
     setForms((prev) => prev.map((f) => (f.id === formId ? { ...f, ...updates } : f)));
   };
 
-  const fetchItemsForForm = async (
-    formId: string,
-    categoryId: string,
-    prefillSubcategory?: { name?: string; item_group_name?: string } | null
-  ) => {
-    try {
-      updateForm(formId, { loadingProducts: true });
-      const client = getERPNextClient();
-      const groupIds = resolveItemGroupIdsForSourcingCategory(categoryId, categoryTree);
-      const items = await client.getRawItemsByGroups(groupIds, 500);
-      const unique = new Map<string, any>();
-      items.forEach((item: any) => {
-        if (item?.name) unique.set(item.name, item);
-      });
-      let dropdownItems: DropdownItem[] = withOtherItemOption(
-        Array.from(unique.values())
-          .filter((item: any) => Number(item?.disabled) !== 1)
-          .map((item: any) => ({
-            id: item.name,
-            name: item.item_name || item.name,
-            itemCode: item.name,
-          }))
-      );
-
-      if (prefillSubcategory) {
-        const subItem = resolveSubcategorySourcingItem(prefillSubcategory, dropdownItems);
-        dropdownItems = withOtherItemOption(
-          prependSourcingItemOption(
-            dropdownItems.filter((item) => item.id !== 'Other'),
-            subItem
-          )
-        );
-        updateForm(formId, { selectedProductId: subItem.id });
-      }
-
-      setProductsByFormId((prev) => ({ ...prev, [formId]: dropdownItems }));
-    } catch (error) {
-      console.error('Error fetching items for form:', error);
-      setProductsByFormId((prev) => ({ ...prev, [formId]: [] }));
-    } finally {
-      updateForm(formId, { loadingProducts: false });
-    }
-  };
-
-  const fetchSupplierItemsForForm = async (formId: string, categoryId: string) => {
-    const canonicalId = resolveCanonicalItemGroupId(categoryId, allGroups) || categoryId.trim();
-    if (!canonicalId) {
-      setProductsByFormId((prev) => ({ ...prev, [formId]: [] }));
-      return;
-    }
-
-    const groupIds = resolveItemGroupIdsForSourcingCategory(canonicalId, categoryTree);
-    const allowedGroupIds = new Set(groupIds.map((g) => g.toLowerCase()));
-
-    const gen = (supplierItemsFetchGenRef.current[formId] || 0) + 1;
-    supplierItemsFetchGenRef.current[formId] = gen;
-
-    try {
-      updateForm(formId, { loadingProducts: true, selectedProductId: '' });
-      setProductsByFormId((prev) => ({ ...prev, [formId]: [] }));
-
-      const client = getERPNextClient();
-      let rows = await client.searchItemsForQuotation({
-        supplier: paramSupplierDocName,
-        itemGroups: groupIds.length > 0 ? groupIds : undefined,
-        q: '',
-        limit: 200,
-      });
-
-      if (supplierItemsFetchGenRef.current[formId] !== gen) return;
-
-      const filtered = rows.filter((row) => {
-        const ig = resolveCanonicalItemGroupId(String(row.item_group || ''), allGroups).toLowerCase();
-        return allowedGroupIds.has(ig);
-      });
-
-      const dropdownItems: DropdownItem[] = filtered.map((row) => {
-        const code = String(row.item_code || row.name || '').trim();
-        return {
-          id: code,
-          name: String(row.item_name || '').trim() || code,
-          itemCode: code,
-        };
-      });
-      setProductsByFormId((prev) => ({ ...prev, [formId]: dropdownItems }));
-    } catch (error) {
-      if (supplierItemsFetchGenRef.current[formId] !== gen) return;
-      console.error('Error fetching supplier items for form:', error);
-      setProductsByFormId((prev) => ({ ...prev, [formId]: [] }));
-    } finally {
-      if (supplierItemsFetchGenRef.current[formId] === gen) {
-        updateForm(formId, { loadingProducts: false });
-      }
-    }
-  };
-
-  const selectedProductFor = (form: RequestForm) =>
-    (productsByFormId[form.id] || []).find((p) => p.id === form.selectedProductId);
+  const lockCategoryAsItem = (categoryId: string, categoryName: string) => ({
+    selectedCategoryId: categoryId,
+    selectedCategoryName: categoryName,
+    selectedProductId: categoryId,
+  });
 
   useEffect(() => {
     if (paramSupplierGroupLabel) {
@@ -322,12 +215,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
     }
 
     const { id, name } = supplierLockedCategory;
-    updateForm(forms[0].id, {
-      selectedCategoryId: id,
-      selectedCategoryName: name,
-      selectedProductId: '',
-    });
-    void fetchSupplierItemsForForm(forms[0].id, id);
+    updateForm(forms[0].id, lockCategoryAsItem(id, name));
     setDidAutoPrefill(true);
   }, [
     supplierSourcingMode,
@@ -414,13 +302,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
     const categoryName =
       parentGroupRaw.item_group_name || parentGroupRaw.name || parentParam || categoryId;
 
-    updateForm(firstForm.id, {
-      selectedCategoryId: categoryId,
-      selectedCategoryName: categoryName,
-      selectedProductId: '',
-    });
-
-    void fetchItemsForForm(firstForm.id, categoryId, matchedSubcategoryRaw);
+    updateForm(firstForm.id, lockCategoryAsItem(categoryId, categoryName));
 
     setDidAutoPrefill(true);
   }, [didAutoPrefill, loadingGroups, allGroups, forms, route?.params]);
@@ -433,11 +315,9 @@ export const SourcingRequestMultiScreen: React.FC = () => {
         ...prev.map((f) => ({ ...f, expanded: false })),
         {
           ...nextForm,
-          selectedCategoryId: id,
-          selectedCategoryName: name,
+          ...lockCategoryAsItem(id, name),
         },
       ]);
-      void fetchSupplierItemsForForm(nextForm.id, id);
       return;
     }
     setForms((prev) => [...prev.map((f) => ({ ...f, expanded: false })), nextForm]);
@@ -461,6 +341,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
   };
 
   const submitAll = async () => {
+    if (shareSentRef.current || submitting) return;
     if (forms.length === 0) {
       Alert.alert('Missing Items', 'Please add at least one item request.');
       return;
@@ -468,17 +349,12 @@ export const SourcingRequestMultiScreen: React.FC = () => {
 
     for (let i = 0; i < forms.length; i += 1) {
       const form = forms[i];
-      const product = selectedProductFor(form);
       const qty = parseInt(form.quantity, 10);
       const rate = parseFloat(form.expectedRate);
       const requestNum = i + 1;
 
-      if (!form.selectedCategoryId) {
+      if (!form.selectedCategoryId || !form.selectedCategoryName.trim()) {
         Alert.alert('Missing Category', `Item request #${requestNum}: please select an item category.`);
-        return;
-      }
-      if (!product) {
-        Alert.alert('Missing Item', `Item request #${requestNum}: please select an item.`);
         return;
       }
       if (!form.itemDescription.trim()) {
@@ -499,7 +375,14 @@ export const SourcingRequestMultiScreen: React.FC = () => {
       }
     }
 
+    const shipTo = shipToAddressName.trim();
+    if (!shipTo) {
+      Alert.alert(t('orderDetails.shippingAddress'), t('sourcing.shipToRequired'));
+      return;
+    }
+
     const expandedForms = forms;
+    let shareCompleted = false;
 
     try {
       setSubmitting(true);
@@ -529,10 +412,11 @@ export const SourcingRequestMultiScreen: React.FC = () => {
       deliveryDate.setDate(deliveryDate.getDate() + 21);
 
       const orderLines = expandedForms.map((form) => {
-        const product = selectedProductFor(form) as DropdownItem;
+        const categoryName = form.selectedCategoryName.trim();
         return {
-          product,
+          product: categoryAsSourcingItem(form.selectedCategoryId, categoryName),
           selectedCategoryId: form.selectedCategoryId,
+          itemFieldText: categoryName,
           quantity: parseInt(form.quantity, 10),
           rate: parseFloat(form.expectedRate),
           description: form.itemDescription.trim(),
@@ -546,9 +430,11 @@ export const SourcingRequestMultiScreen: React.FC = () => {
         company: companyName,
         transaction_date: transactionDate.toISOString().split('T')[0],
         delivery_date: deliveryDate.toISOString().split('T')[0],
+        shipping_address_name: shipTo,
         items,
       });
 
+      const lineImageUrls: string[] = expandedForms.map(() => '');
       for (let i = 0; i < expandedForms.length; i += 1) {
         const form = expandedForms[i];
         if (!form.referenceImageUri) continue;
@@ -558,18 +444,20 @@ export const SourcingRequestMultiScreen: React.FC = () => {
             `sourcing-reference-${i + 1}-${Date.now()}.jpg`,
             'Sales Order',
             createdOrder.name,
-            true
+            false
           );
           const fileUrl = uploadResponse?.message?.file_url || uploadResponse?.file_url || '';
-          if (fileUrl && i === 0) {
-            try {
-              await client.updateSalesOrder(createdOrder.name, { image: fileUrl });
-            } catch {
-              await client.updateSalesOrder(createdOrder.name, { custom_image: fileUrl });
-            }
-          }
+          if (fileUrl) lineImageUrls[i] = fileUrl;
         } catch (e) {
           console.warn('Could not upload one reference image:', e);
+        }
+      }
+
+      if (lineImageUrls.some((u) => String(u || '').trim())) {
+        try {
+          await client.applySalesOrderLineImagesByIndex(createdOrder.name, lineImageUrls);
+        } catch (e) {
+          console.warn('Could not set sales order line images:', e);
         }
       }
 
@@ -577,38 +465,60 @@ export const SourcingRequestMultiScreen: React.FC = () => {
 
       if (lockedRecipient) {
         try {
-          const chId = await resolveRavenChannelForSupplierShare({
-            sessionEmail: user?.email ?? null,
+          const channelId = await resolveRavenChannelForSupplierShare({
+            sessionEmail: sessionEmail || null,
             ravenChannelId: paramChannelId,
             peerUserId: paramPeerUserId,
           });
-          await shareSalesOrderInRavenChat(chId, orderName, undefined, {
+          await shareSalesOrderInRavenChat(channelId, orderName, orderName);
+          await markSalesOrderSharedLocally(orderName);
+
+          const channelRows = await listRavenChannelsForSessionUser(sessionEmail || null);
+          const channelRow = channelRows.find((c) => String(c.name || '').trim() === channelId);
+          const peerUserId =
+            paramPeerUserId || getRavenDmPeerUserId(channelRow, sessionEmail) || '';
+
+          shareCompleted = true;
+          shareSentRef.current = true;
+          showSalesOrderShareSentAndOpenChat({
             t,
-            navigation: navigation as { navigate: (name: string, params?: object) => void },
+            navigation: navigation as { dispatch: (action: unknown) => void },
+            sessionEmail: sessionEmail || null,
+            channelId,
+            peerUserId,
+            workspaceId: paramWorkspaceId || String(channelRow?.workspace || '').trim(),
           });
-          Alert.alert(t('salesOrderShare.sharedTitle'), t('salesOrderShare.sharedBody'), [
-            { text: t('contactUs.ok'), onPress: () => navigation.goBack() },
-          ]);
-        } catch (shareErr: unknown) {
-          Alert.alert(
-            t('sourcing.submittedTitle'),
-            `${t('sourcing.submittedBody', { name: orderName })}\n\n${userFacingError(shareErr, t('salesOrderShare.shareFailed'))}`,
-            [{ text: t('contactUs.ok'), onPress: () => navigation.goBack() }]
+        } catch (shareError: unknown) {
+          console.error('Error sharing sourcing request in chat:', shareError);
+          Alert.error(
+            t('salesOrderShare.title'),
+            shareError instanceof Error ? shareError.message : t('salesOrderShare.shareFailed'),
+            [
+              {
+                text: t('contactUs.ok'),
+                onPress: () =>
+                  navigateToSalesOrderDetail(
+                    navigation as { navigate: (name: string, params?: object) => void },
+                    orderName,
+                    { replace: true }
+                  ),
+              },
+            ]
           );
         }
         return;
       }
 
-      Alert.alert(
-        t('sourcing.submittedTitle'),
-        t('sourcing.submittedBody', { name: orderName }),
-        [{ text: t('contactUs.ok'), onPress: () => navigation.goBack() }]
+      navigateToSalesOrderDetail(
+        navigation as { navigate: (name: string, params?: object) => void },
+        orderName,
+        { replace: true }
       );
     } catch (error: any) {
       console.error('Error creating sourcing request order:', error);
-      Alert.alert('Request Failed', error?.message || 'Unable to submit request right now.');
+      Alert.error('Request Failed', error?.message || 'Unable to submit request right now.');
     } finally {
-      setSubmitting(false);
+      if (!shareCompleted) setSubmitting(false);
     }
   };
 
@@ -642,8 +552,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
           automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
         >
         {forms.map((form, idx) => {
-          const product = selectedProductFor(form);
-          const formProducts = productsByFormId[form.id] || [];
+          const itemLabel = form.selectedCategoryName.trim() || t('sourcing.tapToExpand');
 
           return (
             <View key={form.id} style={styles.card}>
@@ -655,7 +564,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
                   <Text style={styles.cardTitle}>{t('sourcing.lineLabel', { n: idx + 1 })}</Text>
                   {!form.expanded && (
                     <Text style={styles.cardSubtitle}>
-                      {product?.name || t('sourcing.tapToExpand')}
+                      {itemLabel}
                     </Text>
                   )}
                 </View>
@@ -691,20 +600,12 @@ export const SourcingRequestMultiScreen: React.FC = () => {
                       )}
 
                       <Text style={styles.label}>{t('sourcing.fieldItem')} *</Text>
-                      <SearchableSelect
-                        options={formProducts}
-                        selectedId={form.selectedProductId}
-                        selectedLabel={product?.name}
-                        onSelect={(item) => updateForm(form.id, { selectedProductId: item.id })}
-                        placeholder={
-                          supplierLockedCategory ? t('sourcing.phItem') : t('sourcing.phItemNeedCategory')
-                        }
-                        searchPlaceholder={t('sourcing.searchItem')}
-                        disabled={!supplierLockedCategory}
-                        loading={form.loadingProducts}
-                        emptyText={t('sourcing.noSupplierItems')}
-                        listMaxHeight={320}
+                      <TextInput
+                        style={[styles.input, styles.inputLocked]}
+                        value={form.selectedCategoryName || supplierLockedCategory?.name || ''}
+                        editable={false}
                       />
+                      <Text style={styles.fieldHint}>{t('sourcing.categoryLockedItemHint')}</Text>
                     </>
                   ) : (
                     <>
@@ -713,13 +614,8 @@ export const SourcingRequestMultiScreen: React.FC = () => {
                         options={itemCategoryList}
                         selectedId={form.selectedCategoryId}
                         selectedLabel={form.selectedCategoryName}
-                        onSelect={async (category) => {
-                          updateForm(form.id, {
-                            selectedCategoryId: category.id,
-                            selectedCategoryName: category.name,
-                            selectedProductId: '',
-                          });
-                          await fetchItemsForForm(form.id, category.id);
+                        onSelect={(category) => {
+                          updateForm(form.id, lockCategoryAsItem(category.id, category.name));
                         }}
                         placeholder="Select item category"
                         searchPlaceholder="Search categories..."
@@ -728,18 +624,18 @@ export const SourcingRequestMultiScreen: React.FC = () => {
                       />
 
                       <Text style={styles.label}>{t('sourcing.fieldItem')} *</Text>
-                      <SearchableSelect
-                        options={formProducts}
-                        selectedId={form.selectedProductId}
-                        selectedLabel={product?.name}
-                        onSelect={(item) => updateForm(form.id, { selectedProductId: item.id })}
-                        placeholder={form.selectedCategoryId ? 'Select item' : 'Select item category first'}
-                        searchPlaceholder="Search items..."
-                        disabled={!form.selectedCategoryId}
-                        loading={form.loadingProducts}
-                        emptyText="No items found in this category."
-                        listMaxHeight={320}
-                      />
+                      {form.selectedCategoryId ? (
+                        <>
+                          <TextInput
+                            style={[styles.input, styles.inputLocked]}
+                            value={form.selectedCategoryName}
+                            editable={false}
+                          />
+                          <Text style={styles.fieldHint}>{t('sourcing.categoryLockedItemHint')}</Text>
+                        </>
+                      ) : (
+                        <Text style={styles.fieldHint}>{t('sourcing.phItemNeedCategory')}</Text>
+                      )}
                     </>
                   )}
 
@@ -803,10 +699,18 @@ export const SourcingRequestMultiScreen: React.FC = () => {
           <Text style={styles.addAnotherText}>Add Another Item</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.submitButton, submitting && styles.submitButtonDisabled]}
-          onPress={submitAll}
+        <ShipToAddressField
+          value={shipToAddressName}
+          onChange={onShipToChange}
+          userEmail={user?.email}
           disabled={submitting}
+          required
+        />
+
+        <TouchableOpacity
+          style={[styles.submitButton, (submitting || !shipToAddressName.trim()) && styles.submitButtonDisabled]}
+          onPress={submitAll}
+          disabled={submitting || !shipToAddressName.trim()}
         >
           {submitting ? <ActivityIndicator color={Colors.WHITE} /> : <Text style={styles.submitButtonText}>Submit Request</Text>}
         </TouchableOpacity>

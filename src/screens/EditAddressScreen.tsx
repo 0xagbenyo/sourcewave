@@ -50,6 +50,7 @@ export const EditAddressScreen: React.FC = () => {
 
   const params = route.params || {};
   const existing = params.address as ErpCustomerAddressRow | undefined;
+  const orderId = String(params.orderId || '').trim();
   const isEditing = Boolean(existing?.name);
 
   const initial = useMemo(() => {
@@ -149,9 +150,21 @@ export const EditAddressScreen: React.FC = () => {
 
       if (isEditing && existing?.name) {
         await client.updateAddress(existing.name, addressPayload);
+        const savedName = existing.name;
+        if (orderId) {
+          await client.updateSalesOrder(orderId, { shipping_address_name: savedName });
+          navigation.navigate('OrderDetails', { orderId });
+          return;
+        }
         Alert.alert('Saved', 'Address updated.', [{ text: 'OK', onPress: () => navigation.goBack() }]);
       } else {
-        await client.createAddress(addressPayload);
+        const created = await client.createAddress(addressPayload);
+        const savedName = String(created?.name || '').trim();
+        if (orderId && savedName) {
+          await client.updateSalesOrder(orderId, { shipping_address_name: savedName });
+          navigation.navigate('OrderDetails', { orderId });
+          return;
+        }
         Alert.alert('Saved', 'Address added.', [{ text: 'OK', onPress: () => navigation.goBack() }]);
       }
     } catch (error: unknown) {

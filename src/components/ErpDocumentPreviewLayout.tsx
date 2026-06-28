@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -6,13 +6,16 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
+  Modal,
+  Pressable,
   type RefreshControlProps,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { DocumentPrintButton } from './DocumentPrintButton';
+import { ErpAuthenticatedImage } from './ErpAuthenticatedImage';
 
 const hairline = StyleSheet.hairlineWidth;
 
@@ -33,10 +36,12 @@ type LayoutProps = {
 export function erpDocStatusAccent(status: string, docstatus?: number): string {
   const st = String(status || '').toLowerCase();
   const ds = docstatus != null ? Number(docstatus) : null;
-  if (ds === 2 || st.includes('cancel')) return Colors.ERROR;
+  if (ds === 2 || st.includes('cancel') || st.includes('reject')) return Colors.ERROR;
+  if (st.includes('approv') || st.includes('accept')) return Colors.SUCCESS;
   if (ds === 0 || st.includes('draft')) return '#C93400';
-  if (st.includes('paid') || st.includes('complete') || st.includes('submit')) return '#248A3D';
+  if (st.includes('paid') || st.includes('complete') || st.includes('submit')) return Colors.SUCCESS;
   if (st.includes('overdue') || st.includes('unpaid') || st.includes('partly')) return '#C93400';
+  if (st.includes('pending') || st.includes('await')) return Colors.WARNING;
   return Colors.WINE;
 }
 
@@ -253,9 +258,20 @@ type LineProps = {
   rate?: unknown;
   amount?: unknown;
   currency?: string;
+  imageUri?: string | null;
 };
 
-export const ErpDocLineItem: React.FC<LineProps> = ({ title, detail, qty, rate, amount, currency }) => {
+export const ErpDocLineItem: React.FC<LineProps> = ({
+  title,
+  detail,
+  qty,
+  rate,
+  amount,
+  currency,
+  imageUri,
+}) => {
+  const insets = useSafeAreaInsets();
+  const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
   const qtyNum = Number(qty);
   const rateNum = Number(rate);
   const amountNum = Number(amount);
@@ -266,10 +282,25 @@ export const ErpDocLineItem: React.FC<LineProps> = ({ title, detail, qty, rate, 
       : qty != null
         ? `Qty ${String(qty)}`
         : null;
+  const thumb = String(imageUri || '').trim();
 
   return (
     <View style={styles.lineItem}>
       <View style={styles.lineTop}>
+        {thumb ? (
+          <TouchableOpacity
+            onPress={() => setImagePreviewOpen(true)}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="View item image"
+          >
+            <ErpAuthenticatedImage uri={thumb} style={styles.lineThumb} resizeMode="cover" />
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.lineThumbPlaceholder}>
+            <Ionicons name="cube-outline" size={20} color={Colors.TEXT_SECONDARY} />
+          </View>
+        )}
         <View style={styles.lineTextCol}>
           <Text style={styles.lineTitle} numberOfLines={2}>
             {title}
@@ -284,6 +315,34 @@ export const ErpDocLineItem: React.FC<LineProps> = ({ title, detail, qty, rate, 
         </View>
         {lineTotal ? <Text style={styles.lineAmount}>{lineTotal}</Text> : null}
       </View>
+
+      <Modal
+        visible={imagePreviewOpen && !!thumb}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setImagePreviewOpen(false)}
+      >
+        <View style={[styles.lineImageModalRoot, { paddingTop: Math.max(insets.top, 8) }]}>
+          <View style={styles.lineImageModalHead}>
+            <Text style={styles.lineImageModalTitle} numberOfLines={2}>
+              {title}
+            </Text>
+            <TouchableOpacity
+              onPress={() => setImagePreviewOpen(false)}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel="Close image preview"
+            >
+              <Ionicons name="close-circle" size={36} color="#FFFFFF" />
+            </TouchableOpacity>
+          </View>
+          <Pressable style={styles.lineImageModalBody} onPress={() => setImagePreviewOpen(false)}>
+            <View style={styles.lineImageModalImgWrap} pointerEvents="box-none">
+              <ErpAuthenticatedImage uri={thumb} style={styles.lineImageModalImg} resizeMode="contain" />
+            </View>
+          </Pressable>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -599,6 +658,20 @@ const styles = StyleSheet.create({
     borderBottomColor: 'rgba(0,0,0,0.06)',
   },
   lineTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  lineThumb: {
+    width: 52,
+    height: 52,
+    borderRadius: 8,
+    backgroundColor: Colors.LIGHT_GRAY,
+  },
+  lineThumbPlaceholder: {
+    width: 52,
+    height: 52,
+    borderRadius: 8,
+    backgroundColor: Colors.LIGHT_GRAY,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   lineTextCol: { flex: 1, minWidth: 0 },
   lineTitle: { fontSize: 15, fontWeight: '600', color: Colors.BLACK, lineHeight: 20 },
   lineDetail: { fontSize: 12, color: Colors.TEXT_SECONDARY, marginTop: 2 },
@@ -607,6 +680,40 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: Colors.BLACK,
     fontVariant: ['tabular-nums'],
+  },
+  lineImageModalRoot: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+  },
+  lineImageModalHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.MD,
+    paddingBottom: 12,
+    gap: 12,
+  },
+  lineImageModalTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  lineImageModalBody: {
+    flex: 1,
+    width: '100%',
+    paddingHorizontal: Spacing.MD,
+    paddingBottom: Spacing.XL,
+  },
+  lineImageModalImgWrap: {
+    flex: 1,
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lineImageModalImg: {
+    width: '100%',
+    height: '100%',
   },
   kv: {
     flexDirection: 'row',

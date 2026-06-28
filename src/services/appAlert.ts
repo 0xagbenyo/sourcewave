@@ -4,7 +4,14 @@ type AppAlertButton = {
   style?: 'default' | 'cancel' | 'destructive';
 };
 
-type ShowAlertFn = (title: string, message?: string, buttons?: AppAlertButton[]) => void;
+export type AppAlertTone = 'default' | 'error' | 'success';
+
+type ShowAlertFn = (
+  title: string,
+  message?: string,
+  buttons?: AppAlertButton[],
+  tone?: AppAlertTone
+) => void;
 
 let showAlertImpl: ShowAlertFn | null = null;
 
@@ -18,13 +25,23 @@ function fallbackAlert(title: string, message?: string) {
   }
 }
 
+function show(title: string, message?: string, buttons?: AppAlertButton[], tone: AppAlertTone = 'default') {
+  if (showAlertImpl) {
+    showAlertImpl(title, message, buttons, tone);
+    return;
+  }
+  fallbackAlert(title, message);
+}
+
 export const appAlert = {
   alert(title: string, message?: string, buttons?: AppAlertButton[]) {
-    if (showAlertImpl) {
-      showAlertImpl(title, message, buttons);
-      return;
-    }
-    fallbackAlert(title, message);
+    show(title, message, buttons, 'default');
+  },
+  error(title: string, message?: string, buttons?: AppAlertButton[]) {
+    show(title, message, buttons, 'error');
+  },
+  success(title: string, message?: string, buttons?: AppAlertButton[]) {
+    show(title, message, buttons, 'success');
   },
 };
 

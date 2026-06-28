@@ -4,6 +4,8 @@ import { WebView } from 'react-native-webview';
 import * as FileSystem from 'expo-file-system/legacy';
 import { buildAuthenticatedErpImageSource } from '../utils/erpImageUrl';
 import { fetchAuthenticatedUriAsBase64 } from '../utils/fetchAuthenticatedUriAsBase64';
+import { fetchAuthenticatedPdfBase64 } from '../utils/fetchAuthenticatedPdfBase64';
+import { buildPdfJsViewerHtml } from '../utils/pdfJsViewerHtml';
 import { guessMimeTypeForExtension } from '../utils/ravenDownloadAttachment';
 
 type Props = {
@@ -89,6 +91,16 @@ export const ErpAuthenticatedCachedFileWebView: React.FC<Props> = ({ resourceUri
         localFileRef.current = result.uri;
         setLocalFileUri(result.uri);
 
+        if (ext === 'pdf') {
+          const b64 = await FileSystem.readAsStringAsync(result.uri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+          if (cancelled) return;
+          setHtml(buildPdfJsViewerHtml(b64));
+          setPhase('html');
+          return;
+        }
+
         if (isImageExt(ext)) {
           const imgHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5"/><style>html,body{margin:0;padding:0;height:100%;background:#fff;display:flex;align-items:center;justify-content:center}img{max-width:100%;max-height:100%;object-fit:contain}</style></head><body><img src="${result.uri}" alt=""/></body></html>`;
           setHtml(imgHtml);
@@ -100,13 +112,17 @@ export const ErpAuthenticatedCachedFileWebView: React.FC<Props> = ({ resourceUri
       } catch {
         if (cancelled) return;
         try {
+          if (ext === 'pdf') {
+            const b64 = await fetchAuthenticatedPdfBase64(uri);
+            if (cancelled) return;
+            setHtml(buildPdfJsViewerHtml(b64));
+            setPhase('html');
+            return;
+          }
           const b64 = await fetchAuthenticatedUriAsBase64(uri);
           if (cancelled) return;
           const mime = guessMimeTypeForExtension(ext);
-          if (ext === 'pdf') {
-            const h = `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5"/><style>html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#fff}</style></head><body><embed type="application/pdf" width="100%" height="100%" style="position:fixed;left:0;top:0;right:0;bottom:0;border:0" src="data:application/pdf;base64,${b64}"/></body></html>`;
-            setHtml(h);
-          } else if (isImageExt(ext)) {
+          if (isImageExt(ext)) {
             const h = `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5"/><style>html,body{margin:0;padding:0;height:100%;background:#fff;display:flex;align-items:center;justify-content:center}img{max-width:100%;max-height:100%;object-fit:contain}</style></head><body><img src="data:${mime};base64,${b64}" alt=""/></body></html>`;
             setHtml(h);
           } else if (isTextLikeExt(ext)) {
@@ -184,7 +200,7 @@ export const ErpAuthenticatedCachedFileWebView: React.FC<Props> = ({ resourceUri
   if (phase === 'html' && html) {
     return (
       <WebView
-        source={{ html, baseUrl: localFileUri || 'about:blank' }}
+        source={{ html, baseUrl: ext === 'pdf' ? 'https://cdnjs.cloudflare.com' : localFileUri || 'about:blank' }}
         style={webStyle}
         originWhitelist={['*']}
         javaScriptEnabled
@@ -194,7 +210,9 @@ export const ErpAuthenticatedCachedFileWebView: React.FC<Props> = ({ resourceUri
         allowFileAccess
         allowFileAccessFromFileURLs
         allowUniversalAccessFromFileURLs
-        androidLayerType="hardware"
+        androidLayerType={ext === 'pdf' ? 'software' : 'hardware'}
+        cacheEnabled
+        thirdPartyCookiesEnabled
       />
     );
   }

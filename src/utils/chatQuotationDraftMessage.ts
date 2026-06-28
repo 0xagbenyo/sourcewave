@@ -115,12 +115,68 @@ export function supplierQuotationWorkflowStateIsApprovedLike(workflowState: stri
   );
 }
 
+export type SupplierQuotationUiStatusKind = 'rejected' | 'pending' | 'approved' | 'neutral';
+
+/** Display label for list, detail preview, etc. Prefers `workflow_state` when set. */
+export function supplierQuotationStatusLabelAndKind(
+  doc: Record<string, unknown> | null | undefined
+): { label: string; kind: SupplierQuotationUiStatusKind } {
+  if (!doc) return { label: '—', kind: 'neutral' };
+  const wf = String(doc.workflow_state ?? '').trim();
+  if (wf) {
+    if (supplierQuotationWorkflowStateIsRejectedLike(wf)) return { label: wf, kind: 'rejected' };
+    if (supplierQuotationWorkflowStateAllowsBuyerReview(wf)) return { label: wf, kind: 'pending' };
+    if (supplierQuotationWorkflowStateIsApprovedLike(wf)) return { label: wf, kind: 'approved' };
+    return { label: wf, kind: 'neutral' };
+  }
+  const ds = doc.docstatus != null ? Number(doc.docstatus) : 0;
+  if (Number.isFinite(ds) && ds === 0) return { label: 'Draft', kind: 'neutral' };
+  const st = String(doc.status ?? '').trim();
+  if (st) {
+    const sl = st.toLowerCase();
+    if (sl.includes('reject') || sl.includes('cancel')) return { label: st, kind: 'rejected' };
+    if (sl === 'pending' || sl.includes('pending') || sl.includes('await')) return { label: st, kind: 'pending' };
+    if (supplierQuotationWorkflowStateIsApprovedLike(st)) return { label: st, kind: 'approved' };
+    return { label: st, kind: 'neutral' };
+  }
+  return { label: 'Submitted', kind: 'neutral' };
+}
+
 /**
  * Whether the buyer should see in-chat Accept / Reject for this Supplier Quotation document.
  * - Submitted docs (`docstatus !== 0`): never.
  * - If **`workflow_state`** is set: **only** {@link supplierQuotationWorkflowStateAllowsBuyerReview} — `doc.status` is ignored.
  * - If **`workflow_state`** is empty (no workflow on the doctype or not yet set): fall back to **`status`** pending-like, else allow (legacy drafts).
  */
+/** Supplier may edit this draft quotation in-app (same document, not yet accepted). */
+export function supplierQuotationAllowsSupplierEdit(doc: Record<string, unknown> | null | undefined): boolean {
+  if (!doc) return false;
+  const ds = doc.docstatus != null ? Number(doc.docstatus) : 0;
+  if (!Number.isFinite(ds) || ds !== 0) return false;
+  const wf = String(doc.workflow_state ?? '').trim();
+  if (wf && supplierQuotationWorkflowStateIsApprovedLike(wf)) return false;
+  if (wf && supplierQuotationWorkflowStateIsRejectedLike(wf)) return false;
+  const st = String(doc.status ?? '').trim().toLowerCase();
+  if (st.includes('reject') || st.includes('cancel')) return false;
+  return true;
+}
+
+/** Rejected quotation — supplier creates a new quote against the same order (original is no longer editable). */
+export function supplierQuotationAllowsSupplierResend(doc: Record<string, unknown> | null | undefined): boolean {
+  if (!doc) return false;
+  const ds = doc.docstatus != null ? Number(doc.docstatus) : 0;
+  if (!Number.isFinite(ds)) return false;
+  const wf = String(doc.workflow_state ?? '').trim();
+  const st = String(doc.status ?? '').trim().toLowerCase();
+  const rejected =
+    (wf.length > 0 && supplierQuotationWorkflowStateIsRejectedLike(wf)) ||
+    st.includes('reject') ||
+    st.includes('cancel');
+  if (!rejected) return false;
+  // Draft, submitted, or cancelled rejections — supplier always creates a new quotation.
+  return ds === 0 || ds === 1 || ds === 2;
+}
+
 export function supplierQuotationDocAllowsChatBuyerReview(doc: Record<string, unknown> | null | undefined): boolean {
   if (!doc) return false;
   const ds = doc.docstatus != null ? Number(doc.docstatus) : 0;

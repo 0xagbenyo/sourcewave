@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   FlatList,
-  ScrollView,
 } from 'react-native';
 import { appAlert as Alert } from '../services/appAlert';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -15,21 +14,22 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { Header } from '../components/Header';
+import { RavenShareToContactPicker } from '../components/RavenShareToContactPicker';
 import { useUserSession } from '../context/UserContext';
 import { useTranslation } from 'react-i18next';
 import { getERPNextClient } from '../services/erpnext';
 import {
   createDirectMessageChannel,
-  getRavenChannelDisplayLabel,
   getRavenDmPeerUserId,
   listRavenChannelsForSessionUser,
-  ravenChannelLastActivitySortTimeMs,
   sendRavenChannelDocumentLinkMessage,
   type RavenChannelRow,
 } from '../services/ravenNativeApi';
 import { setPendingRavenDocLinkMessageMerge } from '../utils/ravenDocLinkMessageMergeBridge';
 import { userFacingError } from '../utils/userFacingError';
 import { confirmSalesOrderShareable } from '../utils/salesOrderShareGuard';
+import { markSalesOrderSharedLocally } from '../utils/salesOrderShareMarks';
+import { showSalesOrderShareSentAndOpenChat } from '../utils/openRavenChatAfterShare';
 import type { RootStackParamList } from '../types';
 
 type R = RouteProp<RootStackParamList, 'BuyerSalesOrderShareCompose'>;
@@ -77,6 +77,7 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
   const paramPeerUserId = (route.params?.peerUserId || '').trim();
   const paramOrderName = (route.params?.salesOrderName || '').trim();
   const supplierLabel = (route.params?.supplierLabel || '').trim();
+  const paramWorkspaceId = (route.params?.ravenWorkspaceId || '').trim();
 
   const lockedRecipient = !!(paramChannelId || paramPeerUserId);
   const orderPreselected = !!paramOrderName && !lockedRecipient;
@@ -89,12 +90,13 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
 
   const [channels, setChannels] = useState<RavenChannelRow[]>([]);
   const [channelsLoading, setChannelsLoading] = useState(false);
-  const [selectedChannelId, setSelectedChannelId] = useState(paramChannelId);
+  const [selectedChannelId, setSelectedChannelId] = useState('');
   const [targetChannelId, setTargetChannelId] = useState(paramChannelId);
   const [resolvingChannel, setResolvingChannel] = useState(lockedRecipient && !paramChannelId);
   const [sharing, setSharing] = useState(false);
 
   const autoSendDoneRef = useRef(false);
+  const shareSentRef = useRef(false);
 
   const showShareStep = !lockedRecipient && !!selectedOrder;
 
@@ -149,6 +151,7 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
 
   const shareOrder = useCallback(
     async (order: SalesOrderRow) => {
+      if (shareSentRef.current || sharing) return;
       const orderName = order.name.trim();
       const chId = (lockedRecipient ? targetChannelId : selectedChannelId).trim();
       if (!orderName) {
@@ -160,6 +163,7 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
         return;
       }
       setSharing(true);
+      let succeeded = false;
       try {
         const ok = await confirmSalesOrderShareable(orderName, t, navigation as { navigate: (n: string, p?: object) => void });
         if (!ok) return;
@@ -178,16 +182,48 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
           };
         }
         setPendingRavenDocLinkMessageMerge(chId, sentRaw);
-        Alert.alert(t('salesOrderShare.sharedTitle'), t('salesOrderShare.sharedBody'), [
-          { text: t('contactUs.ok'), onPress: () => navigation.goBack() },
-        ]);
+        await markSalesOrderSharedLocally(orderName);
+
+        const channelRow =
+          channels.find((c) => String(c.name || '').trim() === chId) ||
+          (await listRavenChannelsForSessionUser(user?.email ?? null)).find(
+            (c) => String(c.name || '').trim() === chId
+          );
+        const workspaceId =
+          paramWorkspaceId || String(channelRow?.workspace || '').trim();
+        const peerUserId =
+          paramPeerUserId ||
+          getRavenDmPeerUserId(channelRow, user?.email) ||
+          '';
+
+        succeeded = true;
+        shareSentRef.current = true;
+        showSalesOrderShareSentAndOpenChat({
+          t,
+          navigation: navigation as { dispatch: (action: unknown) => void },
+          sessionEmail: user?.email,
+          channelId: chId,
+          peerUserId,
+          workspaceId,
+        });
       } catch (e: unknown) {
-        Alert.alert(t('salesOrderShare.title'), userFacingError(e, t('salesOrderShare.shareFailed')));
+        shareSentRef.current = false;
+        Alert.error(t('salesOrderShare.title'), userFacingError(e, t('salesOrderShare.shareFailed')));
       } finally {
-        setSharing(false);
+        if (!succeeded) setSharing(false);
       }
     },
-    [lockedRecipient, targetChannelId, selectedChannelId, t, navigation]
+    [
+      lockedRecipient,
+      targetChannelId,
+      selectedChannelId,
+      t,
+      navigation,
+      channels,
+      user?.email,
+      paramPeerUserId,
+      paramWorkspaceId,
+    ]
   );
 
   useEffect(() => {
@@ -257,25 +293,9 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
 
   useEffect(() => {
     if (!showShareStep) return;
+    setSelectedChannelId('');
     void loadChannels();
   }, [showShareStep, loadChannels]);
-
-  useEffect(() => {
-    if (!showShareStep || channelsLoading || channels.length === 0) return;
-    if (selectedChannelId) return;
-    const sorted = [...channels].sort(
-      (a, b) => ravenChannelLastActivitySortTimeMs(b) - ravenChannelLastActivitySortTimeMs(a)
-    );
-    if (sorted[0]) setSelectedChannelId(sorted[0].name);
-  }, [showShareStep, channelsLoading, channels, selectedChannelId]);
-
-  const dmChannelsSorted = useMemo(
-    () =>
-      [...channels].sort(
-        (a, b) => ravenChannelLastActivitySortTimeMs(b) - ravenChannelLastActivitySortTimeMs(a)
-      ),
-    [channels]
-  );
 
   const onPickOrder = (item: SalesOrderRow) => {
     if (lockedRecipient) {
@@ -306,7 +326,7 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
     });
   };
 
-  const onShareBack = () => {
+  const leaveShareStep = () => {
     if (orderPreselected) {
       navigation.goBack();
       return;
@@ -320,148 +340,107 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
       : t('salesOrderShare.sendToOpenChat')
     : t('salesOrderShare.pickSubtitle');
 
-  if (!showShareStep) {
-    const showSendingOverlay = sharing || (lockedRecipient && paramOrderName && (resolvingChannel || !targetChannelId));
+  const heroName = selectedOrder
+    ? orderCaption(selectedOrder).length > selectedOrder.name.length
+      ? orderCaption(selectedOrder)
+      : selectedOrder.name
+    : '';
 
+  if (showShareStep && selectedOrder) {
     return (
-      <SafeAreaView style={styles.safe} edges={['bottom', 'left', 'right']}>
-        <Header showBackButton title={t('salesOrderShare.title')} subtitle={pickSubtitle} />
-        {lockedRecipient && resolvingChannel ? (
-          <View style={styles.resolvingRow}>
-            <ActivityIndicator size="small" color={Colors.WINE} />
-            <Text style={styles.resolvingText}>{t('salesOrderShare.preparingChat')}</Text>
-          </View>
-        ) : null}
-        {!lockedRecipient ? (
-          <TouchableOpacity style={styles.createRow} onPress={onCreateNew} activeOpacity={0.85}>
-            <Ionicons name="add-circle-outline" size={22} color={Colors.WINE} />
-            <Text style={styles.createText}>{t('salesOrderShare.createNew')}</Text>
+      <RavenShareToContactPicker
+        screenTitle={t('salesOrderShare.shareScreenTitle')}
+        heroTitle={t('salesOrderShare.shareHeroTitle')}
+        heroName={heroName}
+        heroHint={t('salesOrderShare.shareHeroHint')}
+        heroIcon="document-text-outline"
+        heroIconColor={Colors.WINE}
+        channels={channels}
+        channelsLoading={channelsLoading}
+        selectedChannelId={selectedChannelId}
+        onSelectChannel={setSelectedChannelId}
+        onBack={leaveShareStep}
+        onSkip={leaveShareStep}
+        onSend={() => void shareOrder(selectedOrder)}
+        sharing={sharing}
+        userEmail={user?.email}
+        skipLabel={t('salesOrderShare.shareSkip')}
+        sendLabel={t('salesOrderShare.shareSend')}
+        emptyText={t('salesOrderShare.shareNoPeople')}
+        loadingText={t('salesOrderShare.shareLoadingConversations')}
+        searchPlaceholder={t('salesOrderShare.shareSearchPeople')}
+        filterEmptyText={t('salesOrderShare.shareNoMatch')}
+        listFooter={
+          <TouchableOpacity style={styles.findSupplierRow} onPress={onFindNewSupplier} activeOpacity={0.85}>
+            <View style={styles.findSupplierIcon}>
+              <Ionicons name="people-outline" size={22} color={Colors.WINE} />
+            </View>
+            <View style={styles.findSupplierText}>
+              <Text style={styles.findSupplierTitle}>{t('salesOrderShare.findNewSupplier')}</Text>
+              <Text style={styles.findSupplierSub}>{t('salesOrderShare.findNewSupplierSub')}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={Colors.TEXT_SECONDARY} />
           </TouchableOpacity>
-        ) : null}
-        {loadingOrders ? (
-          <View style={styles.center}>
-            <ActivityIndicator size="large" color={Colors.WINE} />
-          </View>
-        ) : orders.length === 0 ? (
-          <View style={styles.center}>
-            <Text style={styles.empty}>{t('salesOrderShare.noOrders')}</Text>
-          </View>
-        ) : (
-          <FlatList
-            data={orders}
-            keyExtractor={(item) => item.name}
-            contentContainerStyle={styles.listPad}
-            scrollEnabled={!sharing}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                style={[styles.orderRow, sharing && styles.orderRowDisabled]}
-                onPress={() => onPickOrder(item)}
-                disabled={sharing || (lockedRecipient && resolvingChannel)}
-                activeOpacity={0.75}
-              >
-                <View style={styles.orderMain}>
-                  <Text style={styles.orderName}>{item.name}</Text>
-                  <Text style={styles.orderMeta} numberOfLines={1}>
-                    {orderCaption(item)}
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={20} color={Colors.TEXT_SECONDARY} />
-              </TouchableOpacity>
-            )}
-          />
-        )}
-        {showSendingOverlay ? (
-          <View style={styles.sendingOverlay}>
-            <ActivityIndicator size="large" color={Colors.WINE} />
-            <Text style={styles.sendingText}>{t('salesOrderShare.sending')}</Text>
-          </View>
-        ) : null}
-      </SafeAreaView>
+        }
+      />
     );
   }
 
+  const showSendingOverlay = sharing || (lockedRecipient && paramOrderName && (resolvingChannel || !targetChannelId));
+
   return (
     <SafeAreaView style={styles.safe} edges={['bottom', 'left', 'right']}>
-      <Header
-        showBackButton
-        title={t('salesOrderShare.sendTitle')}
-        subtitle={t('salesOrderShare.sendSubtitle')}
-        onBackPress={onShareBack}
-      />
-      <ScrollView contentContainerStyle={styles.sharePad} keyboardShouldPersistTaps="handled">
-        <View style={styles.savedHero}>
-          <Ionicons name="document-text-outline" size={24} color={Colors.WINE} style={{ marginRight: 10 }} />
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={styles.savedLabel}>{t('salesOrderShare.selectedOrder')}</Text>
-            <Text style={styles.savedName} numberOfLines={1}>
-              {selectedOrder?.name}
-            </Text>
-            {selectedOrder?.grand_total != null && Number(selectedOrder.grand_total) > 0 ? (
-              <Text style={styles.savedMeta} numberOfLines={1}>
-                {orderCaption(selectedOrder)}
-              </Text>
-            ) : null}
-          </View>
-          {!orderPreselected ? (
-            <TouchableOpacity onPress={() => setSelectedOrder(null)} hitSlop={10}>
-              <Text style={styles.changeLink}>{t('salesOrderShare.change')}</Text>
-            </TouchableOpacity>
-          ) : null}
+      <Header showBackButton title={t('salesOrderShare.title')} subtitle={pickSubtitle} />
+      {lockedRecipient && resolvingChannel ? (
+        <View style={styles.resolvingRow}>
+          <ActivityIndicator size="small" color={Colors.WINE} />
+          <Text style={styles.resolvingText}>{t('salesOrderShare.preparingChat')}</Text>
         </View>
-
-        <Text style={styles.sectionLabel}>{t('salesOrderShare.recentSuppliers')}</Text>
-        {channelsLoading ? (
-          <ActivityIndicator color={Colors.WINE} style={{ marginVertical: 16 }} />
-        ) : dmChannelsSorted.length === 0 ? (
-          <Text style={styles.emptyInline}>{t('salesOrderShare.noChats')}</Text>
-        ) : (
-          dmChannelsSorted.map((ch) => {
-            const label = getRavenChannelDisplayLabel(ch, user?.email ?? null);
-            const selected = selectedChannelId === ch.name;
-            return (
-              <TouchableOpacity
-                key={ch.name}
-                style={[styles.channelRow, selected && styles.channelRowOn]}
-                onPress={() => setSelectedChannelId(ch.name)}
-                activeOpacity={0.75}
-              >
-                <Ionicons
-                  name={selected ? 'radio-button-on' : 'radio-button-off'}
-                  size={20}
-                  color={selected ? Colors.WINE : Colors.TEXT_SECONDARY}
-                />
-                <Text style={styles.channelLabel} numberOfLines={2}>
-                  {label}
+      ) : null}
+      {!lockedRecipient ? (
+        <TouchableOpacity style={styles.createRow} onPress={onCreateNew} activeOpacity={0.85}>
+          <Ionicons name="add-circle-outline" size={22} color={Colors.WINE} />
+          <Text style={styles.createText}>{t('salesOrderShare.createNew')}</Text>
+        </TouchableOpacity>
+      ) : null}
+      {loadingOrders ? (
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={Colors.WINE} />
+        </View>
+      ) : orders.length === 0 ? (
+        <View style={styles.center}>
+          <Text style={styles.empty}>{t('salesOrderShare.noOrders')}</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={orders}
+          keyExtractor={(item) => item.name}
+          contentContainerStyle={styles.listPad}
+          scrollEnabled={!sharing}
+          renderItem={({ item }) => (
+            <TouchableOpacity
+              style={[styles.orderRow, sharing && styles.orderRowDisabled]}
+              onPress={() => onPickOrder(item)}
+              disabled={sharing || (lockedRecipient && resolvingChannel)}
+              activeOpacity={0.75}
+            >
+              <View style={styles.orderMain}>
+                <Text style={styles.orderName}>{item.name}</Text>
+                <Text style={styles.orderMeta} numberOfLines={1}>
+                  {orderCaption(item)}
                 </Text>
-              </TouchableOpacity>
-            );
-          })
-        )}
-
-        <TouchableOpacity style={styles.findSupplierRow} onPress={onFindNewSupplier} activeOpacity={0.85}>
-          <View style={styles.findSupplierIcon}>
-            <Ionicons name="people-outline" size={22} color={Colors.WINE} />
-          </View>
-          <View style={styles.findSupplierText}>
-            <Text style={styles.findSupplierTitle}>{t('salesOrderShare.findNewSupplier')}</Text>
-            <Text style={styles.findSupplierSub}>{t('salesOrderShare.findNewSupplierSub')}</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={Colors.TEXT_SECONDARY} />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.sendBtn, (sharing || !selectedChannelId.trim()) && styles.sendBtnOff]}
-          onPress={() => selectedOrder && void shareOrder(selectedOrder)}
-          disabled={sharing || !selectedOrder || !selectedChannelId.trim()}
-          activeOpacity={0.9}
-        >
-          {sharing ? (
-            <ActivityIndicator color={Colors.WHITE} />
-          ) : (
-            <Text style={styles.sendBtnText}>{t('salesOrderShare.sendCta')}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={Colors.TEXT_SECONDARY} />
+            </TouchableOpacity>
           )}
-        </TouchableOpacity>
-      </ScrollView>
+        />
+      )}
+      {showSendingOverlay ? (
+        <View style={styles.sendingOverlay}>
+          <ActivityIndicator size="large" color={Colors.WINE} />
+          <Text style={styles.sendingText}>{t('salesOrderShare.sending')}</Text>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 };
@@ -470,12 +449,6 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.BACKGROUND },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.LG },
   empty: { fontSize: 15, color: Colors.TEXT_SECONDARY, textAlign: 'center', paddingHorizontal: Spacing.LG },
-  emptyInline: {
-    fontSize: 14,
-    color: Colors.TEXT_SECONDARY,
-    lineHeight: 20,
-    marginBottom: Spacing.SM,
-  },
   listPad: { paddingBottom: Spacing.XL },
   resolvingRow: {
     flexDirection: 'row',
@@ -523,48 +496,12 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   sendingText: { fontSize: 15, fontWeight: '600', color: Colors.BLACK },
-  sharePad: { padding: Spacing.SCREEN_PADDING, paddingBottom: Spacing.XL },
-  savedHero: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 14,
-    borderRadius: 10,
-    backgroundColor: Colors.WHITE,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.BORDER,
-    marginBottom: Spacing.MD,
-  },
-  savedLabel: { fontSize: 12, fontWeight: '600', color: Colors.TEXT_SECONDARY },
-  savedName: { fontSize: 16, fontWeight: '700', color: Colors.BLACK, marginTop: 2 },
-  savedMeta: { fontSize: 13, color: Colors.TEXT_SECONDARY, marginTop: 4 },
-  changeLink: { fontSize: 14, fontWeight: '600', color: Colors.WINE },
-  sectionLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: Colors.TEXT_SECONDARY,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    marginBottom: 8,
-  },
-  channelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    marginBottom: 8,
-    backgroundColor: Colors.WHITE,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.BORDER,
-  },
-  channelRowOn: { borderColor: Colors.WINE, backgroundColor: '#FFF5F7' },
-  channelLabel: { flex: 1, fontSize: 15, fontWeight: '600', color: Colors.BLACK },
   findSupplierRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
     marginTop: Spacing.MD,
+    marginHorizontal: Spacing.MD,
     marginBottom: Spacing.SM,
     paddingVertical: 14,
     paddingHorizontal: 12,
@@ -584,13 +521,4 @@ const styles = StyleSheet.create({
   findSupplierText: { flex: 1, minWidth: 0 },
   findSupplierTitle: { fontSize: 15, fontWeight: '700', color: Colors.BLACK },
   findSupplierSub: { marginTop: 3, fontSize: 13, color: Colors.TEXT_SECONDARY, lineHeight: 18 },
-  sendBtn: {
-    marginTop: Spacing.LG,
-    backgroundColor: Colors.BLACK,
-    borderRadius: 10,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  sendBtnOff: { opacity: 0.6 },
-  sendBtnText: { color: Colors.WHITE, fontSize: 15, fontWeight: '700' },
 });

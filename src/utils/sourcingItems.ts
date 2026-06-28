@@ -4,6 +4,16 @@ export type SourcingItemOption = {
   itemCode: string;
 };
 
+/** Category selection drives item name/code in sourcing — both use the category label. */
+export const categoryAsSourcingItem = (
+  categoryId: string,
+  categoryName: string
+): SourcingItemOption => {
+  const id = String(categoryId || '').trim();
+  const name = String(categoryName || id).trim();
+  return { id, name, itemCode: id };
+};
+
 export const OTHER_SOURCING_ITEM: SourcingItemOption = {
   id: 'Other',
   name: 'Other',
