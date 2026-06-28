@@ -497,6 +497,8 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const channelsPresenceRef = useRef<RavenChannelRow[]>([]);
   /** Latest selected workspace id — ignore stale fetches after switching workspaces. */
   const selectedWorkspaceRef = useRef<string | null>(null);
+  /** Workspace id we already loaded channels for — avoids clearing an open thread on metadata refresh. */
+  const workspaceHydratedRef = useRef<string | null>(null);
   /** Open a channel picked from the cross-workspace inbox (workspace effect restores `channel`). */
   const pendingOpenFromGlobalRef = useRef<{ ws: string; channelId: string; peerUserId?: string; messageId?: string } | null>(null);
   /** Scroll to message after search jump loads context around a hit. */
@@ -1233,21 +1235,41 @@ export const RavenUIMessagesScreen: React.FC = () => {
     subscriptionActive,
   ]);
 
+  const resolvedWorkspaceId = useMemo(() => {
+    const w = workspace?.trim();
+    if (!w) return null;
+    return resolveRavenWorkspaceDocId(w, workspaceRows) || w;
+  }, [workspace, workspaceRows]);
+
   useEffect(() => {
-    if (!workspace?.trim()) {
+    if (!resolvedWorkspaceId) {
+      workspaceHydratedRef.current = null;
       setLoadingWorkspaceChannels(false);
       setChannels([]);
       setMembers([]);
       setChannel(null);
       return;
     }
-    const wsTarget = resolveRavenWorkspaceDocId(workspace.trim(), workspaceRows) || workspace.trim();
+
+    const wsTarget = resolvedWorkspaceId;
     let cancelled = false;
+
+    const pending = pendingOpenFromGlobalRef.current;
+    const hasPendingOpen =
+      !!pending && pending.ws.trim().toLowerCase() === wsTarget.trim().toLowerCase();
+    const openChannelId = channelIdRef.current?.trim() || '';
+    const softRefresh =
+      workspaceHydratedRef.current === wsTarget && !!openChannelId && !hasPendingOpen;
+
     setLoadingWorkspaceChannels(true);
     setError(null);
-    setChannels([]);
-    setMembers([]);
-    setChannel(null);
+
+    if (!softRefresh) {
+      setChannels([]);
+      setMembers([]);
+      setChannel(null);
+    }
+
     (async () => {
       try {
         const viewer = (user?.user || user?.email || '').trim();
@@ -1263,10 +1285,19 @@ export const RavenUIMessagesScreen: React.FC = () => {
         setChannels(rows);
         void setRavenWorkspaceChannelsSnapshot(user?.email, wsTarget, rows);
         setMembers(mem);
+
+        if (softRefresh) {
+          setChannel((cur) => {
+            if (!cur?.name) return cur;
+            return rows.find((r) => String(r.name) === String(cur.name)) ?? cur;
+          });
+          setError(null);
+          return;
+        }
+
         const last = await getRavenLastChat(user?.email);
         let restored: RavenChannelRow | null = null;
-        const pending = pendingOpenFromGlobalRef.current;
-        if (pending && pending.ws.trim().toLowerCase() === wsTarget.trim().toLowerCase()) {
+        if (hasPendingOpen && pending) {
           const chId = pending.channelId.trim();
           const peer = pending.peerUserId?.trim();
           const jumpMsg = pending.messageId?.trim();
@@ -1296,11 +1327,14 @@ export const RavenUIMessagesScreen: React.FC = () => {
           }
         }
         setChannel(restored);
+        workspaceHydratedRef.current = wsTarget;
         setError(null);
       } catch (e: any) {
         if (!cancelled && selectedWorkspaceRef.current === wsTarget) {
-          setChannels([]);
-          setMembers([]);
+          if (!softRefresh) {
+            setChannels([]);
+            setMembers([]);
+          }
           setError(userFacingError(e, 'Failed to load supplier group'));
         }
       } finally {
@@ -1312,20 +1346,29 @@ export const RavenUIMessagesScreen: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [workspace, workspaceRows, user?.email, isHeaderChatInbox, isSuppliersBuyerTab]);
+  }, [resolvedWorkspaceId, user?.email, isHeaderChatInbox, isSuppliersBuyerTab]);
 
   useEffect(() => {
     channelIdRef.current = channel?.name ?? null;
   }, [channel?.name]);
 
+  const lastPaintedChannelRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!channel?.name) {
+    const ch = channel?.name?.trim();
+    if (!ch) {
+      lastPaintedChannelRef.current = null;
       setMessages([]);
       setLoadingMsgs(false);
       setHasMoreOlderMessages(false);
       return;
     }
-    const paint = readChannelMessagesMemoryPaint(user?.email, channel.name);
+    if (lastPaintedChannelRef.current === ch && messagesRef.current.length > 0) {
+      setLoadingMsgs(false);
+      return;
+    }
+    lastPaintedChannelRef.current = ch;
+    const paint = readChannelMessagesMemoryPaint(user?.email, ch);
     if (paint) {
       setMessages(paint.messages);
       setHasMoreOlderMessages(paint.hasMoreOlder);
@@ -2099,19 +2142,43 @@ export const RavenUIMessagesScreen: React.FC = () => {
       setDrawerOpen(false);
       if (workspace?.trim() && c?.name) {
         persistLastChat({ workspace: workspace.trim(), channelId: c.name });
+        const wsId = resolvedWorkspaceId ?? workspace.trim();
+        workspaceHydratedRef.current = wsId;
       }
     },
-    [workspace, persistLastChat]
+    [workspace, persistLastChat, resolvedWorkspaceId]
   );
 
-  const openGlobalInboxChat = useCallback((row: GlobalInboxRow) => {
-    persistLastChat({
-      workspace: row.workspaceId.trim(),
-      channelId: row.channel.name.trim(),
-    });
-    pendingOpenFromGlobalRef.current = { ws: row.workspaceId.trim(), channelId: row.channel.name.trim() };
-    setWorkspace(row.workspaceId.trim());
-  }, [persistLastChat]);
+  const openThreadFromInboxRow = useCallback(
+    (row: GlobalInboxRow, jumpMessageId?: string) => {
+      const ws = row.workspaceId.trim();
+      const chId = row.channel.name.trim();
+      if (!ws || !chId) return;
+
+      persistLastChat({ workspace: ws, channelId: chId });
+      /** Inbox already has the channel — open the thread directly; workspace loads in the background. */
+      pendingOpenFromGlobalRef.current = null;
+
+      const wsResolved = resolveRavenWorkspaceDocId(ws, workspaceRows) || ws;
+      workspaceHydratedRef.current = wsResolved;
+      channelIdRef.current = chId;
+
+      const jump = jumpMessageId?.trim();
+      if (jump) pendingScrollToMessageRef.current = jump;
+
+      setDrawerOpen(false);
+      setWorkspace(ws);
+      setChannel(row.channel);
+    },
+    [persistLastChat, workspaceRows]
+  );
+
+  const openGlobalInboxChat = useCallback(
+    (row: GlobalInboxRow) => {
+      openThreadFromInboxRow(row);
+    },
+    [openThreadFromInboxRow]
+  );
 
   const renderGlobalInboxRow = useCallback(
     ({ item }: { item: GlobalInboxRow }) => {

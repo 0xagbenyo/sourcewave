@@ -1,10 +1,20 @@
 import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  SectionList,
+  type SectionListRenderItemInfo,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RavenLight } from '../constants/ravenLightTheme';
-import { RAVEN_PICKER_EMOJIS, RAVEN_QUICK_EMOJIS } from '../utils/ravenMessageReactions';
-
-const GRID_COLUMNS = 8;
+import { RAVEN_QUICK_EMOJIS } from '../utils/ravenMessageReactions';
+import {
+  getSystemEmojiSections,
+  SYSTEM_EMOJI_GRID_COLUMNS,
+  type SystemEmojiSection,
+} from '../utils/systemEmojiList';
 
 type Props = {
   onPick: (emoji: string) => void;
@@ -13,30 +23,36 @@ type Props = {
   onClose?: () => void;
 };
 
-/** Raven-style emoji grid — quick strip + scrollable picker. */
+type RowItem = string[];
+
+/** System emoji grid — Unicode set rendered with the device emoji font. */
 export const RavenEmojiPickerPanel: React.FC<Props> = ({
   onPick,
   showQuickStrip = true,
   onClose,
 }) => {
-  const gridEmojis = useMemo(() => {
-    const seen = new Set<string>();
-    const list: string[] = [];
-    for (const e of [...RAVEN_QUICK_EMOJIS, ...RAVEN_PICKER_EMOJIS]) {
-      if (seen.has(e)) continue;
-      seen.add(e);
-      list.push(e);
-    }
-    return list;
-  }, []);
+  const sections = useMemo(() => getSystemEmojiSections(), []);
 
-  const rows = useMemo(() => {
-    const out: string[][] = [];
-    for (let i = 0; i < gridEmojis.length; i += GRID_COLUMNS) {
-      out.push(gridEmojis.slice(i, i + GRID_COLUMNS));
-    }
-    return out;
-  }, [gridEmojis]);
+  const renderRow = ({ item: row, index }: SectionListRenderItemInfo<RowItem, SystemEmojiSection>) => (
+    <View style={styles.gridRow}>
+      {row.map((emoji) => (
+        <Pressable
+          key={`${emoji}-${index}`}
+          onPress={() => onPick(emoji)}
+          style={({ pressed }) => [styles.gridCell, pressed && styles.btnPressed]}
+          accessibilityRole="button"
+          accessibilityLabel={emoji}
+        >
+          <Text style={styles.gridEmoji}>{emoji}</Text>
+        </Pressable>
+      ))}
+      {row.length < SYSTEM_EMOJI_GRID_COLUMNS
+        ? Array.from({ length: SYSTEM_EMOJI_GRID_COLUMNS - row.length }).map((_, i) => (
+            <View key={`pad-${index}-${i}`} style={styles.gridCellPad} />
+          ))
+        : null}
+    </View>
+  );
 
   return (
     <View style={styles.wrap}>
@@ -66,33 +82,22 @@ export const RavenEmojiPickerPanel: React.FC<Props> = ({
         </View>
       ) : null}
 
-      <ScrollView
+      <SectionList
+        sections={sections}
+        keyExtractor={(row, index) => `${row.join('')}-${index}`}
+        renderItem={renderRow}
+        renderSectionHeader={({ section }) => (
+          <Text style={styles.sectionTitle}>{section.title}</Text>
+        )}
         style={styles.gridScroll}
         contentContainerStyle={styles.gridContent}
         keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
-        {rows.map((row, rowIdx) => (
-          <View key={`row-${rowIdx}`} style={styles.gridRow}>
-            {row.map((emoji) => (
-              <Pressable
-                key={emoji}
-                onPress={() => onPick(emoji)}
-                style={({ pressed }) => [styles.gridCell, pressed && styles.btnPressed]}
-                accessibilityRole="button"
-                accessibilityLabel={emoji}
-              >
-                <Text style={styles.gridEmoji}>{emoji}</Text>
-              </Pressable>
-            ))}
-            {row.length < GRID_COLUMNS
-              ? Array.from({ length: GRID_COLUMNS - row.length }).map((_, i) => (
-                  <View key={`pad-${rowIdx}-${i}`} style={styles.gridCellPad} />
-                ))
-              : null}
-          </View>
-        ))}
-      </ScrollView>
+        showsVerticalScrollIndicator
+        stickySectionHeadersEnabled={false}
+        initialNumToRender={12}
+        maxToRenderPerBatch={16}
+        windowSize={7}
+      />
     </View>
   );
 };
@@ -138,10 +143,21 @@ const styles = StyleSheet.create({
     lineHeight: 26,
   },
   gridScroll: {
-    maxHeight: 260,
+    maxHeight: 340,
   },
   gridContent: {
-    paddingBottom: 4,
+    paddingBottom: 8,
+  },
+  sectionTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: RavenLight.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    paddingTop: 10,
+    paddingBottom: 6,
+    paddingHorizontal: 4,
+    backgroundColor: RavenLight.panel,
   },
   gridRow: {
     flexDirection: 'row',
