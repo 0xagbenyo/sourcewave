@@ -104,7 +104,9 @@ export const OrderDetailsScreen: React.FC = () => {
   const { t } = useTranslation();
   const { user } = useUserSession();
   const isSupplierPortal = isSupplierPortalUser(user);
-  const { orderId, orderNumber } = (route.params as { orderId?: string; orderNumber?: string }) || {};
+  const { orderId, orderNumber, ravenChannelId } =
+    (route.params as { orderId?: string; orderNumber?: string; ravenChannelId?: string }) || {};
+  const chatChannelId = String(ravenChannelId || '').trim();
   const resolvedOrderId = String(orderId || orderNumber || '').trim();
 
   const { data: order, loading, error, refreshing, refetch } = useOrder(resolvedOrderId);
@@ -238,8 +240,9 @@ export const OrderDetailsScreen: React.FC = () => {
     if (!resolvedOrderId || isSupplierPortal) return;
     (navigation as { navigate: (name: string, params: object) => void }).navigate('SourcingRequest', {
       salesOrderName: resolvedOrderId,
+      ...(chatChannelId ? { ravenChannelId: chatChannelId } : {}),
     });
-  }, [navigation, resolvedOrderId, isSupplierPortal]);
+  }, [navigation, resolvedOrderId, chatChannelId, isSupplierPortal]);
 
   const onShareOrder = useCallback(async () => {
     if (!resolvedOrderId) return;

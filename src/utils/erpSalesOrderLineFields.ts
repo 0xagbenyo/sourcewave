@@ -7,10 +7,9 @@ export const ERP_SO_SERIES_COPY_FIELD = 'custom_series_copy';
 /** Quantity for supplier quotation pre-fill from a linked Sales Order line. */
 export function readSalesOrderLineRequestedQty(row: Record<string, unknown> | null | undefined): number {
   if (!row || typeof row !== 'object') return 1;
-  const custom = Number(row[ERP_SO_LINE_REQUESTED_QTY_FIELD]);
-  if (Number.isFinite(custom) && custom > 0) return custom;
-  const qty = Number(row.qty);
-  if (Number.isFinite(qty) && qty > 0) return qty;
+  const raw = row[ERP_SO_LINE_REQUESTED_QTY_FIELD] ?? row.custom_new_quantity ?? row.qty;
+  const custom = Number(raw);
+  if (Number.isFinite(custom) && custom > 0) return Math.floor(custom);
   return 1;
 }
 

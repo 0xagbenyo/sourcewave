@@ -145,30 +145,29 @@ export async function completeAppSignIn(
   const frappeUserName = identity.frappeUserName;
   let customerDisplayName = identity.fullName || loginResult.full_name || undefined;
 
-  try {
-    await joinAllPublicRavenWorkspacesAsSessionUser();
-  } catch (e) {
+  // Join public Raven workspaces in the background — can be dozens of sequential API calls.
+  void joinAllPublicRavenWorkspacesAsSessionUser().catch((e) => {
     console.warn('Could not join all public Raven workspaces:', e);
-  }
+  });
 
   let customerId = frappeUserName;
-  try {
-    const customer = await client.getCustomerByEmail(userEmail);
-    if (customer?.name) {
-      customerId = String(customer.name).trim();
-    }
-    if (customer?.customer_name) {
-      customerDisplayName = String(customer.customer_name);
-    }
-  } catch (e) {
-    console.warn('Could not fetch customer by email:', e);
-  }
-
   let portal: Awaited<ReturnType<typeof detectSupplierPortalSession>> | null = null;
-  try {
-    portal = await detectSupplierPortalSession(userEmail, frappeUserName);
-  } catch (e) {
-    console.warn('Supplier portal detection failed:', e);
+  const [customer, portalResult] = await Promise.all([
+    client.getCustomerByEmail(userEmail).catch((e) => {
+      console.warn('Could not fetch customer by email:', e);
+      return null;
+    }),
+    detectSupplierPortalSession(userEmail, frappeUserName).catch((e) => {
+      console.warn('Supplier portal detection failed:', e);
+      return null;
+    }),
+  ]);
+  portal = portalResult;
+  if (customer?.name) {
+    customerId = String(customer.name).trim();
+  }
+  if (customer?.customer_name) {
+    customerDisplayName = String(customer.customer_name);
   }
 
   let session: UserSession;
@@ -191,11 +190,9 @@ export async function completeAppSignIn(
     };
   }
 
-  try {
-    await saveFrappeWebCredentials(userEmail, password);
-  } catch (credErr) {
+  void saveFrappeWebCredentials(userEmail, password).catch((credErr) => {
     console.warn('Could not save credentials for Raven auto-login:', credErr);
-  }
+  });
 
   return session;
 }

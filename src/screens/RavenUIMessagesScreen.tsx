@@ -57,6 +57,8 @@ import {
   resolveRavenWorkspaceDocId,
   sendRavenChannelMessage,
   uploadRavenFileWithMessage,
+  deleteRavenMessage,
+  editRavenMessageText,
   fetchWorkspaceMembers,
   createDirectMessageChannel,
   getRavenChannelDisplayLabel,
@@ -96,7 +98,7 @@ import {
   shouldShowChatMessageTextBubble,
   isChatMessageGroupedWithNewer,
 } from '../utils/ravenChatUi';
-import { plainTextFromMaybeHtml } from '../utils/chatPlainText';
+import { plainTextFromMaybeHtml, chatMessageBubbleBodyText } from '../utils/chatPlainText';
 import {
   ravenWorkspaceMemberIsAdmin,
   ravenWorkspaceMemberMatchesViewer,
@@ -109,6 +111,7 @@ import {
 import { pickChatDocuments, pickChatMediaFromLibrary } from '../utils/ravenChatAttachPickers';
 import { getRavenLastChat, setRavenLastChat } from '../utils/ravenLastChatStorage';
 import { subscribeSuppliersTabReset } from '../utils/suppliersTabReset';
+import { consumeSkipSuppliersTabFocusReset } from '../utils/suppliersTabFocusReset';
 import {
   getRavenGlobalInboxSnapshot,
   getRavenWorkspaceChannelsSnapshot,
@@ -149,6 +152,12 @@ import { RavenLinkedGenericDocMessage } from '../components/RavenLinkedGenericDo
 import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 import { channelPrefix, resolveRavenUserDisplayName, replySnippet } from '../utils/ravenSearchPreview';
 import { ravenMessageShortPreview } from '../utils/ravenMessageShortPreview';
+import {
+  ravenMessageCanDelete,
+  ravenMessageCanEdit,
+  ravenMessageIsEdited,
+  ravenMessagePlainTextForEdit,
+} from '../utils/ravenMessageModify';
 import { resolveRavenErpAttachImageUri } from '../utils/ravenFileUrl';
 import { collectChatImageGalleryItems } from '../utils/ravenChatImageGallery';
 import { tryParseQuotationDraftFromMessage } from '../utils/chatQuotationDraftMessage';
@@ -539,6 +548,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const [members, setMembers] = useState<RavenWorkspaceMemberRow[]>([]);
   const [openingDmFor, setOpeningDmFor] = useState<string | null>(null);
   const [replyTo, setReplyTo] = useState<RavenMessageRow | null>(null);
+  const [editingMessage, setEditingMessage] = useState<RavenMessageRow | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<RavenPendingAttachment[]>([]);
   /** Inverted chat: user scrolled up (older); show FAB to jump back to newest. */
   const [showScrollToLatestBtn, setShowScrollToLatestBtn] = useState(false);
@@ -895,6 +905,20 @@ export const RavenUIMessagesScreen: React.FC = () => {
   useFocusEffect(
     useCallback(() => {
       if (!isSuppliersBuyerTab) return;
+      const p = route.params as
+        | {
+            openRavenChannelId?: string;
+            openRavenWorkspaceId?: string;
+            shareSalesOrderName?: string;
+          }
+        | undefined;
+      const hasDeepLink =
+        !!String(p?.openRavenChannelId ?? '').trim() ||
+        !!String(p?.openRavenWorkspaceId ?? '').trim() ||
+        !!String(p?.shareSalesOrderName ?? '').trim();
+      if (hasDeepLink || consumeSkipSuppliersTabFocusReset()) {
+        skipSuppliersFocusResetRef.current = true;
+      }
       if (skipSuppliersFocusResetRef.current) {
         skipSuppliersFocusResetRef.current = false;
         suppliersTabWasBlurredRef.current = false;
@@ -907,7 +931,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
       return () => {
         suppliersTabWasBlurredRef.current = true;
       };
-    }, [isSuppliersBuyerTab, resetSuppliersTabToRoot])
+    }, [isSuppliersBuyerTab, resetSuppliersTabToRoot, route.params])
   );
 
   /** Buyer Suppliers tab only — supplier portal Chat has no “suggested suppliers” block. */
@@ -1364,6 +1388,11 @@ export const RavenUIMessagesScreen: React.FC = () => {
 
   const viewerFrappeName = (user?.email || user?.user || '').trim() || null;
 
+  const handleReplyToMessage = useCallback((msg: RavenMessageRow) => {
+    setEditingMessage(null);
+    setReplyTo(msg);
+  }, []);
+
   const {
     actionsMessage,
     actionsExtras,
@@ -1375,7 +1404,68 @@ export const RavenUIMessagesScreen: React.FC = () => {
     onActionForward,
     onActionReact,
     toggleReaction,
-  } = useRavenMessageActions(setMessages, viewerFrappeName, setReplyTo);
+  } = useRavenMessageActions(setMessages, viewerFrappeName, handleReplyToMessage);
+
+  const ravenSessionUser = user ? { email: user.email, user: user.user } : undefined;
+
+  const performDeleteMessage = useCallback(
+    async (msg: RavenMessageRow) => {
+      const id = String(msg.name || '').trim();
+      if (!id) return;
+      if (!ravenMessageCanDelete(msg, ravenSessionUser)) {
+        Alert.error(t('ravenMessage.modifyExpiredTitle'), t('ravenMessage.modifyExpiredBody'));
+        return;
+      }
+      try {
+        await deleteRavenMessage(id);
+        setMessages((prev) => prev.filter((m) => m.name !== id));
+        if (editingMessage?.name === id) {
+          setEditingMessage(null);
+          setDraft('');
+        }
+      } catch (e: unknown) {
+        Alert.error(
+          t('ravenMessage.deleteFailedTitle'),
+          userFacingError(e, t('ravenMessage.deleteFailedBody'))
+        );
+      }
+    },
+    [editingMessage?.name, ravenSessionUser, setMessages, t]
+  );
+
+  const onActionDelete = useCallback(() => {
+    if (!actionsMessage) return;
+    if (!ravenMessageCanDelete(actionsMessage, ravenSessionUser)) {
+      closeMessageActions();
+      Alert.error(t('ravenMessage.modifyExpiredTitle'), t('ravenMessage.modifyExpiredBody'));
+      return;
+    }
+    const msg = actionsMessage;
+    closeMessageActions();
+    Alert.alert(t('ravenMessage.deleteTitle'), t('ravenMessage.deleteBody'), [
+      { text: t('ravenAttach.cancel'), style: 'cancel' },
+      {
+        text: t('ravenMessage.deleteConfirm'),
+        style: 'destructive',
+        onPress: () => void performDeleteMessage(msg),
+      },
+    ]);
+  }, [actionsMessage, closeMessageActions, performDeleteMessage, ravenSessionUser, t]);
+
+  const onActionEdit = useCallback(() => {
+    if (!actionsMessage) return;
+    if (!ravenMessageCanEdit(actionsMessage, ravenSessionUser)) {
+      closeMessageActions();
+      Alert.error(t('ravenMessage.modifyExpiredTitle'), t('ravenMessage.modifyExpiredBody'));
+      return;
+    }
+    const msg = actionsMessage;
+    closeMessageActions();
+    setReplyTo(null);
+    setPendingAttachments([]);
+    setEditingMessage(msg);
+    setDraft(ravenMessagePlainTextForEdit(msg));
+  }, [actionsMessage, closeMessageActions, ravenSessionUser, t]);
 
   const { registerSqPaymentAction, resolveSqPayment } = useSqPaymentActionRegistry();
 
@@ -1695,6 +1785,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
 
   useEffect(() => {
     setReplyTo(null);
+    setEditingMessage(null);
     setPendingAttachments([]);
     setShowScrollToLatestBtn(false);
     allowOlderEndReachedRef.current = false;
@@ -2466,6 +2557,51 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const onSend = async () => {
     if (!channel?.name || sending) return;
     const text = draft.trim();
+
+    if (editingMessage) {
+      const editId = String(editingMessage.name || '').trim();
+      if (!editId) return;
+      if (!ravenMessageCanEdit(editingMessage, ravenSessionUser)) {
+        setEditingMessage(null);
+        setDraft('');
+        Alert.error(t('ravenMessage.modifyExpiredTitle'), t('ravenMessage.modifyExpiredBody'));
+        return;
+      }
+      if (!text) {
+        if (!ravenMessageCanDelete(editingMessage, ravenSessionUser)) {
+          setEditingMessage(null);
+          setDraft('');
+          Alert.error(t('ravenMessage.modifyExpiredTitle'), t('ravenMessage.modifyExpiredBody'));
+          return;
+        }
+        Alert.alert(t('ravenMessage.deleteTitle'), t('ravenMessage.deleteBody'), [
+          { text: t('ravenAttach.cancel'), style: 'cancel' },
+          {
+            text: t('ravenMessage.deleteConfirm'),
+            style: 'destructive',
+            onPress: () => void performDeleteMessage(editingMessage),
+          },
+        ]);
+        return;
+      }
+      setSending(true);
+      try {
+        const updated = await editRavenMessageText(editId, text);
+        setMessages((prev) => prev.map((m) => (m.name === editId ? updated : m)));
+        setDraft('');
+        setEditingMessage(null);
+        setError(null);
+      } catch (e: unknown) {
+        Alert.error(
+          t('ravenMessage.editFailedTitle'),
+          userFacingError(e, t('ravenMessage.editFailedBody'))
+        );
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+
     const hasText = !!text;
     const hasFile = pendingAttachments.length > 0;
     if (!hasText && !hasFile) return;
@@ -2914,11 +3050,30 @@ export const RavenUIMessagesScreen: React.FC = () => {
       const supplierImgUri = resolveRavenErpAttachImageUri(item.supplier_image);
       const avatarUri = userImgUri || supplierImgUri;
       const showDot = ravenUserIsActiveLikeWeb(item.user, viewerFrappeName, presenceActiveSet, presenceInvisibleSet);
-      const subLine = hasSupplier ? 'Profile linked · tap to open supplier' : 'No supplier profile linked';
+      const subLine = shareSalesOrderName
+        ? t('salesOrderShare.tapSupplierToShare')
+        : hasSupplier
+          ? 'Profile linked · tap to open supplier'
+          : 'No supplier profile linked';
       return (
         <TouchableOpacity
           style={s.refListRow}
-          onPress={() => openAdminSupplierSheet(item)}
+          onPress={() => {
+            const peer = (item.user || '').trim();
+            if (shareSalesOrderName && peer) {
+              (navigation as { navigate: (name: string, params: object) => void }).navigate(
+                'BuyerSalesOrderShareCompose',
+                {
+                  salesOrderName: shareSalesOrderName,
+                  peerUserId: peer,
+                  ...(workspace?.trim() ? { ravenWorkspaceId: workspace.trim() } : {}),
+                  supplierLabel: resolveDisplayName(item.user, item.full_name),
+                }
+              );
+              return;
+            }
+            openAdminSupplierSheet(item);
+          }}
           activeOpacity={0.7}
         >
           <View style={s.refListAvatarWrap}>
@@ -2956,7 +3111,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
         </TouchableOpacity>
       );
     },
-    [openAdminSupplierSheet, viewerFrappeName, presenceActiveSet, presenceInvisibleSet, resolveDisplayName]
+    [openAdminSupplierSheet, viewerFrappeName, presenceActiveSet, presenceInvisibleSet, resolveDisplayName, shareSalesOrderName, workspace, navigation, t]
   );
 
   const renderMessage = useCallback(
@@ -3138,8 +3293,13 @@ export const RavenUIMessagesScreen: React.FC = () => {
               {quotationCard}
               {showPlainTextBubble ? (
                 <View style={s.mineTextBubble}>
-                  <Text style={[s.bubbleBody, s.bubbleBodyMine]}>{item.text}</Text>
-                  <Text style={s.msgTimeMineInline}>{tLine}</Text>
+                  <Text style={[s.bubbleBody, s.bubbleBodyMine]}>{chatMessageBubbleBodyText(item)}</Text>
+                  <View style={s.bubbleMetaRow}>
+                    {ravenMessageIsEdited(item) ? (
+                      <Text style={s.editedBadgeMine}>{t('ravenMessage.editedLabel')}</Text>
+                    ) : null}
+                    <Text style={s.msgTimeMineInline}>{tLine}</Text>
+                  </View>
                 </View>
               ) : null}
               <RavenMessageReactionsRow
@@ -3209,8 +3369,17 @@ export const RavenUIMessagesScreen: React.FC = () => {
             {quotationCard}
             {showPlainTextBubble ? (
               <View style={[s.theirsTextBubble, !showSenderHeader && s.theirsTextBubbleGrouped]}>
-                <Text style={s.msgTextTheirs}>{item.text}</Text>
-                {!showSenderHeader ? <Text style={s.msgTimeTheirsInline}>{tLine}</Text> : null}
+                <Text style={s.msgTextTheirs}>{chatMessageBubbleBodyText(item)}</Text>
+                {!showSenderHeader ? (
+                  <View style={s.bubbleMetaRowTheirs}>
+                    {ravenMessageIsEdited(item) ? (
+                      <Text style={s.editedBadgeTheirs}>{t('ravenMessage.editedLabel')}</Text>
+                    ) : null}
+                    <Text style={s.msgTimeTheirsInline}>{tLine}</Text>
+                  </View>
+                ) : ravenMessageIsEdited(item) ? (
+                  <Text style={s.editedBadgeTheirs}>{t('ravenMessage.editedLabel')}</Text>
+                ) : null}
               </View>
             ) : null}
             <RavenMessageReactionsRow
@@ -3342,7 +3511,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const edgeSwipeStripBottomInset = channel
     ? 72 +
       composerBottomPad +
-      (replyTo ? 56 : 0) +
+      (replyTo || editingMessage ? 56 : 0) +
       (pendingAttachments.length > 0 ? 52 : 0)
     : 0;
 
@@ -3764,7 +3933,27 @@ export const RavenUIMessagesScreen: React.FC = () => {
 
         {channel ? (
         <View style={[s.composerBar, { paddingBottom: composerBottomPad }]}>
-          {replyTo ? (
+          {editingMessage ? (
+            <View style={s.replyStrip}>
+              <View style={s.replyStripAccent} />
+              <View style={s.flex}>
+                <Text style={s.replyStripLabel}>{t('ravenMessage.editingMessage')}</Text>
+                <Text style={s.replyStripPreview} numberOfLines={2}>
+                  {ravenMessageShortPreview(editingMessage)}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => {
+                  setEditingMessage(null);
+                  setDraft('');
+                }}
+                hitSlop={10}
+                style={s.replyStripClose}
+              >
+                <Ionicons name="close-circle" size={22} color={RavenLight.textMuted} />
+              </TouchableOpacity>
+            </View>
+          ) : replyTo ? (
             <View style={s.replyStrip}>
               <View style={s.replyStripAccent} />
               <Pressable
@@ -3817,7 +4006,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
           ) : null}
           <View style={s.composerInner}>
             <RavenChatAttachTrigger
-              disabled={!channel || sending}
+              disabled={!channel || sending || !!editingMessage}
               buttonStyle={s.plusCircleBtn}
               disabledStyle={s.attachBtnOff}
               isSupplierPortalChat={isSupplierPortalChat}
@@ -3831,7 +4020,13 @@ export const RavenUIMessagesScreen: React.FC = () => {
             <View style={s.inputShell}>
               <TextInput
                 style={s.inputMessenger}
-                placeholder={replyTo ? 'Add a reply…' : 'Message…'}
+                placeholder={
+                  editingMessage
+                    ? t('ravenMessage.editPlaceholder')
+                    : replyTo
+                      ? 'Add a reply…'
+                      : 'Message…'
+                }
                 placeholderTextColor={RavenLight.textSubtle}
                 value={draft}
                 onChangeText={setDraft}
@@ -4111,10 +4306,13 @@ export const RavenUIMessagesScreen: React.FC = () => {
         message={actionsMessage}
         extras={actionsExtras}
         resolveSqPayment={resolveSqPayment}
+        sessionUser={user ? { email: user.email, user: user.user } : undefined}
         onClose={closeMessageActions}
         onReply={onActionReply}
         onForward={onActionForward}
         onReact={onActionReact}
+        onEdit={onActionEdit}
+        onDelete={onActionDelete}
       />
       <RavenForwardMessageModal
         visible={!!forwardMessage}
@@ -4892,6 +5090,29 @@ const s = StyleSheet.create({
   replyStripLabel: { fontSize: 11, fontWeight: '700', color: RavenLight.accent },
   replyStripPreview: { fontSize: 13, color: RavenLight.text, marginTop: 2 },
   replyStripClose: { marginLeft: 8 },
+  bubbleMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 6,
+    marginTop: 2,
+  },
+  bubbleMetaRowTheirs: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 2,
+  },
+  editedBadgeMine: {
+    fontSize: 10,
+    fontStyle: 'italic',
+    color: 'rgba(255,255,255,0.75)',
+  },
+  editedBadgeTheirs: {
+    fontSize: 10,
+    fontStyle: 'italic',
+    color: RavenLight.textMuted,
+  },
   pendingWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',

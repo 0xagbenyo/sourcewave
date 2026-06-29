@@ -30,6 +30,7 @@ import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { useUserSession } from '../context/UserContext';
 import { useRavenUnread } from '../context/RavenUnreadContext';
+import { useTranslation } from 'react-i18next';
 import { buildRavenUrlWithWorkspace, getRavenWebUrl } from '../config/ravenChat';
 import { RavenMessageAttachmentBody } from './RavenMessageAttachmentBody';
 import { ChatImageGalleryModal } from './ChatImageGalleryModal';
@@ -56,14 +57,23 @@ import {
   shouldShowChatMessageTextBubble,
   isChatMessageGroupedWithNewer,
 } from '../utils/ravenChatUi';
+import { chatMessageBubbleBodyText } from '../utils/chatPlainText';
 import { resolveRavenUserDisplayName } from '../utils/ravenSearchPreview';
 import { ravenMessageShortPreview } from '../utils/ravenMessageShortPreview';
+import {
+  ravenMessageCanDelete,
+  ravenMessageCanEdit,
+  ravenMessageIsEdited,
+  ravenMessagePlainTextForEdit,
+} from '../utils/ravenMessageModify';
 import { collectChatImageGalleryItems } from '../utils/ravenChatImageGallery';
 import {
   listChannelsForWorkspace,
   resolveRavenWorkspaceId,
   sendRavenChannelMessage,
   uploadRavenFileWithMessage,
+  deleteRavenMessage,
+  editRavenMessageText,
   getRavenChannelDisplayLabel,
   getRavenDmPeerUserId,
   enrichRavenChannelsWithPeerProfiles,
@@ -140,6 +150,7 @@ function channelListPeerSubtitle(
 export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp }) => {
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const { user } = useUserSession();
+  const { t } = useTranslation();
   const { setActiveChannelId, refreshUnreadCounts } = useRavenUnread();
   const { composerBottomPad, rootKeyboardPad } = useChatComposerInsets(true);
   const { flashMessageHighlight, isMessageHighlighted } = useChatMessageJumpHighlight();
@@ -154,6 +165,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   const [sending, setSending] = useState(false);
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState<RavenMessageRow | null>(null);
+  const [editingMessage, setEditingMessage] = useState<RavenMessageRow | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<RavenPendingAttachment[]>([]);
   const [showScrollToLatestBtn, setShowScrollToLatestBtn] = useState(false);
   const [loadingOlderMsgs, setLoadingOlderMsgs] = useState(false);
@@ -166,6 +178,12 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   const [quotationActionByName, setQuotationActionByName] = useState<Record<string, 'accepted' | 'rejected'>>({});
   const [quotationActionBusy, setQuotationActionBusy] = useState<string | null>(null);
   const viewerFrappeName = String(user?.user || user?.email || '').trim();
+
+  const handleReplyToMessage = useCallback((msg: RavenMessageRow) => {
+    setEditingMessage(null);
+    setReplyTo(msg);
+  }, []);
+
   const {
     actionsMessage,
     actionsExtras,
@@ -177,7 +195,68 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
     onActionForward,
     onActionReact,
     toggleReaction,
-  } = useRavenMessageActions(setMessages, viewerFrappeName, setReplyTo);
+  } = useRavenMessageActions(setMessages, viewerFrappeName, handleReplyToMessage);
+
+  const ravenSessionUser = user ? { email: user.email, user: user.user } : undefined;
+
+  const performDeleteMessage = useCallback(
+    async (msg: RavenMessageRow) => {
+      const id = String(msg.name || '').trim();
+      if (!id) return;
+      if (!ravenMessageCanDelete(msg, ravenSessionUser)) {
+        Alert.error(t('ravenMessage.modifyExpiredTitle'), t('ravenMessage.modifyExpiredBody'));
+        return;
+      }
+      try {
+        await deleteRavenMessage(id);
+        setMessages((prev) => prev.filter((m) => m.name !== id));
+        if (editingMessage?.name === id) {
+          setEditingMessage(null);
+          setDraft('');
+        }
+      } catch (e: unknown) {
+        Alert.error(
+          t('ravenMessage.deleteFailedTitle'),
+          userFacingError(e, t('ravenMessage.deleteFailedBody'))
+        );
+      }
+    },
+    [editingMessage?.name, ravenSessionUser, setMessages, t]
+  );
+
+  const onActionDelete = useCallback(() => {
+    if (!actionsMessage) return;
+    if (!ravenMessageCanDelete(actionsMessage, ravenSessionUser)) {
+      closeMessageActions();
+      Alert.error(t('ravenMessage.modifyExpiredTitle'), t('ravenMessage.modifyExpiredBody'));
+      return;
+    }
+    const msg = actionsMessage;
+    closeMessageActions();
+    Alert.alert(t('ravenMessage.deleteTitle'), t('ravenMessage.deleteBody'), [
+      { text: t('ravenAttach.cancel'), style: 'cancel' },
+      {
+        text: t('ravenMessage.deleteConfirm'),
+        style: 'destructive',
+        onPress: () => void performDeleteMessage(msg),
+      },
+    ]);
+  }, [actionsMessage, closeMessageActions, performDeleteMessage, ravenSessionUser, t]);
+
+  const onActionEdit = useCallback(() => {
+    if (!actionsMessage) return;
+    if (!ravenMessageCanEdit(actionsMessage, ravenSessionUser)) {
+      closeMessageActions();
+      Alert.error(t('ravenMessage.modifyExpiredTitle'), t('ravenMessage.modifyExpiredBody'));
+      return;
+    }
+    const msg = actionsMessage;
+    closeMessageActions();
+    setReplyTo(null);
+    setPendingAttachments([]);
+    setEditingMessage(msg);
+    setDraft(ravenMessagePlainTextForEdit(msg));
+  }, [actionsMessage, closeMessageActions, ravenSessionUser, t]);
 
   const { registerSqPaymentAction, resolveSqPayment } = useSqPaymentActionRegistry();
 
@@ -512,6 +591,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
 
   useEffect(() => {
     setReplyTo(null);
+    setEditingMessage(null);
     setPendingAttachments([]);
     setShowScrollToLatestBtn(false);
     allowOlderEndReachedRef.current = false;
@@ -665,6 +745,50 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   const onSend = async () => {
     if (!channel?.name || sending) return;
     const text = draft.trim();
+
+    if (editingMessage) {
+      const editId = String(editingMessage.name || '').trim();
+      if (!editId) return;
+      if (!ravenMessageCanEdit(editingMessage, ravenSessionUser)) {
+        setEditingMessage(null);
+        setDraft('');
+        Alert.error(t('ravenMessage.modifyExpiredTitle'), t('ravenMessage.modifyExpiredBody'));
+        return;
+      }
+      if (!text) {
+        if (!ravenMessageCanDelete(editingMessage, ravenSessionUser)) {
+          setEditingMessage(null);
+          setDraft('');
+          Alert.error(t('ravenMessage.modifyExpiredTitle'), t('ravenMessage.modifyExpiredBody'));
+          return;
+        }
+        Alert.alert(t('ravenMessage.deleteTitle'), t('ravenMessage.deleteBody'), [
+          { text: t('ravenAttach.cancel'), style: 'cancel' },
+          {
+            text: t('ravenMessage.deleteConfirm'),
+            style: 'destructive',
+            onPress: () => void performDeleteMessage(editingMessage),
+          },
+        ]);
+        return;
+      }
+      setSending(true);
+      try {
+        const updated = await editRavenMessageText(editId, text);
+        setMessages((prev) => prev.map((m) => (m.name === editId ? updated : m)));
+        setDraft('');
+        setEditingMessage(null);
+      } catch (e: unknown) {
+        Alert.error(
+          t('ravenMessage.editFailedTitle'),
+          userFacingError(e, t('ravenMessage.editFailedBody'))
+        );
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+
     const hasText = !!text;
     const hasFile = pendingAttachments.length > 0;
     if (!hasText && !hasFile) return;
@@ -883,7 +1007,9 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
           ) : null}
           {linkedOrQuotationCard}
           {showPlainTextBubble ? (
-            <Text style={[styles.bubbleText, mine && styles.bubbleTextMine]}>{item.text}</Text>
+            <Text style={[styles.bubbleText, mine && styles.bubbleTextMine]}>
+              {chatMessageBubbleBodyText(item)}
+            </Text>
           ) : !hasAttach && !qDraft && !sqLink && !genericDocLink ? (
             <Text style={[styles.bubbleText, mine && styles.bubbleTextMine]}> </Text>
           ) : null}
@@ -893,7 +1019,14 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
             variant="wine"
             onToggleReaction={(emoji) => void toggleReaction(item, emoji)}
           />
-          <Text style={[styles.bubbleTime, mine && styles.bubbleTimeMine]}>{tLine}</Text>
+          <View style={styles.bubbleTimeRow}>
+            {ravenMessageIsEdited(item) ? (
+              <Text style={[styles.editedBadge, mine && styles.editedBadgeMine]}>
+                {t('ravenMessage.editedLabel')}
+              </Text>
+            ) : null}
+            <Text style={[styles.bubbleTime, mine && styles.bubbleTimeMine]}>{tLine}</Text>
+          </View>
         </>
       );
 
@@ -946,6 +1079,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       onOpenChatImagePreview,
       viewerFrappeName,
       registerSqPaymentAction,
+      t,
     ]
   );
 
@@ -1036,7 +1170,26 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       )}
 
       <View style={[styles.composerWrap, { paddingBottom: composerBottomPad }]}>
-        {replyTo ? (
+        {editingMessage ? (
+          <View style={styles.replyStrip}>
+            <View style={styles.replyStripAccent} />
+            <View style={styles.replyStripText}>
+              <Text style={styles.replyStripLabel}>{t('ravenMessage.editingMessage')}</Text>
+              <Text style={styles.replyStripPreview} numberOfLines={2}>
+                {ravenMessageShortPreview(editingMessage)}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => {
+                setEditingMessage(null);
+                setDraft('');
+              }}
+              hitSlop={10}
+            >
+              <Ionicons name="close-circle" size={22} color={Colors.TEXT_SECONDARY} />
+            </TouchableOpacity>
+          </View>
+        ) : replyTo ? (
           <View style={styles.replyStrip}>
             <View style={styles.replyStripAccent} />
             <Pressable
@@ -1090,7 +1243,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
         <View style={styles.composer}>
           <View style={styles.attachRow}>
             <RavenChatAttachTrigger
-              disabled={!channel || sending}
+              disabled={!channel || sending || !!editingMessage}
               isSupplierPortalChat={isSupplierPortalChat}
               onPickEmoji={() => setComposerEmojiOpen(true)}
               onPickMedia={() => void pickMedia()}
@@ -1101,7 +1254,13 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
           </View>
           <TextInput
             style={styles.input}
-            placeholder={replyTo ? 'Add a reply…' : 'Message'}
+            placeholder={
+              editingMessage
+                ? t('ravenMessage.editPlaceholder')
+                : replyTo
+                  ? 'Add a reply…'
+                  : 'Message'
+            }
             placeholderTextColor={Colors.TEXT_SECONDARY}
             value={draft}
             onChangeText={setDraft}
@@ -1178,10 +1337,13 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
         message={actionsMessage}
         extras={actionsExtras}
         resolveSqPayment={resolveSqPayment}
+        sessionUser={user ? { email: user.email, user: user.user } : undefined}
         onClose={closeMessageActions}
         onReply={onActionReply}
         onForward={onActionForward}
         onReact={onActionReact}
+        onEdit={onActionEdit}
+        onDelete={onActionDelete}
       />
       <RavenForwardMessageModal
         visible={!!forwardMessage}
@@ -1305,6 +1467,16 @@ const styles = StyleSheet.create({
   bubbleText: { fontSize: 15, color: Colors.BLACK, lineHeight: 22 },
   bubbleTextMine: { color: Colors.WHITE, alignSelf: 'stretch', textAlign: 'right' },
   bubbleTime: { fontSize: 10, marginTop: 4, color: Colors.TEXT_SECONDARY, alignSelf: 'flex-end' },
+  bubbleTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 6,
+    marginTop: 4,
+    alignSelf: 'flex-end',
+  },
+  editedBadge: { fontSize: 10, fontStyle: 'italic', color: Colors.TEXT_SECONDARY },
+  editedBadgeMine: { color: 'rgba(255,255,255,0.75)' },
   bubbleTimeMine: { color: 'rgba(255,255,255,0.85)' },
   chatDateSepRow: {
     alignItems: 'center',

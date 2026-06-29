@@ -13,6 +13,7 @@ import {
   ravenCreateResourceDoc,
   ravenCallMultipartFrappeMethod,
   ravenGetResourceDoc,
+  ravenDeleteResourceDoc,
   hasFrappeRavenSession,
 } from './frappeRavenSession';
 import { plainTextFromMaybeHtml } from '../utils/chatPlainText';
@@ -154,6 +155,8 @@ export type RavenMessageRow = {
   name: string;
   channel_id?: string;
   text?: string;
+  /** Raven v2 plain-text body derived from rich `text` on the server. */
+  content?: string;
   owner?: string;
   creation?: string;
   /** Frappe `modified` — useful when `creation` is missing on some API payloads. */
@@ -179,6 +182,8 @@ export type RavenMessageRow = {
   message_reactions?: string;
   /** Raven Check — forwarded copy of another message. */
   is_forwarded?: number | boolean;
+  /** Raven Check — message body was edited after send. */
+  is_edited?: number | boolean;
 };
 
 /** Unix ms for sorting (creation, then modified). Handles Frappe datetimes, numeric unix, and missing `T`. */
@@ -541,6 +546,7 @@ function mapApiRecordToRavenMessageRow(m: Record<string, unknown>): RavenMessage
     name: String(m.name ?? ''),
     channel_id: m.channel_id != null ? String(m.channel_id) : undefined,
     text: pickMessageBodyText(m),
+    content: m.content != null ? String(m.content) : undefined,
     owner: m.owner != null ? String(m.owner) : undefined,
     creation,
     modified: m.modified != null ? String(m.modified) : undefined,
@@ -559,6 +565,7 @@ function mapApiRecordToRavenMessageRow(m: Record<string, unknown>): RavenMessage
     message_reactions:
       m.message_reactions != null ? String(m.message_reactions) : undefined,
     is_forwarded: m.is_forwarded as RavenMessageRow['is_forwarded'],
+    is_edited: m.is_edited as RavenMessageRow['is_edited'],
   };
 }
 
@@ -1433,6 +1440,7 @@ export async function listMessagesForChannel(
     'link_document',
     'message_reactions',
     'is_forwarded',
+    'is_edited',
   ];
   const tryFilters: any[][][] = [
     [['channel_id', '=', channelId]],
@@ -1879,6 +1887,7 @@ async function scanInboxFromResource(
     'link_document',
     'message_reactions',
     'is_forwarded',
+    'is_edited',
   ];
   const tryFilters: any[][][] = [
     [['channel_id', '=', cid]],
@@ -2833,4 +2842,64 @@ export async function reactToRavenMessage(
     is_custom: opts?.isCustom ? 1 : 0,
     emoji_name: opts?.emojiName ?? null,
   });
+}
+
+/** Permanent delete for all users — same as Raven web `DeleteMessageModal` (`deleteDoc`). */
+export async function deleteRavenMessage(messageId: string): Promise<void> {
+  const id = String(messageId || '').trim();
+  if (!id) throw new Error('Message id is required.');
+  const doctype = 'Raven Message';
+
+  if (!hasFrappeRavenSession()) {
+    throw new Error('Sign in required to delete messages.');
+  }
+
+  try {
+    await ravenDeleteResourceDoc(doctype, id);
+    return;
+  } catch (resourceErr) {
+    console.warn('[ravenNativeApi] DELETE Raven Message resource failed; trying frappe.client.delete', resourceErr);
+  }
+
+  await ravenCallFrappeMethod('frappe.client.delete', {
+    doctype,
+    name: id,
+  });
+}
+
+function ravenPlainTextToMessageHtml(plain: string): string {
+  const inner = plain.trim().replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<p>${inner}</p>`;
+}
+
+/** Update message text — mirrors Raven web `EditMessageModal` (`text` + `is_edited`). */
+export async function editRavenMessageText(messageId: string, plainText: string): Promise<RavenMessageRow> {
+  const id = String(messageId || '').trim();
+  const next = plainText.trim();
+  if (!id) throw new Error('Message id is required.');
+  if (!next) throw new Error('Message cannot be empty.');
+
+  const html = ravenPlainTextToMessageHtml(next);
+  const doctype = 'Raven Message';
+
+  await ravenCallFrappeMethod('frappe.client.set_value', {
+    doctype,
+    name: id,
+    fieldname: 'text',
+    value: html,
+  });
+  await ravenCallFrappeMethod('frappe.client.set_value', {
+    doctype,
+    name: id,
+    fieldname: 'is_edited',
+    value: 1,
+  });
+
+  const data = await ravenCallFrappeMethod('frappe.client.get', {
+    doctype,
+    name: id,
+  });
+  const out = ((data as { message?: Record<string, unknown> })?.message ?? data) as Record<string, unknown>;
+  const row = mapApiRecordToRavenMessageRow(out);
+  return { ...row, text: next, content: next };
 }

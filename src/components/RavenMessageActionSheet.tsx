@@ -6,6 +6,10 @@ import { RavenBottomSheetShell } from './RavenBottomSheetShell';
 import { RavenEmojiPickerPanel } from './RavenEmojiPickerPanel';
 import { RAVEN_QUICK_EMOJIS } from '../utils/ravenMessageReactions';
 import { RavenLight } from '../constants/ravenLightTheme';
+import {
+  ravenMessageCanDelete,
+  ravenMessageCanEdit,
+} from '../utils/ravenMessageModify';
 import type { RavenMessageRow } from '../services/ravenNativeApi';
 
 export type RavenMessageActionExtras = {
@@ -18,10 +22,13 @@ type Props = {
   message: RavenMessageRow | null;
   extras?: RavenMessageActionExtras | null;
   resolveSqPayment?: (sqName: string) => (() => void) | undefined;
+  sessionUser?: { email?: string | null; user?: string | null };
   onClose: () => void;
   onReply: () => void;
   onForward: () => void;
   onReact: (emoji: string) => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
 };
 
 type ActionItem = {
@@ -41,14 +48,19 @@ export const RavenMessageActionSheet: React.FC<Props> = ({
   message,
   extras,
   resolveSqPayment,
+  sessionUser,
   onClose,
   onReply,
   onForward,
   onReact,
+  onEdit,
+  onDelete,
 }) => {
   const { t } = useTranslation();
   const [emojiExpanded, setEmojiExpanded] = useState(false);
   const isPoll = String(message?.message_type || '').toLowerCase() === 'poll';
+  const showEdit = !!message && ravenMessageCanEdit(message, sessionUser);
+  const showDelete = !!message && ravenMessageCanDelete(message, sessionUser);
 
   const payFn = extras?.sqName ? resolveSqPayment?.(extras.sqName.trim()) : undefined;
 
@@ -92,8 +104,25 @@ export const RavenMessageActionSheet: React.FC<Props> = ({
         accent: true,
       });
     }
+    if (showEdit && onEdit) {
+      opts.push({
+        id: 'edit',
+        label: t('ravenMessage.edit'),
+        icon: 'create-outline',
+        onPress: onEdit,
+      });
+    }
+    if (showDelete && onDelete) {
+      opts.push({
+        id: 'delete',
+        label: t('ravenMessage.delete'),
+        icon: 'trash-outline',
+        onPress: onDelete,
+        accent: true,
+      });
+    }
     return opts;
-  }, [t, isPoll, payFn, onReply, onForward]);
+  }, [t, isPoll, payFn, showEdit, showDelete, onEdit, onDelete, onReply, onForward]);
 
   return (
     <RavenBottomSheetShell

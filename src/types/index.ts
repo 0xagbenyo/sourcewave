@@ -314,7 +314,7 @@ export type RootStackParamList = {
   InvoicesPayments: undefined;
   CustomerInvoices: undefined;
   CustomerPayments: { salesInvoiceName?: string } | undefined;
-  OrderDetails: { orderId: string };
+  OrderDetails: { orderId: string; ravenChannelId?: string };
   InvoiceDetails: { invoiceId: string };
   /** In-app preview for Supplier Quotation (from chat or lists). */
   SupplierQuotationDetail: { name: string; customerId?: string };

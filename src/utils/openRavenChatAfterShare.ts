@@ -8,6 +8,7 @@ import {
 } from '../services/ravenNativeApi';
 import { rootNavigationRef } from '../navigation/rootNavigation';
 import { appAlert } from '../services/appAlert';
+import { requestSkipSuppliersTabFocusReset } from './suppliersTabFocusReset';
 
 type Nav = { dispatch: (action: NavigationAction) => void };
 
@@ -55,6 +56,8 @@ export async function openRavenSupplierChatAfterSalesOrderShare(opts: {
   );
   const peerUserId = (opts.peerUserId || '').trim();
 
+  requestSkipSuppliersTabFocusReset();
+
   const suppliersParams: Record<string, string> = {
     openRavenChannelId: channelId,
   };
@@ -87,7 +90,7 @@ export async function openRavenSupplierChatAfterSalesOrderShare(opts: {
   opts.navigation.dispatch(resetAction);
 }
 
-/** Show a success alert immediately after share, then open the supplier chat on confirm. */
+/** After share succeeds, open the supplier chat and show a brief confirmation. */
 export function showSalesOrderShareSentAndOpenChat(opts: {
   t: TFunction;
   navigation: Nav;
@@ -99,22 +102,15 @@ export function showSalesOrderShareSentAndOpenChat(opts: {
   const channelId = opts.channelId.trim();
   if (!channelId) return;
 
-  appAlert.success(
-    opts.t('salesOrderShare.sharedTitle'),
-    opts.t('salesOrderShare.sharedBody'),
-    [
-      {
-        text: opts.t('salesOrderShare.sharedOpenChat'),
-        onPress: () => {
-          void openRavenSupplierChatAfterSalesOrderShare({
-            navigation: opts.navigation,
-            sessionEmail: opts.sessionEmail,
-            channelId,
-            peerUserId: opts.peerUserId,
-            workspaceId: opts.workspaceId,
-          });
-        },
-      },
-    ]
-  );
+  void openRavenSupplierChatAfterSalesOrderShare({
+    navigation: opts.navigation,
+    sessionEmail: opts.sessionEmail,
+    channelId,
+    peerUserId: opts.peerUserId,
+    workspaceId: opts.workspaceId,
+  });
+
+  appAlert.success(opts.t('salesOrderShare.sharedTitle'), opts.t('salesOrderShare.sharedBody'), [
+    { text: opts.t('contactUs.ok') },
+  ]);
 }

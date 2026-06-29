@@ -1,8 +1,6 @@
 import type { getERPNextClient } from '../services/erpnext';
 import { OTHER_SOURCING_ITEM, type SourcingItemOption } from './sourcingItems';
 
-import { ERP_SO_LINE_REQUESTED_QTY_FIELD } from './erpSalesOrderLineFields';
-
 type ErpClient = ReturnType<typeof getERPNextClient>;
 
 export type SourcingOrderLineInput = {
@@ -228,7 +226,7 @@ export async function buildSourcingSalesOrderLines(
     result.push({
       item_code: itemCode,
       qty: 1,
-      [ERP_SO_LINE_REQUESTED_QTY_FIELD]: requestedQty,
+      custom_new_quantity: requestedQty,
       rate,
       amount: rate,
       description: line.description,

@@ -42,6 +42,7 @@ import {
 } from '../utils/shareSalesOrderInChat';
 import { markSalesOrderSharedLocally } from '../utils/salesOrderShareMarks';
 import { showSalesOrderShareSentAndOpenChat } from '../utils/openRavenChatAfterShare';
+import { notifySalesOrderEditedInChat } from '../utils/erpDocChatStatusReply';
 import { getRavenDmPeerUserId, listRavenChannelsForSessionUser } from '../services/ravenNativeApi';
 
 type SourcingRoute = RouteProp<RootStackParamList, 'SourcingRequest'>;
@@ -518,6 +519,11 @@ export const SourcingRequestMultiScreen: React.FC = () => {
             console.warn('Could not set sales order line images:', e);
           }
         }
+
+        notifySalesOrderEditedInChat(paramSalesOrderName, {
+          ravenChannelId: paramChannelId || undefined,
+          sessionEmail: sessionEmail || null,
+        });
 
         Alert.alert(t('sourcing.savedEditsTitle'), t('sourcing.savedEditsBody'), [
           {

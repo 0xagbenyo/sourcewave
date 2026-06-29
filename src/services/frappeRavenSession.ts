@@ -420,6 +420,30 @@ async function sessionPost(path: string, data?: unknown, retried = false): Promi
   }
 }
 
+async function sessionDelete(path: string, retried = false): Promise<any> {
+  if (!sessionAxios) throw new Error('No Frappe session');
+  if (!currentCsrfHeader()) {
+    await bootstrapCsrfFromSessionProbe();
+  }
+  try {
+    return await sessionAxios.delete(path);
+  } catch (e) {
+    if (isAxios403(e)) {
+      logFrappeHttpError('frappeRavenSession/delete', e, {
+        path,
+        retried,
+        session: getFrappeRavenSessionDebug(),
+        frappeMessage: parseFrappeResponseData((e as AxiosLike).response?.data),
+      });
+    }
+    if (isAxios403(e) && !retried) {
+      await refreshSessionAfter403();
+      return sessionDelete(path, true);
+    }
+    throw e;
+  }
+}
+
 type AxiosLike = { response?: { data?: unknown } };
 
 export async function ravenCallFrappeMethod(method: string, kwargs: Record<string, unknown> = {}): Promise<any> {
@@ -495,6 +519,26 @@ export async function ravenGetResourceDoc(doctype: string, name: string): Promis
     throw htmlInsteadOfJsonError(`GET ${API_RESOURCE}/${doctype}/${n}`);
   }
   return response.data?.data ?? null;
+}
+
+/** DELETE `/api/resource/{DocType}/{name}` — same path Raven web `deleteDoc` uses. */
+export async function ravenDeleteResourceDoc(doctype: string, name: string): Promise<void> {
+  const n = String(name || '').trim();
+  if (!n) throw new Error('Document name required');
+
+  if (sessionAxios) {
+    const response = await sessionDelete(
+      `${API_RESOURCE}/${encodeURIComponent(doctype)}/${encodeURIComponent(n)}`
+    );
+    const h = response.headers;
+    const ct = (h['content-type'] || h['Content-Type']) as string | undefined;
+    if (responseBodyLooksLikeHtml(response.data, ct)) {
+      throw htmlInsteadOfJsonError(`DELETE ${API_RESOURCE}/${doctype}/${n}`);
+    }
+    return;
+  }
+
+  await getERPNextClient().deleteResourceDoc(doctype, n);
 }
 
 export async function ravenCallMultipartFrappeMethod(method: string, formData: FormData): Promise<any> {

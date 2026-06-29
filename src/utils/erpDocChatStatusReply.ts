@@ -19,6 +19,7 @@ export type ErpDocChatContext = {
 };
 
 export const QUOTATION_EDITED_CHAT_REPLY = 'Edited — please review.';
+export const SALES_ORDER_EDITED_CHAT_REPLY = 'Edited — please review.';
 export const QUOTATION_ACCEPTED_CHAT_REPLY = 'Quotation accepted.';
 export const QUOTATION_REJECTED_CHAT_REPLY = 'Quotation rejected.';
 export const SOURCING_REQUEST_ACCEPTED_CHAT_REPLY = 'Sourcing request accepted.';
@@ -31,6 +32,20 @@ export function notifyQuotationEditedInChat(quotationName: string, chat?: ErpDoc
     linkDoctype: 'Supplier Quotation',
     linkDocument: n,
     text: QUOTATION_EDITED_CHAT_REPLY,
+    ravenChannelId: chat?.ravenChannelId,
+    linkMessageId: chat?.linkMessageId,
+    sessionEmail: chat?.sessionEmail ?? null,
+  });
+}
+
+/** Buyer saved edits on a draft sales order — text reply on the order thread (no new document card). */
+export function notifySalesOrderEditedInChat(orderName: string, chat?: ErpDocChatContext): void {
+  const n = String(orderName || '').trim();
+  if (!n) return;
+  notifyTextReplyOnErpDocThread({
+    linkDoctype: 'Sales Order',
+    linkDocument: n,
+    text: SALES_ORDER_EDITED_CHAT_REPLY,
     ravenChannelId: chat?.ravenChannelId,
     linkMessageId: chat?.linkMessageId,
     sessionEmail: chat?.sessionEmail ?? null,

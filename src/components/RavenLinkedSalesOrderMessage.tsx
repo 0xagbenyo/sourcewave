@@ -92,6 +92,7 @@ export const RavenLinkedSalesOrderMessage: React.FC<Props> = ({ orderName, raven
     try {
       (navigation as { navigate: (screen: string, params: object) => void }).navigate('OrderDetails', {
         orderId: name,
+        ...(channelId ? { ravenChannelId: channelId } : {}),
       });
     } catch (e: unknown) {
       Alert.alert('Sales order', userFacingError(e, 'Could not open this order.'));

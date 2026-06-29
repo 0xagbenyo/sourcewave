@@ -7,6 +7,7 @@ import {
   StyleSheet,
   FlatList,
   TextInput,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -16,6 +17,7 @@ import {
   forwardRavenMessage,
   getRavenChannelDisplayLabel,
   getRavenDmPeerUserId,
+  listRavenChannelsForSessionUser,
   type RavenChannelRow,
   type RavenForwardReceiver,
   type RavenMessageRow,
@@ -95,18 +97,40 @@ export const RavenForwardMessageModal: React.FC<Props> = ({
   const [sending, setSending] = useState(false);
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Record<string, ForwardTarget>>({});
+  const [sessionChannels, setSessionChannels] = useState<RavenChannelRow[]>([]);
+  const [loadingChannels, setLoadingChannels] = useState(false);
+
+  const channelPool = sessionChannels.length > 0 ? sessionChannels : channels;
 
   const targets = useMemo(
-    () => buildForwardTargetsFromChannels(channels, currentUserEmail, userProfiles),
-    [channels, currentUserEmail, userProfiles]
+    () => buildForwardTargetsFromChannels(channelPool, currentUserEmail, userProfiles),
+    [channelPool, currentUserEmail, userProfiles]
   );
 
   useEffect(() => {
     if (!visible) {
       setSearch('');
       setSelected({});
+      setSessionChannels([]);
+      setLoadingChannels(false);
+      return;
     }
-  }, [visible]);
+    let cancelled = false;
+    setLoadingChannels(true);
+    void (async () => {
+      try {
+        const rows = await listRavenChannelsForSessionUser(currentUserEmail ?? null);
+        if (!cancelled) setSessionChannels(Array.isArray(rows) ? rows : []);
+      } catch {
+        if (!cancelled) setSessionChannels(channels);
+      } finally {
+        if (!cancelled) setLoadingChannels(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, currentUserEmail, channels]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -207,7 +231,16 @@ export const RavenForwardMessageModal: React.FC<Props> = ({
               </Pressable>
             );
           }}
-          ListEmptyComponent={<Text style={styles.empty}>No chats available to forward to.</Text>}
+          ListEmptyComponent={
+            loadingChannels ? (
+              <View style={styles.loadingWrap}>
+                <ActivityIndicator color={accent} />
+                <Text style={styles.empty}>Loading your chats…</Text>
+              </View>
+            ) : (
+              <Text style={styles.empty}>No chats available to forward to.</Text>
+            )
+          }
         />
       </SafeAreaView>
     </Modal>
@@ -268,4 +301,5 @@ const styles = StyleSheet.create({
   rowOn: { backgroundColor: '#F8FAFF' },
   rowLabel: { flex: 1, fontSize: 15, fontWeight: '600', color: RavenLight.text },
   empty: { textAlign: 'center', color: RavenLight.textMuted, padding: 24 },
+  loadingWrap: { alignItems: 'center', padding: 24, gap: 12 },
 });

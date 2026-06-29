@@ -23,6 +23,7 @@ import { ERP_DOC_LINE_IMAGE_FIELD, readErpDocLineImage } from '../utils/erpDocLi
 import {
   ERP_SO_LINE_REQUESTED_QTY_FIELD,
   ERP_SO_SERIES_COPY_FIELD,
+  readSalesOrderLineRequestedQty,
   readSalesOrderSeriesCopy,
   salesOrderHeaderPreservePatch,
 } from '../utils/erpSalesOrderLineFields';
@@ -1091,6 +1092,24 @@ class ERPNextClient {
         throw htmlInsteadOfJsonError(`POST ${API_VERSION}/${doctype}`);
       }
       return response.data?.data ?? response.data;
+    } catch (error) {
+      throw this.handleError(error);
+    }
+  }
+
+  /** DELETE `/api/resource/{DocType}/{name}`. */
+  async deleteResourceDoc(doctype: string, name: string): Promise<void> {
+    const n = String(name || '').trim();
+    if (!n) throw new Error('Document name required');
+    try {
+      const response = await this.client.delete(
+        `${API_VERSION}/${encodeURIComponent(doctype)}/${encodeURIComponent(n)}`
+      );
+      const h = response.headers;
+      const ct = (h['content-type'] || h['Content-Type']) as string | undefined;
+      if (responseBodyLooksLikeHtml(response.data, ct)) {
+        throw htmlInsteadOfJsonError(`DELETE ${API_VERSION}/${doctype}/${n}`);
+      }
     } catch (error) {
       throw this.handleError(error);
     }
@@ -2611,7 +2630,25 @@ class ERPNextClient {
     delivery_date?: string;
   }): Promise<any> {
     try {
-      const payload: Record<string, unknown> = { ...orderData };
+      const normalizedItems = (Array.isArray(orderData.items) ? orderData.items : []).map((line) => {
+        const row = line as Record<string, unknown>;
+        const requestedQty = readSalesOrderLineRequestedQty(row);
+        const rate = Number(line.rate);
+        const amount = Number.isFinite(Number(line.amount)) ? Number(line.amount) : rate;
+        const next: Record<string, unknown> = {
+          item_code: String(line.item_code || '').trim(),
+          qty: 1,
+          rate,
+          amount,
+          description: String(line.description || '').trim(),
+          [ERP_SO_LINE_REQUESTED_QTY_FIELD]: requestedQty,
+        };
+        const img = String(line.custom_new_image || '').trim();
+        if (img) next[ERP_DOC_LINE_IMAGE_FIELD] = img;
+        return next;
+      });
+
+      const payload: Record<string, unknown> = { ...orderData, items: normalizedItems };
       const seriesCopy = readSalesOrderSeriesCopy(payload as Record<string, unknown>);
       if (seriesCopy) {
         payload[ERP_SO_SERIES_COPY_FIELD] = seriesCopy;
@@ -4264,19 +4301,27 @@ class ERPNextClient {
     }
   }
 
-  /** Build minimal child rows for Sales Order line `custom_new_image` updates. */
+  /** Build minimal child rows for Sales Order line patches without dropping buyer qty. */
   private salesOrderItemPatchRow(row: Record<string, unknown>, image?: string): Record<string, unknown> {
+    const requestedQty = readSalesOrderLineRequestedQty(row);
     const patch: Record<string, unknown> = {
       name: row.name,
       item_code: row.item_code,
       item_name: row.item_name,
-      qty: row.qty,
+      qty: 1,
       rate: row.rate,
+      amount: row.amount ?? row.rate,
       uom: row.uom,
       description: row.description,
+      [ERP_SO_LINE_REQUESTED_QTY_FIELD]: requestedQty,
     };
     const img = String(image || '').trim();
-    if (img) patch[ERP_DOC_LINE_IMAGE_FIELD] = img;
+    if (img) {
+      patch[ERP_DOC_LINE_IMAGE_FIELD] = img;
+    } else {
+      const existing = readErpDocLineImage(row);
+      if (existing) patch[ERP_DOC_LINE_IMAGE_FIELD] = existing;
+    }
     return patch;
   }
 
@@ -4452,13 +4497,14 @@ class ERPNextClient {
     }
 
     const itemRows: Record<string, unknown>[] = lines.map((l) => {
+      const requestedQty = readSalesOrderLineRequestedQty(l as Record<string, unknown>);
       const row: Record<string, unknown> = {
         item_code: String(l.item_code || '').trim(),
         qty: 1,
         rate: Number(l.rate),
         amount: Number(l.amount),
         description: String(l.description || '').trim(),
-        [ERP_SO_LINE_REQUESTED_QTY_FIELD]: Math.max(1, Math.floor(Number(l.custom_new_quantity)) || 1),
+        [ERP_SO_LINE_REQUESTED_QTY_FIELD]: requestedQty,
       };
       const img = String(l.custom_new_image || '').trim();
       if (img) row[ERP_DOC_LINE_IMAGE_FIELD] = img;
