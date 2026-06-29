@@ -12,6 +12,7 @@ import {
   ravenListResourceRows,
   ravenCreateResourceDoc,
   ravenCallMultipartFrappeMethod,
+  ravenGetResourceDoc,
   hasFrappeRavenSession,
 } from './frappeRavenSession';
 import { plainTextFromMaybeHtml } from '../utils/chatPlainText';
@@ -19,6 +20,8 @@ import { sanitizeRavenWebMessageFileUrl } from '../utils/ravenFileUrl';
 import { prepareLocalFileUriForUpload } from '../utils/ravenUploadFilePrep';
 import { getERPNextClient } from './erpnext';
 import {
+  friendlySenderLabel,
+  ravenUserProfileFullName,
   resolveRavenUserDisplayName,
   type RavenUserDisplayProfiles,
 } from '../utils/ravenSearchPreview';
@@ -932,14 +935,13 @@ export function getRavenChannelDisplayLabel(
       '';
 
     if (peer && peer.toLowerCase() !== me) {
-      const fromDirectory = resolveRavenUserDisplayName(peer, profiles);
-      const shortPeer = userIdToShortLabel(peer);
-      if (fromDirectory !== shortPeer) return fromDirectory;
+      const fromProfile = ravenUserProfileFullName(peer, profiles);
+      if (fromProfile) return fromProfile;
 
       const fn = c.full_name != null ? String(c.full_name).trim() : '';
       if (fn) return fn;
 
-      return resolveRavenUserDisplayName(peer, profiles);
+      return friendlySenderLabel(peer);
     }
 
     const fn = c.full_name != null ? String(c.full_name).trim() : '';
@@ -2630,22 +2632,154 @@ export async function getRavenSearchResults(
   }
 }
 
+export function buildFallbackWorkspaceChannelRow(
+  workspaceWs: string,
+  channelId: string,
+  patch?: Partial<RavenChannelRow>
+): RavenChannelRow {
+  return {
+    name: channelId,
+    channel_name: patch?.channel_name || channelId,
+    workspace: workspaceWs || patch?.workspace || undefined,
+    type: patch?.type || 'Public',
+    is_direct_message: 0,
+    ...patch,
+  };
+}
+
+/** Load a Raven Channel document by id (for deep links when it is not in `get_channels` yet). */
+export async function fetchRavenChannelRowById(channelId: string): Promise<RavenChannelRow | null> {
+  const id = String(channelId || '').trim();
+  if (!id) return null;
+
+  if (hasFrappeRavenSession()) {
+    try {
+      const doc = await ravenGetResourceDoc('Raven Channel', id);
+      if (doc?.name) return { ...(doc as RavenChannelRow), name: String(doc.name).trim() };
+    } catch (e) {
+      console.warn(LOG, 'fetchRavenChannelRowById get doc', e);
+    }
+  }
+
+  try {
+    const data = await ravenCallFrappeMethod('frappe.client.get', {
+      doctype: 'Raven Channel',
+      name: id,
+    });
+    const doc = ((data as { message?: RavenChannelRow })?.message ?? data) as RavenChannelRow;
+    if (doc?.name) return { ...doc, name: String(doc.name).trim() };
+  } catch (e) {
+    console.warn(LOG, 'fetchRavenChannelRowById client.get', e);
+  }
+
+  try {
+    const rows = await getERPNextClient().listResourceRows('Raven Channel', {
+      filters: [['name', '=', id]],
+      fields: [
+        'name',
+        'channel_name',
+        'workspace',
+        'type',
+        'is_archived',
+        'is_direct_message',
+        'is_self_message',
+        'last_message_timestamp',
+        'modified',
+      ],
+      limit_page_length: 1,
+    });
+    const row = rows[0] as RavenChannelRow | undefined;
+    return row?.name ? { ...row, name: String(row.name).trim() } : null;
+  } catch (e) {
+    console.warn(LOG, 'fetchRavenChannelRowById api key', e);
+    return null;
+  }
+}
+
 /** Resolve `Raven Channel.workspace` for opening a channel from search (channel-only hits omit workspace). */
 export async function fetchRavenChannelWorkspaceId(channelId: string): Promise<string | null> {
   const id = String(channelId || '').trim();
   if (!id) return null;
+
+  const workspaceFromRows = (rows: unknown[]): string | null => {
+    const w = (rows[0] as { workspace?: string } | undefined)?.workspace;
+    return w != null && String(w).trim() ? String(w).trim() : null;
+  };
+
   try {
     const rows = await ravenListResourceRows('Raven Channel', {
       filters: [['name', '=', id]],
       fields: ['name', 'workspace'],
       limit_page_length: 1,
     });
-    const w = (rows[0] as { workspace?: string } | undefined)?.workspace;
-    return w != null && String(w).trim() ? String(w).trim() : null;
+    const w = workspaceFromRows(rows);
+    if (w) return w;
   } catch (e) {
-    console.warn(LOG, 'fetchRavenChannelWorkspaceId', e);
+    console.warn(LOG, 'fetchRavenChannelWorkspaceId list', e);
+  }
+
+  if (hasFrappeRavenSession()) {
+    try {
+      const doc = await ravenGetResourceDoc('Raven Channel', id);
+      const w = String(doc?.workspace || '').trim();
+      if (w) return w;
+    } catch (e) {
+      console.warn(LOG, 'fetchRavenChannelWorkspaceId get doc', e);
+    }
+  }
+
+  try {
+    const data = await ravenCallFrappeMethod('frappe.client.get', {
+      doctype: 'Raven Channel',
+      name: id,
+    });
+    const doc = (data as { message?: { workspace?: string } })?.message ?? data;
+    const w = String((doc as { workspace?: string })?.workspace || '').trim();
+    if (w) return w;
+  } catch (e) {
+    console.warn(LOG, 'fetchRavenChannelWorkspaceId client.get', e);
+  }
+
+  try {
+    const rows = await getERPNextClient().listResourceRows('Raven Channel', {
+      filters: [['name', '=', id]],
+      fields: ['name', 'workspace'],
+      limit_page_length: 1,
+    });
+    return workspaceFromRows(rows);
+  } catch (e) {
+    console.warn(LOG, 'fetchRavenChannelWorkspaceId api key', e);
     return null;
   }
+}
+
+/**
+ * Best-effort workspace for deep-linking into a Raven channel (support chat, search, route params).
+ * Tries the user's channel list first, then server lookups, then configured support workspace.
+ */
+export async function resolveRavenChannelWorkspaceForOpen(
+  channelId: string,
+  sessionEmail?: string | null
+): Promise<string | null> {
+  const ch = String(channelId || '').trim();
+  if (!ch) return null;
+
+  const channels = await listRavenChannelsForSessionUser(sessionEmail, { enrichProfiles: false });
+  const hit = channels.find((c) => String(c.name || '').trim() === ch);
+  const fromList = String(hit?.workspace || '').trim();
+  if (fromList) return fromList;
+
+  const fromFetch = await fetchRavenChannelWorkspaceId(ch);
+  if (fromFetch) return fromFetch;
+
+  const supportWsHint = String(process.env.EXPO_PUBLIC_SOURCEWAVE_SUPPORT_RAVEN_WORKSPACE || '').trim();
+  if (supportWsHint) {
+    const resolved = await resolveRavenWorkspaceId(supportWsHint);
+    if (resolved) return resolved;
+    return supportWsHint;
+  }
+
+  return null;
 }
 
 /** Receiver for `raven.api.raven_message.forward_message` — user DM or channel. */

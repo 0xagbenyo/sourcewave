@@ -20,19 +20,19 @@ import {
   type NativeScrollEvent,
 } from 'react-native';
 import { appAlert as Alert } from '../services/appAlert';
-import * as ImagePicker from 'expo-image-picker';
-import * as DocumentPicker from 'expo-document-picker';
+import { pickChatDocuments, pickChatMediaFromLibrary } from '../utils/ravenChatAttachPickers';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import { useOptionalBottomTabBarHeight } from '../hooks/useOptionalBottomTabBarHeight';
-import { useKeyboardInsets } from '../hooks/useKeyboardOpen';
+import { useChatComposerInsets } from '../hooks/useChatComposerInsets';
+import { useChatMessageJumpHighlight } from '../hooks/useChatMessageJumpHighlight';
+import { ChatMessageJumpHighlightBar } from './ChatMessageJumpHighlightBar';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { useUserSession } from '../context/UserContext';
 import { useRavenUnread } from '../context/RavenUnreadContext';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { buildRavenUrlWithWorkspace, getRavenWebUrl } from '../config/ravenChat';
 import { RavenMessageAttachmentBody } from './RavenMessageAttachmentBody';
+import { ChatImageGalleryModal } from './ChatImageGalleryModal';
 import { RavenChannelPeerAvatar } from './RavenChannelPeerAvatar';
 import { RavenInlineReplyQuote } from './RavenInlineReplyQuote';
 import { RavenSharedInChatList } from './RavenSharedInChatList';
@@ -52,9 +52,13 @@ import {
   initialsFromUserId,
   pastelAvatarBg,
   shouldShowChatDateSeparator,
+  shouldShowChatMessageSenderHeader,
+  shouldShowChatMessageTextBubble,
+  isChatMessageGroupedWithNewer,
 } from '../utils/ravenChatUi';
 import { resolveRavenUserDisplayName } from '../utils/ravenSearchPreview';
 import { ravenMessageShortPreview } from '../utils/ravenMessageShortPreview';
+import { collectChatImageGalleryItems } from '../utils/ravenChatImageGallery';
 import {
   listChannelsForWorkspace,
   resolveRavenWorkspaceId,
@@ -90,15 +94,14 @@ import {
   saveChannelMessagesMemoryCache,
 } from '../utils/ravenChannelMessagesLoad';
 import {
-  pendingAttachmentsFromImagePickerAssets,
   type RavenPendingAttachment,
 } from '../utils/ravenMediaPick';
 import { tryParseQuotationDraftFromMessage } from '../utils/chatQuotationDraftMessage';
 import {
-  notifyQuotationAcceptedInChat,
-  notifyQuotationRejectedInChat,
-  type ErpDocChatContext,
-} from '../utils/erpDocChatStatusReply';
+  acceptSupplierQuotationAsBuyer,
+  rejectSupplierQuotationAsBuyer,
+} from '../utils/supplierQuotationBuyerReviewActions';
+import type { ErpDocChatContext } from '../utils/erpDocChatStatusReply';
 import { RavenQuotationDraftCard } from './RavenQuotationDraftCard';
 import { RavenLinkedSupplierQuotationMessage } from './RavenLinkedSupplierQuotationMessage';
 import { RavenLinkedSalesOrderMessage } from './RavenLinkedSalesOrderMessage';
@@ -138,9 +141,8 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const { user } = useUserSession();
   const { setActiveChannelId, refreshUnreadCounts } = useRavenUnread();
-  const insets = useSafeAreaInsets();
-  const tabBarHeight = useOptionalBottomTabBarHeight();
-  const { open: keyboardOpen, height: keyboardHeight } = useKeyboardInsets();
+  const { composerBottomPad, rootKeyboardPad } = useChatComposerInsets(true);
+  const { flashMessageHighlight, isMessageHighlighted } = useChatMessageJumpHighlight();
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [channels, setChannels] = useState<RavenChannelRow[]>([]);
   const [channel, setChannel] = useState<RavenChannelRow | null>(null);
@@ -157,6 +159,8 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   const [loadingOlderMsgs, setLoadingOlderMsgs] = useState(false);
   const [hasMoreOlderMessages, setHasMoreOlderMessages] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [imageGalleryOpen, setImageGalleryOpen] = useState(false);
+  const [imageGalleryIndex, setImageGalleryIndex] = useState(0);
   const [sharedMenuTitle, setSharedMenuTitle] = useState('Files shared in this channel');
   const [error, setError] = useState<string | null>(null);
   const [quotationActionByName, setQuotationActionByName] = useState<Record<string, 'accepted' | 'rejected'>>({});
@@ -186,9 +190,10 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   const openMessageActionsForItem = useCallback(
     (item: RavenMessageRow, sqLink?: string | null) => {
       const sq = String(sqLink || '').trim();
+      flashMessageHighlight(item.name);
       openMessageActions(item, sq ? { sqName: sq } : undefined);
     },
-    [openMessageActions]
+    [flashMessageHighlight, openMessageActions]
   );
 
   const isSupplierPortalChat = user?.appMode === 'supplier' || !!user?.supplierId?.trim();
@@ -322,19 +327,23 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
     });
   }, []);
 
-  const scrollToMessageById = useCallback((messageId: string) => {
-    const id = String(messageId || '').trim();
-    if (!id) return;
-    const index = messages.findIndex((m) => (m.name || '').trim() === id);
-    if (index < 0) return;
-    requestAnimationFrame(() => {
-      messagesListRef.current?.scrollToIndex({
-        index,
-        animated: true,
-        viewPosition: 0.35,
+  const scrollToMessageById = useCallback(
+    (messageId: string) => {
+      const id = String(messageId || '').trim();
+      if (!id) return;
+      const index = messages.findIndex((m) => (m.name || '').trim() === id);
+      if (index < 0) return;
+      flashMessageHighlight(id);
+      requestAnimationFrame(() => {
+        messagesListRef.current?.scrollToIndex({
+          index,
+          animated: true,
+          viewPosition: 0.35,
+        });
       });
-    });
-  }, [messages]);
+    },
+    [messages, flashMessageHighlight]
+  );
 
   const goToMessageFromSharedMenu = useCallback(
     (messageName: string) => {
@@ -550,19 +559,16 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
 
   const pickMedia = useCallback(async () => {
     if (!channel?.name) return;
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('Media', 'Allow photo library access to attach photos or videos.');
-      return;
+    try {
+      const result = await pickChatMediaFromLibrary();
+      if (!result.ok) {
+        if (!result.canceled) Alert.alert('Media', result.message);
+        return;
+      }
+      setPendingAttachments((prev) => [...prev, ...result.data]);
+    } catch (e: unknown) {
+      Alert.error('Media', userFacingError(e, 'Could not open photo library.'));
     }
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images', 'videos'],
-      quality: 0.85,
-      allowsMultipleSelection: true,
-      videoExportPreset: ImagePicker.VideoExportPreset.MediumQuality,
-    });
-    if (res.canceled || !res.assets?.length) return;
-    setPendingAttachments((prev) => [...prev, ...pendingAttachmentsFromImagePickerAssets(res.assets)]);
   }, [channel?.name]);
 
   const handleAcceptQuotationDraft = useCallback(
@@ -570,30 +576,30 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       const n = sqName.trim();
       if (!n) return;
       setQuotationActionBusy(n);
-      try {
-        await getERPNextClient().submitSupplierQuotation(n);
-        try {
-          const billTo = (user?.user || user?.email || '').trim();
-          await getERPNextClient().ensureSalesInvoiceForSupplierQuotation(
-            n,
-            billTo ? { billToFrappeUserId: billTo } : undefined
-          );
-        } catch (invErr) {
-          console.warn('[Supplier Quotation] Could not auto-create sales invoice:', invErr);
-        }
-        notifyQuotationAcceptedInChat(n, {
+      const billTo = (user?.user || user?.email || '').trim();
+      const refreshChat = () => {
+        const ch = channel?.name;
+        if (ch) void loadMessages(ch, { silent: true });
+      };
+      await acceptSupplierQuotationAsBuyer(n, {
+        billToFrappeUserId: billTo || null,
+        chat: {
           ravenChannelId: chat?.ravenChannelId ?? channel?.name,
           linkMessageId: chat?.linkMessageId,
           sessionEmail: user?.email ?? null,
-        });
-        setQuotationActionByName((prev) => ({ ...prev, [n]: 'accepted' }));
-        const ch = channel?.name;
-        if (ch) await loadMessages(ch, { silent: true });
-      } catch (e: unknown) {
-        Alert.error('Quotation', userFacingFrappeError(e, userFacingError(e, 'Could not submit.')));
-      } finally {
-        setQuotationActionBusy(null);
-      }
+        },
+        onOptimistic: () => setQuotationActionByName((prev) => ({ ...prev, [n]: 'accepted' })),
+        onRollback: () =>
+          setQuotationActionByName((prev) => {
+            const next = { ...prev };
+            delete next[n];
+            return next;
+          }),
+        onSettled: () => {
+          setQuotationActionBusy(null);
+          refreshChat();
+        },
+      });
     },
     [channel?.name, loadMessages, user?.email, user?.user]
   );
@@ -603,21 +609,25 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       const n = sqName.trim();
       if (!n) return;
       setQuotationActionBusy(n);
-      try {
-        await getERPNextClient().rejectSupplierQuotationDraft(n);
-        notifyQuotationRejectedInChat(n, {
+      await rejectSupplierQuotationAsBuyer(n, {
+        chat: {
           ravenChannelId: chat?.ravenChannelId ?? channel?.name,
           linkMessageId: chat?.linkMessageId,
           sessionEmail: user?.email ?? null,
-        });
-        setQuotationActionByName((prev) => ({ ...prev, [n]: 'rejected' }));
-        const ch = channel?.name;
-        if (ch) await loadMessages(ch, { silent: true });
-      } catch (e: unknown) {
-        Alert.error('Quotation', userFacingFrappeError(e, userFacingError(e, 'Could not reject.')));
-      } finally {
-        setQuotationActionBusy(null);
-      }
+        },
+        onOptimistic: () => setQuotationActionByName((prev) => ({ ...prev, [n]: 'rejected' })),
+        onRollback: () =>
+          setQuotationActionByName((prev) => {
+            const next = { ...prev };
+            delete next[n];
+            return next;
+          }),
+        onSettled: () => {
+          setQuotationActionBusy(null);
+          const ch = channel?.name;
+          if (ch) void loadMessages(ch, { silent: true });
+        },
+      });
     },
     [channel?.name, loadMessages, user?.email]
   );
@@ -633,21 +643,14 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   const pickDocument = useCallback(async () => {
     if (!channel?.name) return;
     try {
-      const res = await DocumentPicker.getDocumentAsync({
-        type: '*/*',
-        copyToCacheDirectory: true,
-        multiple: true,
-      });
-      if (res.canceled || !res.assets?.length) return;
-      const picked: RavenPendingAttachment[] = res.assets.map((a, i) => ({
-        key: `doc-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 9)}`,
-        uri: a.uri,
-        mimeType: (a.mimeType || 'application/octet-stream').trim() || 'application/octet-stream',
-        name: a.name?.trim() || `file-${Date.now()}-${i}`,
-      }));
-      setPendingAttachments((prev) => [...prev, ...picked]);
-    } catch (e: any) {
-      Alert.error('File', e?.message || 'Could not pick a file.');
+      const result = await pickChatDocuments();
+      if (!result.ok) {
+        if (!result.canceled) Alert.error('File', result.message);
+        return;
+      }
+      setPendingAttachments((prev) => [...prev, ...result.data]);
+    } catch (e: unknown) {
+      Alert.error('File', userFacingError(e, 'Could not pick a file.'));
     }
   }, [channel?.name]);
 
@@ -712,9 +715,22 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
     else setRefreshing(false);
   };
 
+  const chatImageGalleryItems = useMemo(() => collectChatImageGalleryItems(messages), [messages]);
+
+  const onOpenChatImagePreview = useCallback(
+    (payload: { uri: string; title: string; messageId: string }) => {
+      const msgId = payload.messageId.trim();
+      const idx = msgId ? chatImageGalleryItems.findIndex((row) => row.id === msgId) : -1;
+      setImageGalleryIndex(idx >= 0 ? idx : 0);
+      setImageGalleryOpen(true);
+    },
+    [chatImageGalleryItems]
+  );
+
   const renderMessage = useCallback(
     ({ item, index }: { item: RavenMessageRow; index: number }) => {
       const mine = ravenMessageOwnerMatchesSession(item.owner, user);
+      const isHighlighted = isMessageHighlighted(item.name);
       const hasAttach = !!(item.file?.trim() || item.file_thumbnail?.trim());
       const linkDtRaw = String(item.link_doctype || '').trim();
       const linkDnRaw = String(item.link_document || '').trim();
@@ -750,7 +766,14 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       const tLine = formatMessageBubbleTime(item.creation || item.modified);
       const showDateSep = shouldShowChatDateSeparator(index, messages);
       const dateSepLabel = formatChatDateSeparator(item.creation || item.modified);
-      const showPlainTextBubble = !!item.text?.trim() && !qDraft && !sqLink && !soLink && !siLink && !genericDocLink;
+      const groupedWithNewer = isChatMessageGroupedWithNewer(index, messages, ravenSameMessageOwner);
+      const rowGap = groupedWithNewer ? 2 : 10;
+      const showSenderHeader = shouldShowChatMessageSenderHeader(index, messages, ravenSameMessageOwner);
+      const showPlainTextBubble = shouldShowChatMessageTextBubble(
+        item,
+        hasAttach,
+        !!(qDraft || sqLink || soLink || siLink || genericDocLink)
+      );
 
       const quotationPayKey = sqLink ?? (qDraft?.name?.trim() || null);
       const openThisMessageActions = () => openMessageActionsForItem(item, quotationPayKey);
@@ -855,6 +878,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
               variant="wine"
               mediaGroupNeighbor={mediaGroupNeighbor}
               onReplyLongPress={openThisMessageActions}
+              onOpenImagePreview={onOpenChatImagePreview}
             />
           ) : null}
           {linkedOrQuotationCard}
@@ -877,23 +901,29 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
         <View>
           {showDateSep && dateSepLabel ? (
             <View style={styles.chatDateSepRow}>
-              <View style={styles.chatDateSepLine} />
-              <Text style={styles.chatDateSepText}>{dateSepLabel}</Text>
-              <View style={styles.chatDateSepLine} />
+              <View style={styles.chatDateSepPill}>
+                <Text style={styles.chatDateSepText}>{dateSepLabel}</Text>
+              </View>
             </View>
           ) : null}
-          <Pressable
-            style={[styles.bubbleWrap, mine ? styles.bubbleWrapMine : styles.bubbleWrapTheirs]}
-            onLongPress={openThisMessageActions}
-            delayLongPress={380}
-          >
-            <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
-              {!mine && !!item.owner && (
-                <Text style={styles.bubbleMeta}>{resolveRavenUserDisplayName(item.owner, ravenUserProfilesById)}</Text>
-              )}
-              {inner}
-            </View>
-          </Pressable>
+          <ChatMessageJumpHighlightBar active={isHighlighted} alignEnd={mine}>
+            <Pressable
+              style={[
+                styles.bubbleWrap,
+                mine ? styles.bubbleWrapMine : styles.bubbleWrapTheirs,
+                { marginBottom: rowGap },
+              ]}
+              onLongPress={openThisMessageActions}
+              delayLongPress={380}
+            >
+              <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
+                {!mine && !!item.owner && showSenderHeader ? (
+                  <Text style={styles.bubbleMeta}>{resolveRavenUserDisplayName(item.owner, ravenUserProfilesById)}</Text>
+                ) : null}
+                {inner}
+              </View>
+            </Pressable>
+          </ChatMessageJumpHighlightBar>
         </View>
       );
     },
@@ -905,6 +935,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       messages,
       messagesById,
       scrollToMessageById,
+      isMessageHighlighted,
       ravenUserProfilesById,
       quotationActionByName,
       quotationActionBusy,
@@ -912,6 +943,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       handleRejectQuotationDraft,
       openMessageActionsForItem,
       toggleReaction,
+      onOpenChatImagePreview,
       viewerFrappeName,
       registerSqPaymentAction,
     ]
@@ -926,15 +958,11 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
     );
   }
 
-  const composerBottomPad = keyboardOpen
-    ? 0
-    : Spacing.SM + Math.max(insets.bottom, 6) + tabBarHeight;
-
   return (
     <View
       style={[
         styles.root,
-        keyboardHeight > 0 ? { paddingBottom: keyboardHeight } : null,
+        rootKeyboardPad > 0 ? { paddingBottom: rootKeyboardPad } : null,
       ]}
     >
       <View style={styles.topBar}>
@@ -1010,6 +1038,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       <View style={[styles.composerWrap, { paddingBottom: composerBottomPad }]}>
         {replyTo ? (
           <View style={styles.replyStrip}>
+            <View style={styles.replyStripAccent} />
             <Pressable
               style={styles.replyStripText}
               onPress={() => {
@@ -1091,7 +1120,15 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
             {sending ? (
               <ActivityIndicator color={Colors.WHITE} />
             ) : (
-              <Ionicons name="send" size={20} color={Colors.WHITE} />
+              <Ionicons
+                name="send"
+                size={20}
+                color={
+                  (!draft.trim() && pendingAttachments.length === 0) || !channel
+                    ? Colors.TEXT_SECONDARY
+                    : Colors.WHITE
+                }
+              />
             )}
           </TouchableOpacity>
         </View>
@@ -1160,12 +1197,18 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
         onClose={() => setComposerEmojiOpen(false)}
         onPick={insertComposerEmoji}
       />
+      <ChatImageGalleryModal
+        visible={imageGalleryOpen}
+        items={chatImageGalleryItems}
+        initialIndex={imageGalleryIndex}
+        onClose={() => setImageGalleryOpen(false)}
+      />
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Colors.BACKGROUND },
+  root: { flex: 1, backgroundColor: Colors.BRAND_SOFT },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.LG },
   hint: { marginTop: Spacing.SM, color: Colors.TEXT_SECONDARY, fontSize: 14 },
   topBar: {
@@ -1173,10 +1216,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.MD,
-    paddingVertical: Spacing.SM,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E8E8E8',
+    paddingVertical: Spacing.SM + 2,
     backgroundColor: Colors.WHITE,
+    ...Platform.select({
+      ios: {
+        shadowColor: 'rgba(28, 32, 36, 0.08)',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 1,
+        shadowRadius: 10,
+      },
+      android: { elevation: 4 },
+      default: {},
+    }),
   },
   topBarLeft: { flex: 1, marginRight: Spacing.SM },
   wsLabel: { fontSize: 11, fontWeight: '700', color: Colors.TEXT_SECONDARY, textTransform: 'uppercase' },
@@ -1194,50 +1245,85 @@ const styles = StyleSheet.create({
   pickerMemberAvatarText: { fontSize: 13, fontWeight: '800', color: Colors.BLACK },
   banner: { backgroundColor: '#FFF4E5', paddingHorizontal: Spacing.MD, paddingVertical: Spacing.SM },
   bannerText: { color: '#8B4513', fontSize: 13 },
-  messagesListShell: { flex: 1, position: 'relative' },
+  messagesListShell: { flex: 1, position: 'relative', overflow: 'hidden' },
   messagesListFlex: { flex: 1 },
   scrollDownFab: {
     position: 'absolute',
-    right: 14,
-    bottom: 14,
-    width: 40,
-    height: 40,
-    borderRadius: 8,
+    right: 16,
+    bottom: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: Colors.WHITE,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E8E8E8',
+    ...Platform.select({
+      ios: {
+        shadowColor: 'rgba(28, 32, 36, 0.12)',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 1,
+        shadowRadius: 12,
+      },
+      android: { elevation: 6 },
+      default: {},
+    }),
   },
   messagesOlderLoader: {
     paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  listContent: { paddingHorizontal: Spacing.MD, paddingVertical: 8 },
-  bubbleWrap: { marginVertical: 2, maxWidth: '92%' },
+  listContent: { paddingHorizontal: Spacing.MD, paddingVertical: 10, paddingBottom: 16 },
+  bubbleWrap: { maxWidth: '88%' },
   bubbleWrapMine: { alignSelf: 'flex-end' },
   bubbleWrapTheirs: { alignSelf: 'flex-start' },
-  bubble: { borderRadius: 8, paddingHorizontal: 11, paddingVertical: 7 },
-  bubbleMine: { backgroundColor: Colors.WINE, alignItems: 'stretch' },
-  bubbleTheirs: { backgroundColor: Colors.WHITE, borderWidth: StyleSheet.hairlineWidth, borderColor: '#E8E8E8' },
-  bubbleMeta: { fontSize: 11, fontWeight: '700', color: Colors.TEXT_SECONDARY, marginBottom: 2 },
-  bubbleText: { fontSize: 15, color: Colors.BLACK, lineHeight: 20 },
+  bubble: { borderRadius: 16, paddingHorizontal: 13, paddingVertical: 9 },
+  bubbleMine: {
+    backgroundColor: Colors.WINE,
+    alignItems: 'stretch',
+    borderBottomRightRadius: 4,
+  },
+  bubbleTheirs: {
+    backgroundColor: Colors.WHITE,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E8E8E8',
+    borderBottomLeftRadius: 4,
+    ...Platform.select({
+      ios: {
+        shadowColor: 'rgba(28, 32, 36, 0.06)',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 1,
+        shadowRadius: 3,
+      },
+      android: { elevation: 1 },
+      default: {},
+    }),
+  },
+  bubbleMeta: { fontSize: 12, fontWeight: '700', color: Colors.TEXT_SECONDARY, marginBottom: 4 },
+  bubbleText: { fontSize: 15, color: Colors.BLACK, lineHeight: 22 },
   bubbleTextMine: { color: Colors.WHITE, alignSelf: 'stretch', textAlign: 'right' },
   bubbleTime: { fontSize: 10, marginTop: 4, color: Colors.TEXT_SECONDARY, alignSelf: 'flex-end' },
   bubbleTimeMine: { color: 'rgba(255,255,255,0.85)' },
   chatDateSepRow: {
-    flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
-    gap: 10,
+    paddingVertical: 14,
+  },
+  chatDateSepPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: Colors.WHITE,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E8E8E8',
   },
   chatDateSepLine: {
     flex: 1,
     height: StyleSheet.hairlineWidth,
     backgroundColor: '#E8E8E8',
   },
-  chatDateSepText: { fontSize: 11, fontWeight: '600', color: Colors.TEXT_SECONDARY },
+  chatDateSepText: { fontSize: 12, fontWeight: '600', color: Colors.TEXT_SECONDARY },
   replyBadge: { fontSize: 11, fontWeight: '700', color: Colors.WINE, marginBottom: 4 },
   replyBadgeMine: { color: 'rgba(255,255,255,0.9)' },
   forwardedBadge: { fontSize: 10, fontWeight: '700', color: Colors.TEXT_SECONDARY, marginBottom: 4, textTransform: 'uppercase' },
@@ -1246,10 +1332,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 8,
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
     paddingVertical: 8,
-    backgroundColor: Colors.BRAND_SOFT,
+    backgroundColor: Colors.WHITE,
     borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E8E8E8',
+    overflow: 'hidden',
+  },
+  replyStripAccent: {
+    width: 3,
+    alignSelf: 'stretch',
+    borderRadius: 2,
+    backgroundColor: Colors.WINE,
+    marginRight: 10,
   },
   replyStripText: { flex: 1 },
   replyStripLabel: { fontSize: 11, fontWeight: '700', color: Colors.WINE },
@@ -1283,7 +1379,17 @@ const styles = StyleSheet.create({
     borderColor: '#E0E0E0',
     backgroundColor: '#F8F8F8',
   },
-  attachRow: { flexDirection: 'row', alignItems: 'flex-end', marginRight: 6, flexShrink: 0, zIndex: 4 },
+  attachRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    marginRight: 2,
+    flexShrink: 0,
+    zIndex: 30,
+    ...Platform.select({
+      android: { elevation: 12 },
+      default: {},
+    }),
+  },
   attachBtn: { paddingRight: 4, paddingVertical: 4, justifyContent: 'center' },
   attachBtnOff: { opacity: 0.35 },
   composerWrap: {
@@ -1291,24 +1397,38 @@ const styles = StyleSheet.create({
     borderTopColor: '#E8E8E8',
     backgroundColor: Colors.WHITE,
     paddingHorizontal: Spacing.MD,
-    paddingVertical: Spacing.SM,
+    paddingTop: Spacing.SM + 2,
+    zIndex: 20,
+    ...Platform.select({
+      ios: {
+        shadowColor: 'rgba(28, 32, 36, 0.08)',
+        shadowOffset: { width: 0, height: -3 },
+        shadowOpacity: 1,
+        shadowRadius: 10,
+      },
+      android: { elevation: 12 },
+      default: {},
+    }),
   },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
+    zIndex: 20,
   },
   input: {
     flex: 1,
-    minHeight: 40,
+    minHeight: 44,
     maxHeight: 120,
-    borderRadius: 12,
-    borderWidth: 1,
+    borderRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#E0E0E0',
-    paddingHorizontal: 12,
+    backgroundColor: Colors.BRAND_SOFT,
+    paddingHorizontal: 16,
     paddingVertical: Platform.OS === 'ios' ? 10 : 8,
-    fontSize: 15,
+    fontSize: 16,
     color: Colors.BLACK,
     marginRight: Spacing.SM,
+    zIndex: 1,
   },
   sendBtn: {
     width: 44,
@@ -1318,7 +1438,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sendBtnDisabled: { opacity: 0.45 },
+  sendBtnDisabled: { backgroundColor: '#E8E8E8' },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
   modalSheet: {
     maxHeight: '55%',

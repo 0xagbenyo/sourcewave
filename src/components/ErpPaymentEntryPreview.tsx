@@ -1,4 +1,7 @@
 import React from 'react';
+import { View, StyleSheet } from 'react-native';
+import { useTranslation } from 'react-i18next';
+import { DocumentPrintButton } from './DocumentPrintButton';
 import {
   ErpDocHero,
   ErpDocSection,
@@ -11,6 +14,7 @@ import {
   erpDocPrimaryPaymentAmount,
   formatErpDocMoney,
 } from './ErpDocumentPreviewLayout';
+import { Spacing } from '../constants/spacing';
 
 type Props = {
   doc: Record<string, unknown>;
@@ -18,12 +22,14 @@ type Props = {
 };
 
 export const ErpPaymentEntryPreview: React.FC<Props> = ({ doc, currency = 'GHS' }) => {
+  const { t } = useTranslation();
   const status = erpDocPaymentStatusLabel(doc);
   const statusColor = erpDocStatusAccent(status, doc.docstatus != null ? Number(doc.docstatus) : undefined);
   const amount = erpDocPrimaryPaymentAmount(doc, currency);
   const party = String(doc.party || '—').trim();
   const paymentType = String(doc.payment_type || '').trim();
   const refs = Array.isArray(doc.references) ? (doc.references as Record<string, unknown>[]) : [];
+  const paymentName = String(doc.name || '').trim();
 
   const facts = [
     party !== '—' ? { label: 'Party', value: party } : null,
@@ -33,7 +39,7 @@ export const ErpPaymentEntryPreview: React.FC<Props> = ({ doc, currency = 'GHS' 
   return (
     <>
       <ErpDocHero
-        docId={String(doc.name || 'Payment')}
+        docId={paymentName || 'Payment'}
         statusLabel={status}
         statusColor={statusColor}
         amount={amount}
@@ -63,6 +69,23 @@ export const ErpPaymentEntryPreview: React.FC<Props> = ({ doc, currency = 'GHS' 
           </ErpDocItemsList>
         )}
       </ErpDocSection>
+
+      {paymentName ? (
+        <View style={styles.receiptBtnWrap}>
+          <DocumentPrintButton
+            doctype="Payment Entry"
+            docName={paymentName}
+            variant="bar"
+            label={t('paymentEntry.downloadReceipt')}
+          />
+        </View>
+      ) : null}
     </>
   );
 };
+
+const styles = StyleSheet.create({
+  receiptBtnWrap: {
+    marginTop: Spacing.MD,
+  },
+});

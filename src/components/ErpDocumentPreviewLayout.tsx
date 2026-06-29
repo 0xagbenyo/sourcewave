@@ -23,6 +23,8 @@ type LayoutProps = {
   screenTitle: string;
   printDoctype?: string;
   printDocName?: string;
+  /** Header print icon accessibility label (default: Print PDF). */
+  printLabel?: string;
   loading?: boolean;
   errorMessage?: string | null;
   onBack: () => void;
@@ -39,8 +41,8 @@ export function erpDocStatusAccent(status: string, docstatus?: number): string {
   if (ds === 2 || st.includes('cancel') || st.includes('reject')) return Colors.ERROR;
   if (st.includes('approv') || st.includes('accept')) return Colors.SUCCESS;
   if (ds === 0 || st.includes('draft')) return '#C93400';
+  if (st.includes('unpaid') || st.includes('overdue') || st.includes('partly')) return Colors.ERROR;
   if (st.includes('paid') || st.includes('complete') || st.includes('submit')) return Colors.SUCCESS;
-  if (st.includes('overdue') || st.includes('unpaid') || st.includes('partly')) return '#C93400';
   if (st.includes('pending') || st.includes('await')) return Colors.WARNING;
   return Colors.WINE;
 }
@@ -91,6 +93,7 @@ export const ErpDocumentPreviewLayout: React.FC<LayoutProps> = ({
   screenTitle,
   printDoctype,
   printDocName,
+  printLabel = 'Print PDF',
   loading,
   errorMessage,
   onBack,
@@ -150,7 +153,12 @@ export const ErpDocumentPreviewLayout: React.FC<LayoutProps> = ({
             </TouchableOpacity>
           ) : null}
           {showPrint ? (
-            <DocumentPrintButton doctype={printType} docName={printName} variant="icon" label="Print PDF" />
+            <DocumentPrintButton
+              doctype={printType}
+              docName={printName}
+              variant="icon"
+              label={printLabel}
+            />
           ) : !showShare ? (
             <View style={styles.topSpacer} />
           ) : null}
@@ -191,6 +199,8 @@ type HeroProps = {
   amount?: string;
   amountLabel?: string;
   facts?: { label: string; value: string }[];
+  /** Renders on the right of the status badge (e.g. Accept/Reject, Pay). */
+  statusTrailing?: React.ReactNode;
 };
 
 export const ErpDocHero: React.FC<HeroProps> = ({
@@ -201,9 +211,13 @@ export const ErpDocHero: React.FC<HeroProps> = ({
   amount,
   amountLabel = 'Total',
   facts,
+  statusTrailing,
 }) => (
   <View style={styles.hero}>
-    <ErpDocStatusBadge label={statusLabel} color={statusColor} />
+    <View style={[styles.heroStatusRow, !statusTrailing && styles.heroStatusRowSolo]}>
+      <ErpDocStatusBadge label={statusLabel} color={statusColor} />
+      {statusTrailing ? <View style={styles.heroStatusTrailing}>{statusTrailing}</View> : null}
+    </View>
     <Text style={styles.docId} numberOfLines={2}>
       {docId}
     </Text>
@@ -563,8 +577,25 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   hero: { gap: 10 },
+  heroStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    width: '100%',
+  },
+  heroStatusRowSolo: {
+    justifyContent: 'flex-start',
+  },
+  heroStatusTrailing: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 0,
+    gap: 8,
+    marginLeft: 'auto',
+  },
   statusBadge: {
-    alignSelf: 'flex-start',
+    flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,

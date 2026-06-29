@@ -206,15 +206,15 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     maxWidth: '100%',
     marginBottom: 6,
-    borderRadius: 6,
+    borderRadius: RavenLight.radiusMd,
     overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: RavenLight.border,
-    backgroundColor: RavenLight.sidebarHover,
+    backgroundColor: RavenLight.panel,
   },
   wrapTheirs: { alignSelf: 'flex-start' },
   /** Align outgoing quote to the right; keep same light gray card + dark text as incoming (card sits on panel, not on blue bubble). */
-  wrapRavenMine: { alignSelf: 'flex-end', maxWidth: '88%' },
+  wrapRavenMine: { alignSelf: 'flex-end', maxWidth: '100%' },
   wrapWine: {
     backgroundColor: '#F5F5F5',
     borderColor: '#E0E0E0',
@@ -223,7 +223,7 @@ const styles = StyleSheet.create({
   wrapWineMine: { alignSelf: 'flex-end' },
   accent: {
     width: 3,
-    backgroundColor: RavenLight.textMuted,
+    backgroundColor: RavenLight.accent,
   },
   accentMine: { backgroundColor: 'rgba(255,255,255,0.55)' },
   accentWine: { backgroundColor: Colors.WINE },

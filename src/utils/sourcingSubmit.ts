@@ -1,6 +1,8 @@
 import type { getERPNextClient } from '../services/erpnext';
 import { OTHER_SOURCING_ITEM, type SourcingItemOption } from './sourcingItems';
 
+import { ERP_SO_LINE_REQUESTED_QTY_FIELD } from './erpSalesOrderLineFields';
+
 type ErpClient = ReturnType<typeof getERPNextClient>;
 
 export type SourcingOrderLineInput = {
@@ -19,6 +21,8 @@ export type SourcingSalesOrderLine = {
   rate: number;
   amount: number;
   description: string;
+  custom_new_quantity: number;
+  custom_new_image?: string;
 };
 
 function toErpItemCodeCandidate(raw: string): string {
@@ -219,11 +223,14 @@ export async function buildSourcingSalesOrderLines(
       line.description,
       line.itemFieldText
     );
+    const requestedQty = Math.max(1, Math.floor(line.quantity) || 1);
+    const rate = Number.isFinite(line.rate) ? line.rate : 0;
     result.push({
       item_code: itemCode,
-      qty: line.quantity,
-      rate: line.rate,
-      amount: line.quantity * line.rate,
+      qty: 1,
+      [ERP_SO_LINE_REQUESTED_QTY_FIELD]: requestedQty,
+      rate,
+      amount: rate,
       description: line.description,
     });
   }

@@ -33,14 +33,23 @@ export function friendlySenderLabel(owner?: string): string {
 }
 
 /** Prefer **Raven User.full_name** (via profile map), then `friendlySenderLabel`. */
+export function ravenUserProfileFullName(
+  userId?: string | null,
+  profiles?: RavenUserDisplayProfiles
+): string {
+  const fn = lookupRavenUserProfile((userId || '').trim(), profiles)?.full_name;
+  return fn != null && String(fn).trim() ? String(fn).trim() : '';
+}
+
+/** Prefer **Raven User.full_name** (via profile map), then `friendlySenderLabel`. */
 export function resolveRavenUserDisplayName(
   userId?: string | null,
   profiles?: RavenUserDisplayProfiles
 ): string {
   const t = (userId || '').trim();
   if (!t) return 'Unknown';
-  const fn = lookupRavenUserProfile(t, profiles)?.full_name;
-  if (fn != null && String(fn).trim()) return String(fn).trim();
+  const fromProfile = ravenUserProfileFullName(t, profiles);
+  if (fromProfile) return fromProfile;
   return friendlySenderLabel(t);
 }
 

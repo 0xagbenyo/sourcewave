@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -16,9 +16,12 @@ import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { ErpAuthenticatedImage } from './ErpAuthenticatedImage';
 import {
+  fetchRavenUsersDirectory,
   getRavenChannelDisplayLabel,
+  mergeRavenUserProfileMaps,
   ravenChannelLastActivitySortTimeMs,
   type RavenChannelRow,
+  type RavenUserProfileMap,
 } from '../services/ravenNativeApi';
 
 function isDmChannel(c: RavenChannelRow): boolean {
@@ -35,11 +38,13 @@ function initialsFromDisplayLabel(label: string): string {
 function WaShareAvatar({
   channel,
   userEmail,
+  userProfiles,
   size,
   selected,
 }: {
   channel: RavenChannelRow;
   userEmail: string | null | undefined;
+  userProfiles?: RavenUserProfileMap;
   size: number;
   selected?: boolean;
 }) {
@@ -61,7 +66,7 @@ function WaShareAvatar({
       </View>
     );
   }
-  const label = getRavenChannelDisplayLabel(channel, userEmail ?? null);
+  const label = getRavenChannelDisplayLabel(channel, userEmail ?? null, userProfiles);
   const initials = dm ? initialsFromDisplayLabel(label) : '#';
   const bg = dm ? '#6B7C85' : '#00A884';
   return (
@@ -104,6 +109,8 @@ export type RavenShareToContactPickerProps = {
   onSend: () => void;
   sharing: boolean;
   userEmail?: string | null;
+  /** Raven User directory — same map used for channel titles in chat. */
+  userProfiles?: RavenUserProfileMap;
   skipLabel?: string;
   sendLabel?: string;
   emptyText?: string;
@@ -130,6 +137,7 @@ export const RavenShareToContactPicker: React.FC<RavenShareToContactPickerProps>
   onSend,
   sharing,
   userEmail,
+  userProfiles: userProfilesProp,
   skipLabel = 'Skip',
   sendLabel = 'Send',
   emptyText = 'No direct messages found. Start a one-to-one conversation in Messages first.',
@@ -140,6 +148,23 @@ export const RavenShareToContactPicker: React.FC<RavenShareToContactPickerProps>
   showSkip = true,
 }) => {
   const [shareContactQuery, setShareContactQuery] = useState('');
+  const [loadedProfiles, setLoadedProfiles] = useState<RavenUserProfileMap>({});
+
+  useEffect(() => {
+    if (!channels.length) return;
+    let cancelled = false;
+    void fetchRavenUsersDirectory().then((dir) => {
+      if (!cancelled) setLoadedProfiles(dir);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [channels]);
+
+  const userProfiles = useMemo(
+    () => mergeRavenUserProfileMaps(loadedProfiles, userProfilesProp ?? {}),
+    [loadedProfiles, userProfilesProp]
+  );
 
   const shareSections = useMemo(() => {
     const dms = channels
@@ -163,20 +188,20 @@ export const RavenShareToContactPicker: React.FC<RavenShareToContactPickerProps>
     const q = shareContactQuery.trim().toLowerCase();
     if (!q) return recentChats;
     return recentChats.filter((c) => {
-      const label = getRavenChannelDisplayLabel(c, userEmail ?? null).toLowerCase();
+      const label = getRavenChannelDisplayLabel(c, userEmail ?? null, userProfiles).toLowerCase();
       return (
         label.includes(q) ||
         String(c.name || '').toLowerCase().includes(q) ||
         String(c.channel_name || '').toLowerCase().includes(q)
       );
     });
-  }, [recentChats, shareContactQuery, userEmail]);
+  }, [recentChats, shareContactQuery, userEmail, userProfiles]);
 
   const shareSectionsFiltered = useMemo(() => {
     const q = shareContactQuery.trim().toLowerCase();
     const match = (c: RavenChannelRow): boolean => {
       if (!q) return true;
-      const label = getRavenChannelDisplayLabel(c, userEmail ?? null).toLowerCase();
+      const label = getRavenChannelDisplayLabel(c, userEmail ?? null, userProfiles).toLowerCase();
       return (
         label.includes(q) ||
         String(c.name || '').toLowerCase().includes(q) ||
@@ -184,7 +209,7 @@ export const RavenShareToContactPicker: React.FC<RavenShareToContactPickerProps>
       );
     };
     return shareSections.map((s) => ({ ...s, data: s.data.filter(match) })).filter((s) => s.data.length > 0);
-  }, [shareSections, shareContactQuery, userEmail]);
+  }, [shareSections, shareContactQuery, userEmail, userProfiles]);
 
   const toggleChannel = useCallback(
     (channelId: string) => {
@@ -260,7 +285,7 @@ export const RavenShareToContactPicker: React.FC<RavenShareToContactPickerProps>
                       keyboardShouldPersistTaps="handled"
                     >
                       {recentChatsFiltered.map((ch) => {
-                        const nm = getRavenChannelDisplayLabel(ch, userEmail ?? null);
+                        const nm = getRavenChannelDisplayLabel(ch, userEmail ?? null, userProfiles);
                         const sel = selectedChannelId === ch.name;
                         return (
                           <TouchableOpacity
@@ -269,7 +294,7 @@ export const RavenShareToContactPicker: React.FC<RavenShareToContactPickerProps>
                             onPress={() => toggleChannel(ch.name)}
                             activeOpacity={0.75}
                           >
-                            <WaShareAvatar channel={ch} userEmail={userEmail} size={56} selected={sel} />
+                            <WaShareAvatar channel={ch} userEmail={userEmail} userProfiles={userProfiles} size={56} selected={sel} />
                             <Text style={styles.waRecentName} numberOfLines={2}>
                               {nm}
                             </Text>
@@ -291,7 +316,7 @@ export const RavenShareToContactPicker: React.FC<RavenShareToContactPickerProps>
               <Text style={styles.shareSectionTitle}>{title}</Text>
             )}
             renderItem={({ item }) => {
-              const label = getRavenChannelDisplayLabel(item, userEmail ?? null);
+              const label = getRavenChannelDisplayLabel(item, userEmail ?? null, userProfiles);
               const selected = selectedChannelId === item.name;
               return (
                 <TouchableOpacity
@@ -299,7 +324,7 @@ export const RavenShareToContactPicker: React.FC<RavenShareToContactPickerProps>
                   onPress={() => toggleChannel(item.name)}
                   activeOpacity={0.75}
                 >
-                  <WaShareAvatar channel={item} userEmail={userEmail} size={48} selected={selected} />
+                  <WaShareAvatar channel={item} userEmail={userEmail} userProfiles={userProfiles} size={48} selected={selected} />
                   <View style={{ flex: 1, minWidth: 0, marginLeft: 12 }}>
                     <Text style={styles.shareRowTitle} numberOfLines={2}>
                       {label}

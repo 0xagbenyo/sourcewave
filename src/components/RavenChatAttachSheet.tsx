@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import React, { useCallback, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RavenLight } from '../constants/ravenLightTheme';
 import { useTranslation } from 'react-i18next';
@@ -22,6 +22,8 @@ type Props = {
   title?: string;
 };
 
+const PICKER_OPEN_DELAY_MS = Platform.OS === 'ios' ? 520 : 380;
+
 /** Bottom attach menu — Raven-style action rows. */
 export const RavenChatAttachSheet = React.memo(function RavenChatAttachSheet({
   visible,
@@ -31,12 +33,42 @@ export const RavenChatAttachSheet = React.memo(function RavenChatAttachSheet({
 }: Props) {
   const { t } = useTranslation();
   const sheetTitle = title?.trim() || t('ravenAttach.title');
+  const pendingActionRef = useRef<(() => void) | null>(null);
+  const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearOpenTimer = useCallback(() => {
+    if (openTimerRef.current) {
+      clearTimeout(openTimerRef.current);
+      openTimerRef.current = null;
+    }
+  }, []);
+
+  const flushPendingAction = useCallback(() => {
+    const action = pendingActionRef.current;
+    if (!action) return;
+    pendingActionRef.current = null;
+    clearOpenTimer();
+    openTimerRef.current = setTimeout(() => {
+      openTimerRef.current = null;
+      try {
+        action();
+      } catch (e) {
+        console.warn('[RavenChatAttachSheet] attach action failed', e);
+      }
+    }, PICKER_OPEN_DELAY_MS);
+  }, [clearOpenTimer]);
+
+  useEffect(() => {
+    if (visible) return;
+    flushPendingAction();
+    return clearOpenTimer;
+  }, [visible, flushPendingAction, clearOpenTimer]);
+
+  useEffect(() => () => clearOpenTimer(), [clearOpenTimer]);
 
   const run = (opt: RavenChatAttachOption) => {
+    pendingActionRef.current = opt.onPress;
     onClose();
-    requestAnimationFrame(() => {
-      opt.onPress();
-    });
   };
 
   return (

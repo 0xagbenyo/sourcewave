@@ -144,6 +144,38 @@ export function shouldShowChatDateSeparator(
   return false;
 }
 
+/** Inverted list: hide avatar/name when the visually older message (index + 1) is the same sender on the same day. */
+export function shouldShowChatMessageSenderHeader(
+  index: number,
+  messages: { owner?: string; creation?: string; modified?: string }[],
+  sameOwner: (a: { owner?: string }, b: { owner?: string }) => boolean
+): boolean {
+  const item = messages[index];
+  if (!item) return true;
+  const older = index < messages.length - 1 ? messages[index + 1] : null;
+  if (!older) return true;
+  const isoA = item.creation || item.modified;
+  const isoB = older.creation || older.modified;
+  if (isoA && isoB && !isSameCalendarDay(isoA, isoB)) return true;
+  return !sameOwner(item, older);
+}
+
+/** Tighter vertical spacing when stacked with the newer message below (index - 1). */
+export function isChatMessageGroupedWithNewer(
+  index: number,
+  messages: { owner?: string; creation?: string; modified?: string }[],
+  sameOwner: (a: { owner?: string }, b: { owner?: string }) => boolean
+): boolean {
+  if (index <= 0) return false;
+  const item = messages[index];
+  const newer = messages[index - 1];
+  if (!item || !newer) return false;
+  const isoA = item.creation || item.modified;
+  const isoB = newer.creation || newer.modified;
+  if (isoA && isoB && !isSameCalendarDay(isoA, isoB)) return false;
+  return sameOwner(item, newer);
+}
+
 function dayOrdinalEn(n: number): string {
   const mod10 = n % 10;
   const mod100 = n % 100;
@@ -162,4 +194,21 @@ export function formatRavenReplyQuotedDateTime(iso?: string): string {
   const month = d.toLocaleString(undefined, { month: 'long' });
   const time = formatLocalTime(d);
   return `${dayOrdinalEn(d.getDate())} ${month} at ${time}`;
+}
+
+/** Plain text bubble — hide when Raven stored the file name as `text` on attachment rows. */
+export function shouldShowChatMessageTextBubble(
+  item: {
+    text?: string | null;
+    file?: string | null;
+    file_thumbnail?: string | null;
+    message_type?: string | null;
+  },
+  hasAttach: boolean,
+  hasStructuredContent: boolean
+): boolean {
+  if (!item.text?.trim()) return false;
+  if (hasStructuredContent) return false;
+  if (hasAttach) return false;
+  return true;
 }

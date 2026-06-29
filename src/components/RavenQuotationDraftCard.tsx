@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { RavenLight } from '../constants/ravenLightTheme';
@@ -11,6 +11,7 @@ import {
   supplierQuotationWorkflowStateIsRejectedLike,
 } from '../utils/chatQuotationDraftMessage';
 import { navigateToSupplierQuotationDetail } from '../utils/erpDocumentNavigation';
+import { QuotationBuyerActionBar } from './QuotationBuyerActionBar';
 
 type Props = {
   payload: SourcewaveQuotationDraftPayload;
@@ -135,32 +136,13 @@ export const RavenQuotationDraftCard: React.FC<Props> = ({
           </Text>
         </View>
       </Pressable>
-      {showBuyerActions ? (
-        <View style={styles.row}>
-          <TouchableOpacity
-            style={[styles.btn, styles.rejectBtn]}
-            onPress={onReject}
-            onLongPress={onCardLongPress}
-            delayLongPress={380}
-            disabled={busy}
-            accessibilityLabel="Reject quotation"
-          >
-            <Text style={styles.rejectText}>Reject</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.btn, styles.acceptBtn]}
-            onPress={onAccept}
-            onLongPress={onCardLongPress}
-            delayLongPress={380}
-            disabled={busy}
-            accessibilityLabel="Accept and submit quotation"
-          >
-            {busy ? (
-              <ActivityIndicator color={Colors.WHITE} size="small" />
-            ) : (
-              <Text style={styles.acceptText}>Accept</Text>
-            )}
-          </TouchableOpacity>
+      {showBuyerActions && !handled ? (
+        <View style={styles.buyerActions}>
+          <QuotationBuyerActionBar
+            busy={busy}
+            onAccept={() => onAccept?.()}
+            onReject={() => onReject?.()}
+          />
         </View>
       ) : null}
     </View>
@@ -201,26 +183,5 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
   },
   chipText: { fontSize: 12, fontWeight: '800' },
-  row: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 10,
-    direction: 'ltr',
-  },
-  btn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 40,
-  },
-  rejectBtn: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#EF9A9A',
-    backgroundColor: '#FFEBEE',
-  },
-  rejectText: { fontSize: 14, fontWeight: '700', color: Colors.ERROR },
-  acceptBtn: { backgroundColor: Colors.SUCCESS },
-  acceptText: { fontSize: 14, fontWeight: '800', color: Colors.WHITE },
+  buyerActions: { marginTop: 10 },
 });

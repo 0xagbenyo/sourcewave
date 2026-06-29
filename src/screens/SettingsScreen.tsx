@@ -159,6 +159,12 @@ export const SettingsScreen: React.FC = () => {
         <Text style={styles.sectionLabel}>{t('settings.sectionAbout')}</Text>
         <View style={styles.group}>
           <RowNav
+            icon="chatbubble-ellipses-outline"
+            title={t('settings.contactUs')}
+            subtitle={t('settings.contactUsSub')}
+            onPress={() => nav.navigate('ContactUs')}
+          />
+          <RowNav
             icon="help-circle-outline"
             title={t('settings.faq')}
             subtitle={t('settings.faqSub')}

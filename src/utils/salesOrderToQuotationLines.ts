@@ -1,3 +1,4 @@
+import { readSalesOrderLineRequestedQty } from './erpSalesOrderLineFields';
 import { readErpDocLineImage } from './erpDocLineImageField';
 export type SalesOrderQuotationLineSeed = {
   key: string;
@@ -29,9 +30,8 @@ export function quotationLinesFromSalesOrder(raw: Record<string, unknown> | null
     const code = String(it.item_code || '').trim();
     if (!code) continue;
     const name = String(it.item_name || it.description || code).trim();
-    const qtyN = Number(it.qty);
+    const qty = readSalesOrderLineRequestedQty(it);
     const rateN = Number(it.rate);
-    const qty = Number.isFinite(qtyN) && qtyN > 0 ? qtyN : 1;
     const rate = Number.isFinite(rateN) && rateN >= 0 ? rateN : 0;
     lines.push({
       key: `so-${orderName || 'ord'}-${i}`,

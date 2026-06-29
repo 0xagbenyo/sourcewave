@@ -29,3 +29,7 @@ export function buildSupplierQuotationPdfApiUrl(docName: string, printFormat = '
 export function buildSalesInvoicePdfApiUrl(invoiceName: string, printFormat = 'Standard'): string {
   return buildErpDocPdfApiUrl('Sales Invoice', invoiceName, printFormat);
 }
+
+export function buildPaymentEntryPdfApiUrl(paymentName: string, printFormat = 'Standard'): string {
+  return buildErpDocPdfApiUrl('Payment Entry', paymentName, printFormat);
+}

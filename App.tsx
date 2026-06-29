@@ -9,12 +9,27 @@ import { UserProvider } from './src/context/UserContext';
 import { RavenUnreadProvider } from './src/context/RavenUnreadContext';
 import { SubscriptionProvider } from './src/context/SubscriptionContext';
 
-// Backend API client — use environment variables in production builds.
+// Backend API client — credentials from .env (see .env.example).
+const erpApiKey =
+  process.env.EXPO_PUBLIC_API_KEY?.trim() ||
+  process.env.EXPO_PUBLIC_ERPNEXT_API_KEY?.trim() ||
+  '';
+const erpApiSecret =
+  process.env.EXPO_PUBLIC_API_SECRET?.trim() ||
+  process.env.EXPO_PUBLIC_ERPNEXT_API_SECRET?.trim() ||
+  '';
+
 initializeERPNext({
   baseUrl: process.env.EXPO_PUBLIC_ERPNEXT_URL || 'https://sourcewave.frappe.cloud',
-  apiKey: process.env.EXPO_PUBLIC_API_KEY || '8de58d4ec8cd19c',
-  apiSecret: process.env.EXPO_PUBLIC_API_SECRET || 'e7a66aae836bc8f',
+  apiKey: erpApiKey,
+  apiSecret: erpApiSecret,
 });
+
+if (__DEV__ && (!erpApiKey || !erpApiSecret)) {
+  console.warn(
+    '[ERPNext] API key/secret missing — add EXPO_PUBLIC_API_KEY and EXPO_PUBLIC_API_SECRET to .env, then restart Expo.'
+  );
+}
 
 // Initialize network listener + periodic reachability refresh (used for retry decisions).
 initializeNetworkAwareTimeout();

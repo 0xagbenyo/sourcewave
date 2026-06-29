@@ -29,6 +29,12 @@ import { SearchableSelect } from '../components/SearchableSelect';
 import { categoryAsSourcingItem } from '../utils/sourcingItems';
 import { buildSourcingSalesOrderLines } from '../utils/sourcingSubmit';
 import { navigateToSalesOrderDetail } from '../utils/erpDocumentNavigation';
+import {
+  buildSourcingPrefillFromSalesOrder,
+  isLocalImageUri,
+} from '../utils/salesOrderSourcingPrefill';
+import { getSalesOrderShareUiState } from '../utils/salesOrderShareState';
+import { isSupplierPortalUser } from '../utils/isSupplierPortalUser';
 import { ShipToAddressField } from '../components/ShipToAddressField';
 import {
   resolveRavenChannelForSupplierShare,
@@ -95,6 +101,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
   const route = useRoute<SourcingRoute>();
   const { t } = useTranslation();
   const { user } = useUserSession();
+  const isSupplierPortal = isSupplierPortalUser(user);
   const insets = useSafeAreaInsets();
   const [keyboardPad, setKeyboardPad] = useState(0);
 
@@ -106,6 +113,8 @@ export const SourcingRequestMultiScreen: React.FC = () => {
   const paramSupplierGroupLabel = String(
     route.params?.workspaceName || route.params?.supplierGroup || ''
   ).trim();
+  const paramSalesOrderName = String(route.params?.salesOrderName || '').trim();
+  const editMode = paramSalesOrderName.length > 0;
   const [supplierGroupName, setSupplierGroupName] = useState(paramSupplierGroupLabel);
   const [loadingSupplierGroup, setLoadingSupplierGroup] = useState(false);
   const supplierSourcingMode = paramSupplierDocName.length > 0;
@@ -117,6 +126,8 @@ export const SourcingRequestMultiScreen: React.FC = () => {
   const [shipToAddressName, setShipToAddressName] = useState('');
   const [forms, setForms] = useState<RequestForm[]>([newForm(true)]);
   const [didAutoPrefill, setDidAutoPrefill] = useState(false);
+  const [loadingOrder, setLoadingOrder] = useState(editMode);
+  const [loadOrderError, setLoadOrderError] = useState<string | null>(null);
   const shareSentRef = useRef(false);
 
   const onShipToChange = useCallback((name: string, _row: ErpCustomerAddressRow) => {
@@ -207,6 +218,63 @@ export const SourcingRequestMultiScreen: React.FC = () => {
   }, [supplierSourcingMode, paramSupplierDocName, supplierGroupName]);
 
   useEffect(() => {
+    if (!editMode || !paramSalesOrderName) return;
+    if (isSupplierPortal) {
+      setLoadingOrder(false);
+      setLoadOrderError(t('orderDetails.editNotAllowedSupplierBody'));
+      return;
+    }
+    if (loadingGroups) return;
+    let cancelled = false;
+
+    const loadDraftOrder = async () => {
+      setLoadingOrder(true);
+      setLoadOrderError(null);
+      try {
+        const client = getERPNextClient();
+        const state = await getSalesOrderShareUiState(paramSalesOrderName, { viewerIsSupplier: isSupplierPortal });
+        if (!state.canEdit) {
+          throw new Error('SALES_ORDER_NOT_EDITABLE');
+        }
+        const raw = await client.getSalesOrder(paramSalesOrderName);
+        if (cancelled) return;
+        const prefill = await buildSourcingPrefillFromSalesOrder(client, raw, allGroups);
+        if (cancelled) return;
+        if (!prefill.forms.length) {
+          throw new Error('This order has no line items to edit.');
+        }
+        setShipToAddressName(prefill.shipToAddressName);
+        setForms(
+          prefill.forms.map((row, idx) => ({
+            id: `${paramSalesOrderName}-${idx}-${Date.now()}`,
+            expanded: idx === 0,
+            selectedCategoryId: row.selectedCategoryId,
+            selectedCategoryName: row.selectedCategoryName,
+            selectedProductId: row.selectedProductId,
+            itemDescription: row.itemDescription,
+            referenceImageUri: row.referenceImageUri,
+            quantity: row.quantity,
+            expectedRate: row.expectedRate,
+          }))
+        );
+        setDidAutoPrefill(true);
+      } catch (e: unknown) {
+        if (!cancelled) {
+          const msg = e instanceof Error ? e.message : t('sourcing.loadOrderFailed');
+          setLoadOrderError(msg.includes('SALES_ORDER_NOT_EDITABLE') ? t('orderDetails.editNotAllowedBody') : msg);
+        }
+      } finally {
+        if (!cancelled) setLoadingOrder(false);
+      }
+    };
+
+    void loadDraftOrder();
+    return () => {
+      cancelled = true;
+    };
+  }, [editMode, paramSalesOrderName, loadingGroups, allGroups, t, isSupplierPortal]);
+
+  useEffect(() => {
     if (!supplierSourcingMode || didAutoPrefill || loadingGroups || loadingSupplierGroup) return;
     if (!forms[0]) return;
     if (!supplierLockedCategory) {
@@ -227,6 +295,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
   ]);
 
   useEffect(() => {
+    if (editMode) return;
     if (supplierSourcingMode) return;
     if (didAutoPrefill) return;
     if (loadingGroups) return;
@@ -342,6 +411,10 @@ export const SourcingRequestMultiScreen: React.FC = () => {
 
   const submitAll = async () => {
     if (shareSentRef.current || submitting) return;
+    if (editMode && isSupplierPortal) {
+      Alert.alert(t('orderDetails.editNotAllowedTitle'), t('orderDetails.editNotAllowedSupplierBody'));
+      return;
+    }
     if (forms.length === 0) {
       Alert.alert('Missing Items', 'Please add at least one item request.');
       return;
@@ -390,6 +463,71 @@ export const SourcingRequestMultiScreen: React.FC = () => {
       const sessionUser = (user?.user || '').trim();
       const sessionEmail = (user?.email || '').trim();
 
+      const orderLines = expandedForms.map((form) => {
+        const categoryName = form.selectedCategoryName.trim();
+        return {
+          product: categoryAsSourcingItem(form.selectedCategoryId, categoryName),
+          selectedCategoryId: form.selectedCategoryId,
+          itemFieldText: categoryName,
+          quantity: parseInt(form.quantity, 10),
+          rate: parseFloat(form.expectedRate),
+          description: form.itemDescription.trim(),
+        };
+      });
+
+      const items = await buildSourcingSalesOrderLines(client, orderLines, allGroups);
+
+      if (editMode) {
+        const itemsForUpdate = items.map((line, i) => {
+          const uri = String(expandedForms[i]?.referenceImageUri || '').trim();
+          const row = { ...line };
+          if (uri && !isLocalImageUri(uri)) {
+            row.custom_new_image = uri;
+          }
+          return row;
+        });
+
+        await client.updateDraftSalesOrder(paramSalesOrderName, {
+          shipping_address_name: shipTo,
+          items: itemsForUpdate,
+        });
+
+        const lineImageUrls: string[] = expandedForms.map(() => '');
+        for (let i = 0; i < expandedForms.length; i += 1) {
+          const uri = String(expandedForms[i]?.referenceImageUri || '').trim();
+          if (!uri || !isLocalImageUri(uri)) continue;
+          try {
+            const uploadResponse = await client.uploadFileToDoc(
+              uri,
+              `sourcing-reference-${i + 1}-${Date.now()}.jpg`,
+              'Sales Order',
+              paramSalesOrderName,
+              false
+            );
+            const fileUrl = uploadResponse?.message?.file_url || uploadResponse?.file_url || '';
+            if (fileUrl) lineImageUrls[i] = fileUrl;
+          } catch (e) {
+            console.warn('Could not upload one reference image:', e);
+          }
+        }
+
+        if (lineImageUrls.some((u) => String(u || '').trim())) {
+          try {
+            await client.applySalesOrderLineImagesByIndex(paramSalesOrderName, lineImageUrls);
+          } catch (e) {
+            console.warn('Could not set sales order line images:', e);
+          }
+        }
+
+        Alert.alert(t('sourcing.savedEditsTitle'), t('sourcing.savedEditsBody'), [
+          {
+            text: t('contactUs.ok'),
+            onPress: () => (navigation as { goBack: () => void }).goBack(),
+          },
+        ]);
+        return;
+      }
+
       let customerId = '';
       if (sessionEmail) {
         const customerByEmail = await client.getCustomerByEmail(sessionEmail);
@@ -410,20 +548,6 @@ export const SourcingRequestMultiScreen: React.FC = () => {
       const transactionDate = new Date();
       const deliveryDate = new Date(transactionDate);
       deliveryDate.setDate(deliveryDate.getDate() + 21);
-
-      const orderLines = expandedForms.map((form) => {
-        const categoryName = form.selectedCategoryName.trim();
-        return {
-          product: categoryAsSourcingItem(form.selectedCategoryId, categoryName),
-          selectedCategoryId: form.selectedCategoryId,
-          itemFieldText: categoryName,
-          quantity: parseInt(form.quantity, 10),
-          rate: parseFloat(form.expectedRate),
-          description: form.itemDescription.trim(),
-        };
-      });
-
-      const items = await buildSourcingSalesOrderLines(client, orderLines, allGroups);
 
       const createdOrder = await client.createSalesOrder({
         customer: customerId,
@@ -515,8 +639,16 @@ export const SourcingRequestMultiScreen: React.FC = () => {
         { replace: true }
       );
     } catch (error: any) {
-      console.error('Error creating sourcing request order:', error);
-      Alert.error('Request Failed', error?.message || 'Unable to submit request right now.');
+      console.error(editMode ? 'Error updating sales order:' : 'Error creating sourcing request order:', error);
+      const code = (error as { code?: string })?.code;
+      if (code === 'SALES_ORDER_NOT_EDITABLE' || String(error?.message || '').includes('SALES_ORDER_NOT_EDITABLE')) {
+        Alert.alert(t('orderDetails.editNotAllowedTitle'), t('orderDetails.editNotAllowedBody'));
+        return;
+      }
+      Alert.error(
+        editMode ? t('orderDetails.errorTitle') : 'Request Failed',
+        error?.message || (editMode ? t('orderDetails.errorHint') : 'Unable to submit request right now.')
+      );
     } finally {
       if (!shareCompleted) setSubmitting(false);
     }
@@ -526,9 +658,11 @@ export const SourcingRequestMultiScreen: React.FC = () => {
     <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
       <Header
         showBackButton
-        title={t('sourcing.stackTitle')}
+        title={editMode ? t('sourcing.editTitle') : t('sourcing.stackTitle')}
         subtitle={
-          lockedRecipient
+          editMode
+            ? paramSalesOrderName
+            : lockedRecipient
             ? supplierLabel
               ? t('salesOrderShare.formForSupplier', { name: supplierLabel })
               : t('salesOrderShare.sendToOpenChat')
@@ -551,7 +685,24 @@ export const SourcingRequestMultiScreen: React.FC = () => {
           keyboardDismissMode="interactive"
           automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
         >
-        {forms.map((form, idx) => {
+        {loadingOrder ? (
+          <View style={styles.orderLoading}>
+            <ActivityIndicator color={Colors.WINE} />
+          </View>
+        ) : loadOrderError ? (
+          <View style={styles.orderLoading}>
+            <Text style={styles.loadOrderErrorText}>{loadOrderError}</Text>
+            <TouchableOpacity
+              style={styles.loadOrderBackBtn}
+              onPress={() => (navigation as { goBack: () => void }).goBack()}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.loadOrderBackText}>{t('contactUs.ok')}</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+        {!loadingOrder && !loadOrderError
+          ? forms.map((form, idx) => {
           const itemLabel = form.selectedCategoryName.trim() || t('sourcing.tapToExpand');
 
           return (
@@ -692,8 +843,11 @@ export const SourcingRequestMultiScreen: React.FC = () => {
               )}
             </View>
           );
-        })}
+        })
+          : null}
 
+        {!loadingOrder && !loadOrderError ? (
+          <>
         <TouchableOpacity style={styles.addAnotherButton} onPress={addAnotherItem}>
           <Ionicons name="add-circle-outline" size={20} color={Colors.WINE} />
           <Text style={styles.addAnotherText}>Add Another Item</Text>
@@ -712,8 +866,16 @@ export const SourcingRequestMultiScreen: React.FC = () => {
           onPress={submitAll}
           disabled={submitting || !shipToAddressName.trim()}
         >
-          {submitting ? <ActivityIndicator color={Colors.WHITE} /> : <Text style={styles.submitButtonText}>Submit Request</Text>}
+          {submitting ? (
+            <ActivityIndicator color={Colors.WHITE} />
+          ) : (
+            <Text style={styles.submitButtonText}>
+              {editMode ? t('sourcing.saveEdits') : t('sourcing.submitAll')}
+            </Text>
+          )}
         </TouchableOpacity>
+          </>
+        ) : null}
       </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -728,6 +890,30 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.SCREEN_PADDING,
     paddingTop: 12,
     paddingBottom: 40,
+  },
+  orderLoading: {
+    paddingVertical: 48,
+    alignItems: 'center',
+    gap: 16,
+  },
+  loadOrderErrorText: {
+    textAlign: 'center',
+    color: Colors.TEXT_SECONDARY,
+    fontSize: 14,
+    lineHeight: 20,
+    paddingHorizontal: 12,
+  },
+  loadOrderBackBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    borderWidth: hairline,
+    borderColor: Colors.WINE,
+  },
+  loadOrderBackText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.WINE,
   },
   card: {
     backgroundColor: Colors.WHITE,

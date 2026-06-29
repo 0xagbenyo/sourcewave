@@ -9,11 +9,21 @@ export type SalesOrderShareUiState = {
   canShare: boolean;
   /** Submitted in ERP or a supplier quotation is already linked. */
   sharedWithSupplier: boolean;
+  /** Draft order the buyer can edit in the sourcing form. */
+  canEdit: boolean;
 };
 
-export async function getSalesOrderShareUiState(orderName: string): Promise<SalesOrderShareUiState> {
+export type SalesOrderShareUiOptions = {
+  /** When true, buyer-only actions (edit) are disabled for supplier portal viewers. */
+  viewerIsSupplier?: boolean;
+};
+
+export async function getSalesOrderShareUiState(
+  orderName: string,
+  options?: SalesOrderShareUiOptions
+): Promise<SalesOrderShareUiState> {
   const n = orderName.trim();
-  if (!n) return { canShare: false, sharedWithSupplier: false };
+  if (!n) return { canShare: false, sharedWithSupplier: false, canEdit: false };
 
   const raw = await getERPNextClient().getSalesOrder(n);
   const docstatus = Number(raw?.docstatus ?? 0);
@@ -23,6 +33,7 @@ export async function getSalesOrderShareUiState(orderName: string): Promise<Sale
   // Chat shares alone do not lock the order — only ERP submission / quotation linkage does.
   const sharedWithSupplier = docstatus !== 0 || !!quotation;
   const canShare = docstatus === 0 && !quotation;
+  const canEdit = canShare && !options?.viewerIsSupplier;
 
-  return { canShare, sharedWithSupplier };
+  return { canShare, sharedWithSupplier, canEdit };
 }

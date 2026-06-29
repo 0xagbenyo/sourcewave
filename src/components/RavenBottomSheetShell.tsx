@@ -10,6 +10,8 @@ type Props = {
   children: React.ReactNode;
   /** Tighter padding for compact toolbars (message actions). */
   compact?: boolean;
+  /** iOS: fired after the modal finishes dismissing (safe point to open another modal/picker). */
+  onDismiss?: () => void;
 };
 
 /** Raven-style bottom sheet — white panel, handle, soft shadow. */
@@ -19,6 +21,7 @@ export const RavenBottomSheetShell: React.FC<Props> = ({
   title,
   children,
   compact = false,
+  onDismiss,
 }) => {
   const insets = useSafeAreaInsets();
 
@@ -30,6 +33,7 @@ export const RavenBottomSheetShell: React.FC<Props> = ({
       hardwareAccelerated
       statusBarTranslucent={false}
       onRequestClose={onClose}
+      onDismiss={onDismiss}
     >
       <View style={styles.root} pointerEvents={visible ? 'auto' : 'none'}>
         <Pressable style={styles.backdrop} onPress={onClose} accessibilityRole="button" />

@@ -75,7 +75,6 @@ export const Header: React.FC<HeaderProps> = ({
   const { isActive: subscriptionActive, isLoading: subscriptionLoading } = useSubscription();
   const { unreadTotal, refreshUnreadCounts } = useRavenUnread();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
   useFocusEffect(
     useCallback(() => {
@@ -96,7 +95,6 @@ export const Header: React.FC<HeaderProps> = ({
 
   const closeMenu = useCallback(() => {
     setMenuOpen(false);
-    setOpenGroups({});
   }, []);
 
   const closeMenuThen = useCallback(
@@ -111,10 +109,6 @@ export const Header: React.FC<HeaderProps> = ({
     nav.navigate('Subscription');
   }, [nav]);
 
-  const toggleGroup = useCallback((key: string) => {
-    setOpenGroups((prev) => ({ ...prev, [key]: !prev[key] }));
-  }, []);
-
   const defaultMenuItems: HeaderMenuItem[] = useMemo(
     () => [
       {
@@ -124,83 +118,73 @@ export const Header: React.FC<HeaderProps> = ({
         onPress: () => nav.navigate('Main', { screen: 'Home' }),
       },
       {
-        key: 'group-sourcing',
-        type: 'group',
-        label: t('home.menuGroupSourcing'),
-        icon: 'briefcase-outline',
-        children: [
-          {
-            key: 'sourcing-make-order',
-            label: t('home.menuMakeOrder'),
-            icon: 'add-circle-outline',
-            onPress: () => nav.navigate('Main', { screen: 'Sourcing' }),
-          },
-          {
-            key: 'sourcing-orders',
-            label: t('home.menuSalesOrders'),
-            icon: 'receipt-outline',
-            onPress: () => nav.navigate('OrderHistory'),
-          },
-          {
-            key: 'sourcing-category',
-            label: t('home.menuCategory'),
-            icon: 'grid-outline',
-            onPress: () => nav.navigate('Main', { screen: 'Categories' }),
-          },
-        ],
+        key: 'sourcing-make-order',
+        label: t('home.menuMakeOrder'),
+        icon: 'add-circle-outline',
+        onPress: () => nav.navigate('Main', { screen: 'Sourcing' }),
       },
       {
-        key: 'group-suppliers',
-        type: 'group',
-        label: t('home.menuGroupSuppliers'),
-        icon: 'people-outline',
-        children: [
-          {
-            key: 'suppliers-browse',
-            label: t('home.menuBrowseSuppliers'),
-            icon: 'storefront-outline',
-            onPress: () => {
-              if (!user?.email) {
-                nav.navigate('Auth');
-                return;
-              }
-              if (!subscriptionLoading && !subscriptionActive) {
-                goSubscriptionForPremium();
-                return;
-              }
-              requestSuppliersTabReset();
-              nav.navigate('Main', { screen: 'Suppliers' });
-            },
-          },
-          {
-            key: 'suppliers-chat',
-            label: t('home.menuChat'),
-            icon: 'chatbubbles-outline',
-            onPress: () => {
-              if (!user?.email) {
-                nav.navigate('Auth');
-                return;
-              }
-              if (!subscriptionLoading && !subscriptionActive) {
-                goSubscriptionForPremium();
-                return;
-              }
-              nav.navigate('RavenChatInbox');
-            },
-          },
-          {
-            key: 'suppliers-subscription',
-            label: t('home.menuSubscription'),
-            icon: 'diamond-outline',
-            onPress: () => nav.navigate('Subscription'),
-          },
-          {
-            key: 'suppliers-invoices',
-            label: t('home.menuInvoices'),
-            icon: 'wallet-outline',
-            onPress: () => nav.navigate('InvoicesPayments'),
-          },
-        ],
+        key: 'sourcing-orders',
+        label: t('home.menuSalesOrders'),
+        icon: 'receipt-outline',
+        onPress: () => nav.navigate('OrderHistory'),
+      },
+      {
+        key: 'sourcing-category',
+        label: t('home.menuCategory'),
+        icon: 'grid-outline',
+        onPress: () => nav.navigate('Main', { screen: 'Categories' }),
+      },
+      {
+        key: 'suppliers-browse',
+        label: t('home.menuBrowseSuppliers'),
+        icon: 'storefront-outline',
+        onPress: () => {
+          if (!user?.email) {
+            nav.navigate('Auth');
+            return;
+          }
+          if (!subscriptionLoading && !subscriptionActive) {
+            goSubscriptionForPremium();
+            return;
+          }
+          requestSuppliersTabReset();
+          nav.navigate('Main', { screen: 'Suppliers' });
+        },
+      },
+      {
+        key: 'suppliers-chat',
+        label: t('home.menuChat'),
+        icon: 'chatbubbles-outline',
+        onPress: () => {
+          if (!user?.email) {
+            nav.navigate('Auth');
+            return;
+          }
+          if (!subscriptionLoading && !subscriptionActive) {
+            goSubscriptionForPremium();
+            return;
+          }
+          nav.navigate('RavenChatInbox');
+        },
+      },
+      {
+        key: 'suppliers-subscription',
+        label: t('home.menuSubscription'),
+        icon: 'diamond-outline',
+        onPress: () => nav.navigate('Subscription'),
+      },
+      {
+        key: 'suppliers-invoices',
+        label: t('home.menuInvoices'),
+        icon: 'wallet-outline',
+        onPress: () => nav.navigate('CustomerInvoices'),
+      },
+      {
+        key: 'suppliers-payments',
+        label: t('profile.paymentHistory'),
+        icon: 'card-outline',
+        onPress: () => nav.navigate('CustomerPayments'),
       },
       {
         key: 'tab-profile',
@@ -218,7 +202,7 @@ export const Header: React.FC<HeaderProps> = ({
   }, [prependMenuItems, defaultMenuItems]);
 
   const menuSheetWidth = useMemo(
-    () => Math.min(340, Math.round(Dimensions.get('window').width * 0.86)),
+    () => Math.min(380, Math.round(Dimensions.get('window').width * 0.92)),
     []
   );
 
@@ -268,7 +252,16 @@ export const Header: React.FC<HeaderProps> = ({
     >
       <Modal visible={menuOpen} transparent animationType="none" onRequestClose={closeMenu}>
         <View style={styles.menuOverlay}>
-          <View style={[styles.menuSheet, { width: menuSheetWidth, paddingTop: insets.top + 8 }]}>
+          <View
+            style={[
+              styles.menuSheet,
+              {
+                width: menuSheetWidth,
+                paddingTop: insets.top + 8,
+                paddingBottom: Math.max(insets.bottom, 12),
+              },
+            ]}
+          >
             <View style={styles.menuSheetHeader}>
               <Text style={styles.menuSheetTitle}>{t('home.menuTitle')}</Text>
               <TouchableOpacity
@@ -280,52 +273,33 @@ export const Header: React.FC<HeaderProps> = ({
                 <Ionicons name="close" size={26} color="#111827" />
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.menuScroll} bounces={false} showsVerticalScrollIndicator={false}>
+            <ScrollView
+              style={styles.menuScroll}
+              contentContainerStyle={styles.menuScrollContent}
+              bounces={false}
+              showsVerticalScrollIndicator={false}
+            >
               {menuItems.map((item) => {
                 if (isHeaderMenuGroup(item)) {
-                  const open = !!openGroups[item.key];
-                  return (
-                    <View key={item.key}>
-                      <TouchableOpacity
-                        style={styles.menuRow}
-                        onPress={() => toggleGroup(item.key)}
-                        activeOpacity={0.65}
-                        accessibilityRole="button"
-                        accessibilityLabel={item.label}
-                        accessibilityState={{ expanded: open }}
-                      >
-                        <Ionicons
-                          name={item.icon ?? 'ellipse-outline'}
-                          size={22}
-                          color="#374151"
-                          style={styles.menuRowIcon}
-                        />
-                        <Text style={styles.menuRowLabel}>{item.label}</Text>
-                        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={20} color="#6B7280" />
-                      </TouchableOpacity>
-                      {open
-                        ? item.children.map((child) => (
-                            <TouchableOpacity
-                              key={child.key}
-                              style={[styles.menuRow, styles.menuSubRow]}
-                              onPress={() => runMenuLeaf(child)}
-                              activeOpacity={0.65}
-                              accessibilityRole="button"
-                              accessibilityLabel={child.label}
-                            >
-                              <Ionicons
-                                name={child.icon ?? 'ellipse-outline'}
-                                size={20}
-                                color="#6B7280"
-                                style={styles.menuSubIcon}
-                              />
-                              <Text style={styles.menuSubLabel}>{child.label}</Text>
-                              <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
-                            </TouchableOpacity>
-                          ))
-                        : null}
-                    </View>
-                  );
+                  return item.children.map((child) => (
+                    <TouchableOpacity
+                      key={child.key}
+                      style={styles.menuRow}
+                      onPress={() => runMenuLeaf(child)}
+                      activeOpacity={0.65}
+                      accessibilityRole="button"
+                      accessibilityLabel={child.label}
+                    >
+                      <Ionicons
+                        name={child.icon ?? 'ellipse-outline'}
+                        size={22}
+                        color="#374151"
+                        style={styles.menuRowIcon}
+                      />
+                      <Text style={styles.menuRowLabel}>{child.label}</Text>
+                      <Ionicons name="chevron-forward" size={18} color="#C7C7CC" />
+                    </TouchableOpacity>
+                  ));
                 }
                 return (
                   <TouchableOpacity
@@ -480,12 +454,14 @@ const styles = StyleSheet.create({
   menuOverlay: {
     flex: 1,
     flexDirection: 'row',
+    alignItems: 'stretch',
   },
   menuBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.35)',
   },
   menuSheet: {
+    alignSelf: 'stretch',
     backgroundColor: Colors.WHITE,
     borderRightWidth: StyleSheet.hairlineWidth,
     borderRightColor: Colors.BORDER,
@@ -494,24 +470,30 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
+    paddingHorizontal: 18,
+    paddingTop: 4,
+    paddingBottom: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Colors.BORDER,
   },
   menuSheetTitle: {
-    fontSize: 17,
-    fontWeight: '700',
+    fontSize: 20,
+    fontWeight: '800',
     color: '#111827',
   },
   menuScroll: {
-    flexGrow: 0,
+    flex: 1,
+  },
+  menuScrollContent: {
+    flexGrow: 1,
+    paddingBottom: 24,
   },
   menuRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
+    paddingVertical: 17,
+    paddingHorizontal: 18,
+    minHeight: 54,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Colors.BORDER,
   },
@@ -525,20 +507,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
     color: '#111827',
-  },
-  menuSubRow: {
-    backgroundColor: '#F9FAFB',
-    paddingLeft: 12,
-  },
-  menuSubIcon: {
-    marginRight: 12,
-    width: 26,
-    textAlign: 'center',
-  },
-  menuSubLabel: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '500',
-    color: '#374151',
   },
 });

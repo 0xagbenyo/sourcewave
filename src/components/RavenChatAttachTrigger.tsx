@@ -114,7 +114,7 @@ export function RavenChatAttachTrigger({
 
   return (
     <>
-      <View style={styles.btnWrap} collapsable={false}>
+      <View style={styles.btnWrap} collapsable={false} pointerEvents="box-none">
         <TouchableOpacity
           style={[
             styles.plusBtn,
@@ -124,7 +124,7 @@ export function RavenChatAttachTrigger({
           onPress={openMenu}
           disabled={disabled}
           activeOpacity={0.65}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          hitSlop={{ top: 14, bottom: 14, left: 12, right: 12 }}
           accessibilityLabel={t('ravenAttach.title')}
           accessibilityRole="button"
           accessibilityState={{ disabled }}
@@ -138,13 +138,19 @@ export function RavenChatAttachTrigger({
 }
 
 const BTN_SIZE = 44;
+const BTN_WRAP = 48;
 
 const styles = StyleSheet.create({
   btnWrap: {
+    width: BTN_WRAP,
+    minHeight: BTN_WRAP,
+    alignItems: 'center',
+    justifyContent: 'center',
     flexShrink: 0,
-    zIndex: 4,
+    marginRight: 6,
+    zIndex: 30,
     ...Platform.select({
-      android: { elevation: 4 },
+      android: { elevation: 12 },
       default: {},
     }),
   },
@@ -157,7 +163,6 @@ const styles = StyleSheet.create({
     borderColor: RavenLight.border,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 2,
   },
   plusBtnDisabled: {
     opacity: 0.4,

@@ -18,6 +18,67 @@ const PAYSTACK_PUBLIC_KEY =
   process.env.PAYSTACK_PUBLIC_KEY?.trim() ||
   '';
 
+export type PaystackKeyKind = 'test' | 'live' | 'missing' | 'invalid';
+
+export type PaystackConfigStatus = {
+  configured: boolean;
+  hasSecretKey: boolean;
+  hasPublicKey: boolean;
+  secretKeyKind: PaystackKeyKind;
+  publicKeyKind: PaystackKeyKind;
+};
+
+function classifyPaystackKey(key: string, prefix: 'sk' | 'pk'): PaystackKeyKind {
+  const k = key.trim();
+  if (!k) return 'missing';
+  if (k.startsWith(`${prefix}_test_`)) return 'test';
+  if (k.startsWith(`${prefix}_live_`)) return 'live';
+  return 'invalid';
+}
+
+/** Whether Paystack API keys are present and look valid (secret required for MoMo/card). */
+export function getPaystackConfigStatus(): PaystackConfigStatus {
+  const secretKeyKind = classifyPaystackKey(PAYSTACK_SECRET_KEY, 'sk');
+  const publicKeyKind = classifyPaystackKey(PAYSTACK_PUBLIC_KEY, 'pk');
+  const hasSecretKey = PAYSTACK_SECRET_KEY.length > 0;
+  const hasPublicKey = PAYSTACK_PUBLIC_KEY.length > 0;
+  const configured =
+    hasSecretKey && (secretKeyKind === 'test' || secretKeyKind === 'live');
+  return { configured, hasSecretKey, hasPublicKey, secretKeyKind, publicKeyKind };
+}
+
+/** User-facing error when keys are missing or malformed. */
+export function paystackConfigurationError(): string | null {
+  const s = getPaystackConfigStatus();
+  if (s.configured) return null;
+  if (!s.hasSecretKey) {
+    return 'Paystack is not configured. Add EXPO_PUBLIC_PAYSTACK_SECRET_KEY to a .env file in the project root (copy from .env.example), then restart Expo.';
+  }
+  if (s.secretKeyKind === 'invalid') {
+    return 'Paystack secret key looks invalid. It should start with sk_test_ or sk_live_.';
+  }
+  return 'Paystack is not configured. Check EXPO_PUBLIC_PAYSTACK_SECRET_KEY in .env and restart Expo.';
+}
+
+export function assertPaystackConfigured(): void {
+  const msg = paystackConfigurationError();
+  if (msg) throw new Error(msg);
+}
+
+if (__DEV__) {
+  const paystackStatus = getPaystackConfigStatus();
+  if (!paystackStatus.configured) {
+    console.warn(
+      '[Paystack] API keys missing or invalid — MoMo/card payments will fail until EXPO_PUBLIC_PAYSTACK_SECRET_KEY is set in .env and Expo is restarted.',
+      {
+        hasSecretKey: paystackStatus.hasSecretKey,
+        secretKeyKind: paystackStatus.secretKeyKind,
+        hasPublicKey: paystackStatus.hasPublicKey,
+      }
+    );
+  }
+}
+
 /** Sent on every charge so Paystack transactions can be filtered by app. */
 export const PAYSTACK_PAYMENT_SOURCE = 'sourcewave';
 
@@ -90,8 +151,12 @@ export function getPaystackChargeStep(res: PaystackChargeResponse): PaystackChar
 export function normalizeGhanaMoMoPhoneForPaystack(raw: string): string {
   let digits = raw.replace(/\D/g, '');
   if (digits.startsWith('233')) {
-    digits = `0${digits.slice(3)}`;
-  } else if (digits.length === 9) {
+    digits = digits.slice(3);
+  }
+  if (digits.length > 9) {
+    digits = digits.slice(-9);
+  }
+  if (digits.length === 9) {
     digits = `0${digits}`;
   }
   return digits;
@@ -101,6 +166,7 @@ async function paystackAuthorizedPost(
   path: string,
   body: Record<string, string>
 ): Promise<PaystackChargeResponse> {
+  assertPaystackConfigured();
   const response = await axios.post<PaystackChargeResponse>(
     `${PAYSTACK_BASE_URL}${path}`,
     body,
@@ -130,6 +196,7 @@ export const submitPaystackChargeOtp = async (
 export const checkPendingPaystackCharge = async (
   reference: string
 ): Promise<PaystackChargeResponse> => {
+  assertPaystackConfigured();
   const response = await axios.get<PaystackChargeResponse>(
     `${PAYSTACK_BASE_URL}/charge/${encodeURIComponent(reference)}`,
     {
@@ -151,7 +218,21 @@ export interface PaystackVerifyResponse {
     status: string; // 'success', 'failed', 'pending'
     reference: string;
     gateway_response: string;
+    channel?: string;
+    authorization?: {
+      channel?: string;
+      card_type?: string;
+      bank?: string;
+    };
   };
+}
+
+/** Paystack payment channel from a verify response (`card`, `mobile_money`, `bank`, …). */
+export function paystackVerifyPaymentChannel(
+  data: PaystackVerifyResponse['data'] | null | undefined
+): string {
+  if (!data) return '';
+  return String(data.channel || data.authorization?.channel || '').trim().toLowerCase();
 }
 
 export interface PaystackInitializeRequest {
@@ -182,6 +263,7 @@ export const initializePaystackCardTransaction = async (
   request: PaystackInitializeRequest
 ): Promise<PaystackInitializeResponse> => {
   try {
+    assertPaystackConfigured();
     const { metadata: extraMetadata, ...body } = request;
     const payload = {
       ...body,
@@ -269,6 +351,7 @@ export const initializePaystackCharge = async (
   request: PaystackChargeRequest
 ): Promise<PaystackChargeResponse> => {
   try {
+    assertPaystackConfigured();
     const { metadata: extraMetadata, ...chargeBody } = request;
     const payload = {
       ...chargeBody,
@@ -367,7 +450,12 @@ export const initializePaystackCharge = async (
       
       // HTTP error response without proper Paystack format
       const errorData = responseData as { message?: string };
-      const errorMessage = errorData?.message || `Paystack API error: ${axiosError.response.status}`;
+      let errorMessage = errorData?.message || `Paystack API error: ${axiosError.response.status}`;
+      if (axiosError.response.status === 401) {
+        errorMessage =
+          paystackConfigurationError() ||
+          'Paystack rejected the API key (401). Check EXPO_PUBLIC_PAYSTACK_SECRET_KEY in .env and restart Expo.';
+      }
       
       // Special case: "Charge attempted" is actually success, not an error
       if (errorMessage === 'Charge attempted' || errorMessage.includes('Charge attempted')) {
@@ -399,6 +487,7 @@ export const verifyPaystackPayment = async (
   reference: string
 ): Promise<PaystackVerifyResponse> => {
   try {
+    assertPaystackConfigured();
     const response = await axios.get<PaystackVerifyResponse>(
       `${PAYSTACK_BASE_URL}/transaction/verify/${reference}`,
       {
@@ -447,6 +536,12 @@ export const mapProviderToPaystack = (provider: 'mtn' | 'telecel'): 'mtn' | 'vod
 export const convertToPesewas = (amountInGHS: number): number => {
   return Math.round(amountInGHS * 100);
 };
+
+/** Paystack Ghana minimum charge (GH₵1.00 = 100 pesewas). */
+export const PAYSTACK_MIN_CHARGE_GHS = 1;
+
+export const isPaystackChargeAmountValid = (amountGhs: number): boolean =>
+  Number.isFinite(amountGhs) && amountGhs > 0 && convertToPesewas(amountGhs) >= 100;
 
 export { PAYSTACK_PUBLIC_KEY };
 

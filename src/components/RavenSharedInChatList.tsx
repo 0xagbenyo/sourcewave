@@ -6,6 +6,7 @@ import {
   Text,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { RavenLight } from '../constants/ravenLightTheme';
@@ -26,6 +27,8 @@ import {
   type RavenChannelFileTypeFilter,
 } from '../utils/ravenChannelFileTypeFilter';
 import { classifyRavenAttachment } from '../utils/ravenAttachment';
+import { sanitizeRavenWebMessageFileUrl } from '../utils/ravenFileUrl';
+import { ErpAuthenticatedImage } from './ErpAuthenticatedImage';
 
 export type RavenSharedInChatListVariant = 'raven' | 'wine';
 
@@ -109,6 +112,16 @@ function channelFileTypeLabel(row: RavenChannelFileRow): string {
   return 'File';
 }
 
+function sharedFileImageUri(row: RavenChannelFileRow): string {
+  const thumb = row.fileThumbnail?.trim();
+  if (thumb) return sanitizeRavenWebMessageFileUrl(thumb);
+  return sanitizeRavenWebMessageFileUrl(row.fileUrl);
+}
+
+function isSharedImageRow(row: RavenChannelFileRow): boolean {
+  return classifyRavenAttachment(row.fileUrl, row.message_type).kind === 'image';
+}
+
 export const RavenSharedInChatList: React.FC<Props> = ({
   active,
   channelId,
@@ -118,6 +131,13 @@ export const RavenSharedInChatList: React.FC<Props> = ({
   showInlineTitle = true,
   onSectionTitleChange,
 }) => {
+  const { width: windowWidth } = useWindowDimensions();
+  const imageGridGap = 6;
+  const imageGridPad = Spacing.MD;
+  const imageGridCols = 3;
+  const imageTileSize = Math.floor(
+    (windowWidth - imageGridPad * 2 - imageGridGap * (imageGridCols - 1) - 16) / imageGridCols
+  );
   const wine = variant === 'wine';
   const text = wine ? Colors.BLACK : RavenLight.text;
   const textMuted = wine ? Colors.TEXT_SECONDARY : RavenLight.textMuted;
@@ -352,28 +372,71 @@ export const RavenSharedInChatList: React.FC<Props> = ({
             <Text style={[styles.emptyHeading, { color: text }]}>{emptyHeading}</Text>
             <Text style={[styles.emptyBody, { color: textMuted }]}>{emptyBody}</Text>
           </View>
+        ) : fileFilter === 'image' ? (
+          <View style={[styles.imageGrid, { paddingHorizontal: imageGridPad }]}>
+            {fileRows.map((row) => {
+              const when = formatMessageHeaderTime(row.creation);
+              const who = resolveRavenUserDisplayName(row.owner, userDisplayProfiles);
+              return (
+                <TouchableOpacity
+                  key={`file-img-${row.messageName}-${row.fileUrl}`}
+                  style={[styles.imageGridTile, { width: imageTileSize, height: imageTileSize }]}
+                  onPress={() => onFileRowPress(row)}
+                  activeOpacity={0.85}
+                  accessibilityRole="imagebutton"
+                  accessibilityLabel="Go to image in chat"
+                >
+                  <ErpAuthenticatedImage
+                    uri={sharedFileImageUri(row)}
+                    style={styles.imageGridImage}
+                    resizeMode="cover"
+                  />
+                  <View style={styles.imageGridOverlay}>
+                    <Text style={styles.imageGridMeta} numberOfLines={1}>
+                      {[when, who].filter(Boolean).join(' · ')}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         ) : (
           fileRows.map((row) => {
             const when = formatMessageHeaderTime(row.creation);
             const who = resolveRavenUserDisplayName(row.owner, userDisplayProfiles);
             const typeLabel = channelFileTypeLabel(row);
+            const imageRow = isSharedImageRow(row);
             return (
               <TouchableOpacity
                 key={`file-${row.messageName}-${row.fileUrl}`}
-                style={[styles.row, { borderBottomColor: border }]}
+                style={[styles.row, imageRow && styles.imageRow, { borderBottomColor: border }]}
                 onPress={() => onFileRowPress(row)}
                 activeOpacity={0.7}
               >
-                <View style={[styles.iconCircle, { backgroundColor: chipBg }]}>
-                  <Ionicons name={channelFileIcon(row)} size={20} color={accent} />
-                </View>
+                {imageRow ? (
+                  <View style={[styles.imageThumbWrap, { borderColor: border }]}>
+                    <ErpAuthenticatedImage
+                      uri={sharedFileImageUri(row)}
+                      style={styles.imageThumb}
+                      resizeMode="cover"
+                    />
+                  </View>
+                ) : (
+                  <View style={[styles.iconCircle, { backgroundColor: chipBg }]}>
+                    <Ionicons name={channelFileIcon(row)} size={20} color={accent} />
+                  </View>
+                )}
                 <View style={styles.rowMain}>
-                  <Text style={[styles.typePill, { color: accent }]} numberOfLines={1}>
-                    {typeLabel}
-                  </Text>
-                  <Text style={[styles.fileName, { color: text }]} numberOfLines={2}>
-                    {row.fileName}
-                  </Text>
+                  {!imageRow ? (
+                    <Text style={[styles.typePill, { color: accent }]} numberOfLines={1}>
+                      {typeLabel}
+                    </Text>
+                  ) : null}
+                  {!imageRow ? (
+                    <Text style={[styles.fileName, { color: text }]} numberOfLines={2}>
+                      {row.fileName}
+                    </Text>
+                  ) : null}
                   <Text style={[styles.meta, { color: textMuted }]} numberOfLines={1}>
                     {[when, who].filter(Boolean).join(' · ')}
                   </Text>
@@ -555,5 +618,50 @@ const styles = StyleSheet.create({
   meta: {
     fontSize: 12,
     marginTop: 2,
+  },
+  imageRow: {
+    alignItems: 'flex-start',
+  },
+  imageThumbWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 10,
+    overflow: 'hidden',
+    marginRight: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    backgroundColor: '#E8E8E8',
+  },
+  imageThumb: {
+    width: '100%',
+    height: '100%',
+  },
+  imageGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingBottom: Spacing.SM,
+  },
+  imageGridTile: {
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#E8E8E8',
+  },
+  imageGridImage: {
+    width: '100%',
+    height: '100%',
+  },
+  imageGridOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  imageGridMeta: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '600',
   },
 });

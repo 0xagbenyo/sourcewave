@@ -133,10 +133,14 @@ function extLabel(ext: string): string {
 function RavenAudioRow({
   streamPath,
   theme,
+  mine,
+  variant,
   onReplyLongPress,
 }: {
   streamPath: string;
   theme: Theme;
+  mine: boolean;
+  variant: RavenMessageAttachmentVariant;
   onReplyLongPress?: () => void;
 }) {
   const soundRef = useRef<Audio.Sound | null>(null);
@@ -208,7 +212,11 @@ function RavenAudioRow({
 
   return (
     <TouchableOpacity
-      style={[styles.audioRow, { borderColor: theme.border }]}
+      style={[
+        styles.audioRow,
+        { borderColor: theme.border },
+        mine && variant === 'raven' && styles.audioRowMineRaven,
+      ]}
       onPress={() => void toggle()}
       onLongPress={onReplyLongPress}
       delayLongPress={REPLY_LONG_PRESS_DELAY_MS}
@@ -236,6 +244,8 @@ type Props = {
   mediaGroupNeighbor?: boolean;
   /** Long-press on attachment surfaces to reply (parent row long-press does not reach nested touchables). */
   onReplyLongPress?: () => void;
+  /** When set, parent opens a swipeable gallery across all chat images. */
+  onOpenImagePreview?: (payload: { uri: string; title: string; messageId: string }) => void;
 };
 
 export const RavenMessageAttachmentBody: React.FC<Props> = ({
@@ -244,6 +254,7 @@ export const RavenMessageAttachmentBody: React.FC<Props> = ({
   variant,
   mediaGroupNeighbor = false,
   onReplyLongPress,
+  onOpenImagePreview,
 }) => {
   const insets = useSafeAreaInsets();
   const { display, stream } = resolveRavenMessageFilePaths(item);
@@ -433,13 +444,26 @@ export const RavenMessageAttachmentBody: React.FC<Props> = ({
   const closeIcon = variant === 'raven' ? RavenLight.textMuted : Colors.TEXT_SECONDARY;
   const accent = variant === 'raven' ? RavenLight.accent : Colors.WINE;
 
+  const openImagePreview = () => {
+    const payload = {
+      uri: fullResImageUri,
+      title: resolvedFileName,
+      messageId: String(item.name || '').trim(),
+    };
+    if (onOpenImagePreview) {
+      onOpenImagePreview(payload);
+      return;
+    }
+    setImagePreview({ uri: payload.uri, title: payload.title });
+  };
+
   const blocks: React.ReactNode[] = [];
 
   if (kind === 'image') {
     blocks.push(
       <View key="img" style={mediaRowAlign}>
         <Pressable
-          onPress={() => setImagePreview({ uri: fullResImageUri, title: resolvedFileName })}
+          onPress={openImagePreview}
           onLongPress={onReplyLongPress}
           delayLongPress={REPLY_LONG_PRESS_DELAY_MS}
           accessibilityRole="imagebutton"
@@ -449,7 +473,8 @@ export const RavenMessageAttachmentBody: React.FC<Props> = ({
             uri={fullResImageUri}
             style={[
               styles.messageImage,
-              variant === 'raven' && styles.messageImageMessenger,
+              variant === 'raven' && (mine ? styles.messageImageMessengerMine : styles.messageImageMessengerTheirs),
+              mine && variant === 'raven' && styles.messageImageMine,
               { width: imageChatSize.width, height: imageChatSize.height, marginBottom: mediaBottomGap },
             ]}
             resizeMode="contain"
@@ -486,7 +511,8 @@ export const RavenMessageAttachmentBody: React.FC<Props> = ({
         <View
           style={[
             styles.videoInlineWrap,
-            variant === 'raven' && styles.videoInlineWrapMessenger,
+            variant === 'raven' && (mine ? styles.videoInlineWrapMessengerMine : styles.videoInlineWrapMessengerTheirs),
+            mine && variant === 'raven' && styles.videoInlineWrapMine,
             { width: videoChatSize.width, height: videoChatSize.height, marginBottom: mediaBottomGap },
           ]}
         >
@@ -529,7 +555,13 @@ export const RavenMessageAttachmentBody: React.FC<Props> = ({
   } else if (kind === 'audio') {
     blocks.push(
       <View key="aud" style={mediaRowAlign}>
-        <RavenAudioRow streamPath={stream} theme={t} onReplyLongPress={onReplyLongPress} />
+        <RavenAudioRow
+          streamPath={stream}
+          theme={t}
+          mine={mine}
+          variant={variant}
+          onReplyLongPress={onReplyLongPress}
+        />
       </View>
     );
   } else if (kind === 'pdf') {
@@ -550,21 +582,33 @@ export const RavenMessageAttachmentBody: React.FC<Props> = ({
             accessibilityRole="button"
             accessibilityLabel="View PDF"
           >
-            <Ionicons name="document-text" size={22} color="#E5484D" style={{ marginRight: 8 }} />
-            <Text style={styles.messengerFileName} numberOfLines={2}>
+            <Ionicons
+              name="document-text"
+              size={22}
+              color={mine ? '#FFB4B4' : '#E5484D'}
+              style={{ marginRight: 8 }}
+            />
+            <Text
+              style={[styles.messengerFileName, mine && styles.messengerFileNameMine]}
+              numberOfLines={2}
+            >
               {resolvedFileName}
             </Text>
           </Pressable>
           <TouchableOpacity
-            style={styles.messengerDownloadBtn}
+            style={[styles.messengerDownloadBtn, mine && styles.messengerDownloadBtnMine]}
             onPress={() => void runDownload(stream, resolvedFileName)}
             disabled={busyDownload}
             accessibilityLabel="Download PDF"
           >
             {busyDownload ? (
-              <ActivityIndicator color={RavenLight.messengerEyeIcon} size="small" />
+              <ActivityIndicator color={mine ? RavenLight.bubbleMineText : RavenLight.messengerEyeIcon} size="small" />
             ) : (
-              <Ionicons name="download-outline" size={20} color={RavenLight.messengerEyeIcon} />
+              <Ionicons
+                name="download-outline"
+                size={20}
+                color={mine ? RavenLight.bubbleMineText : RavenLight.messengerEyeIcon}
+              />
             )}
           </TouchableOpacity>
         </View>
@@ -612,23 +656,38 @@ export const RavenMessageAttachmentBody: React.FC<Props> = ({
             <Ionicons
               name="document-text"
               size={22}
-              color={excelish ? '#217346' : RavenLight.textMuted}
+              color={
+                mine
+                  ? excelish
+                    ? '#B8F0D0'
+                    : 'rgba(255,255,255,0.92)'
+                  : excelish
+                    ? '#217346'
+                    : RavenLight.textMuted
+              }
               style={{ marginRight: 8 }}
             />
-            <Text style={styles.messengerFileName} numberOfLines={2}>
+            <Text
+              style={[styles.messengerFileName, mine && styles.messengerFileNameMine]}
+              numberOfLines={2}
+            >
               {resolvedFileName}
             </Text>
           </Pressable>
           <TouchableOpacity
-            style={styles.messengerDownloadBtn}
+            style={[styles.messengerDownloadBtn, mine && styles.messengerDownloadBtnMine]}
             onPress={() => void runDownload(stream, resolvedFileName)}
             disabled={busyDownload}
             accessibilityLabel="Download file"
           >
             {busyDownload ? (
-              <ActivityIndicator color={RavenLight.messengerEyeIcon} size="small" />
+              <ActivityIndicator color={mine ? RavenLight.bubbleMineText : RavenLight.messengerEyeIcon} size="small" />
             ) : (
-              <Ionicons name="download-outline" size={20} color={RavenLight.messengerEyeIcon} />
+              <Ionicons
+                name="download-outline"
+                size={20}
+                color={mine ? RavenLight.bubbleMineText : RavenLight.messengerEyeIcon}
+              />
             )}
           </TouchableOpacity>
         </View>
@@ -932,30 +991,62 @@ const styles = StyleSheet.create({
     maxHeight: 420,
     backgroundColor: '#000',
   },
-  messageImageMessenger: {
-    borderRadius: 6,
+  messageImageMessengerTheirs: {
+    borderRadius: RavenLight.radiusLg,
+    borderBottomLeftRadius: 4,
   },
-  videoInlineWrapMessenger: {
-    borderRadius: 6,
+  messageImageMessengerMine: {
+    borderRadius: RavenLight.radiusLg,
+    borderBottomRightRadius: 4,
+  },
+  messageImageMine: {
+    borderWidth: 2,
+    borderColor: RavenLight.bubbleMine,
+  },
+  videoInlineWrapMessengerTheirs: {
+    borderRadius: RavenLight.radiusLg,
+    borderBottomLeftRadius: 4,
+  },
+  videoInlineWrapMessengerMine: {
+    borderRadius: RavenLight.radiusLg,
+    borderBottomRightRadius: 4,
+  },
+  videoInlineWrapMine: {
+    borderWidth: 2,
+    borderColor: RavenLight.bubbleMine,
   },
   messengerFileCard: {
     flexDirection: 'row',
     alignItems: 'center',
     maxWidth: '100%',
     minWidth: 200,
-    paddingVertical: 8,
-    paddingHorizontal: 9,
+    paddingVertical: 9,
+    paddingHorizontal: 11,
     marginBottom: 2,
-    borderRadius: 6,
-    backgroundColor: RavenLight.panel,
+    borderRadius: RavenLight.radiusLg,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: RavenLight.border,
   },
   messengerFileCardMine: {
     alignSelf: 'flex-end',
+    backgroundColor: RavenLight.bubbleMine,
+    borderColor: 'rgba(255,255,255,0.28)',
+    borderBottomRightRadius: 4,
   },
   messengerFileCardTheirs: {
     alignSelf: 'flex-start',
+    backgroundColor: RavenLight.panel,
+    borderColor: RavenLight.border,
+    borderBottomLeftRadius: 4,
+    ...Platform.select({
+      ios: {
+        shadowColor: RavenLight.shadowSoft,
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 1,
+        shadowRadius: 3,
+      },
+      android: { elevation: 1 },
+      default: {},
+    }),
   },
   messengerFileTitleRow: {
     flex: 1,
@@ -980,12 +1071,24 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: RavenLight.text,
   },
+  messengerFileNameMine: {
+    color: RavenLight.bubbleMineText,
+  },
   messengerDownloadBtn: {
     width: 36,
     height: 36,
-    borderRadius: 6,
+    borderRadius: 8,
     backgroundColor: RavenLight.messengerEyeBtnBg,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  messengerDownloadBtnMine: {
+    backgroundColor: 'rgba(255,255,255,0.22)',
+  },
+  audioRowMineRaven: {
+    alignSelf: 'flex-end',
+    backgroundColor: RavenLight.bubbleMine,
+    borderBottomRightRadius: 4,
+    borderRadius: RavenLight.radiusLg,
   },
 });

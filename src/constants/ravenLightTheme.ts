@@ -34,4 +34,5 @@ export const RavenLight = {
   onlineGreen: '#30A46C',
   /** Soft shadow for elevated chat surfaces (iOS). */
   shadowSoft: 'rgba(28, 32, 36, 0.06)',
+  shadowMedium: 'rgba(28, 32, 36, 0.12)',
 } as const;

@@ -36,8 +36,14 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow SOURCEWAVE to access your photos to set your profile picture.",
+          "photosPermission": "Allow SOURCEWAVE to access your photos to attach images and set your profile picture.",
           "cameraPermission": "Allow SOURCEWAVE to use the camera for your profile picture."
+        }
+      ],
+      [
+        "expo-document-picker",
+        {
+          "iCloudContainerEnvironment": "Production"
         }
       ],
       "expo-secure-store",

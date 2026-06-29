@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
@@ -6,17 +6,18 @@ import { Ionicons } from '@expo/vector-icons';
 import { getERPNextClient } from '../../services/erpnext';
 import { useUserSession } from '../../context/UserContext';
 import { useSessionCustomerId } from '../../hooks/useSessionCustomerId';
+import { useSupplierQuotationBuyerReview } from '../../hooks/useSupplierQuotationBuyerReview';
 import { navigateToSalesInvoiceDetail } from '../../utils/erpDocumentNavigation';
 import {
   supplierQuotationAllowsSupplierEdit,
   supplierQuotationAllowsSupplierResend,
-  supplierQuotationStatusLabelAndKind,
   type SupplierQuotationUiStatusKind,
 } from '../../utils/chatQuotationDraftMessage';
 import { Colors } from '../../constants/colors';
 import { Spacing } from '../../constants/spacing';
 import { pickLineDisplayImageUri } from '../../utils/erpLineItemImages';
 import { erpLineItemTitle } from '../../utils/erpLineItemDisplay';
+import { QuotationBuyerActionBar } from '../../components/QuotationBuyerActionBar';
 import {
   ErpDocumentPreviewLayout,
   ErpDocSheet,
@@ -66,6 +67,20 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
   const [linkedInvoices, setLinkedInvoices] = useState<Record<string, unknown>[]>([]);
   const [linksLoading, setLinksLoading] = useState(false);
   const [lineImages, setLineImages] = useState<Record<string, string>>({});
+
+  const reloadDoc = useCallback(async () => {
+    try {
+      const d = await getERPNextClient().getSupplierQuotationByName(name);
+      setDoc(d as Record<string, unknown> | null);
+    } catch {
+      setDoc(null);
+    }
+  }, [name]);
+
+  const buyerReview = useSupplierQuotationBuyerReview(name, {
+    billToFrappeUserId: user?.user || user?.email || null,
+    onDocRefresh: reloadDoc,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -143,7 +158,10 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
   }, [doc, name, items, linkedSalesOrderName]);
 
   const currency = String(doc?.currency || 'GHS');
-  const quotationStatus = useMemo(() => supplierQuotationStatusLabelAndKind(doc), [doc]);
+  const quotationStatus = useMemo(
+    () => buyerReview.displayStatus(doc),
+    [doc, buyerReview.outcome, buyerReview.displayStatus]
+  );
   const status = quotationStatus.label;
   const statusColor = useMemo(
     () =>
@@ -168,6 +186,7 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
   const primaryInvoiceName = String(primaryInvoice?.name || '').trim();
   const canEdit = isSupplierPortal && supplierQuotationAllowsSupplierEdit(doc);
   const canResend = isSupplierPortal && supplierQuotationAllowsSupplierResend(doc);
+  const showBuyerActions = !isSupplierPortal && buyerReview.canReviewDoc(doc);
 
   const onEditQuotation = () => {
     (navigation as { navigate: (n: string, p?: object) => void }).navigate('SupplierQuotationCompose', {
@@ -202,6 +221,16 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
               doc.transaction_date ? `Submitted ${formatErpDocDate(doc.transaction_date)}` : undefined
             }
             facts={facts}
+            statusTrailing={
+              showBuyerActions ? (
+                <QuotationBuyerActionBar
+                  compact
+                  busy={buyerReview.busy}
+                  onAccept={() => void buyerReview.accept()}
+                  onReject={() => void buyerReview.reject()}
+                />
+              ) : undefined
+            }
           />
 
           {!isSupplierPortal ? (

@@ -36,6 +36,9 @@ export const PaymentEntryDetailScreen: React.FC = () => {
   return (
     <ErpDocumentPreviewLayout
       screenTitle="Payment"
+      printDoctype="Payment Entry"
+      printDocName={name}
+      printLabel="Download receipt"
       loading={loading}
       errorMessage={!loading && !doc ? 'Could not load this payment.' : null}
       onBack={() => navigation.goBack()}

@@ -305,11 +305,15 @@ export type RootStackParamList = {
     supplierGroup?: string;
     /** Raven workspace display name (optional context). */
     workspaceName?: string;
+    /** Edit an existing draft Sales Order instead of creating a new one. */
+    salesOrderName?: string;
   } | undefined;
   Search: { query?: string };
   OrderHistory: undefined;
   /** Buyer: sales invoices & payment entries for the logged-in customer. */
   InvoicesPayments: undefined;
+  CustomerInvoices: undefined;
+  CustomerPayments: { salesInvoiceName?: string } | undefined;
   OrderDetails: { orderId: string };
   InvoiceDetails: { invoiceId: string };
   /** In-app preview for Supplier Quotation (from chat or lists). */
@@ -350,7 +354,15 @@ export type RootStackParamList = {
   /** Native Raven-style chat (light UI); not a WebView. */
   RavenUIMessages: undefined;
   /** Header chat icon: your channels & people you message (not the Suppliers tab). */
-  RavenChatInbox: { openWorkspaceId?: string; openChannelId?: string } | undefined;
+  RavenChatInbox:
+    | {
+        openWorkspaceId?: string;
+        openChannelId?: string;
+        openPeerUserId?: string;
+        /** Bumps when deep-linking to the same screen again so open handlers re-run. */
+        openChannelNonce?: number;
+      }
+    | undefined;
   RavenWorkspaceSupplierProfile: {
     supplierDocName: string;
     workspaceAdminUser?: string;

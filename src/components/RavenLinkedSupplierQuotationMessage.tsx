@@ -199,6 +199,34 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
     };
   }, [sqName]);
 
+  useEffect(() => {
+    if (!handled) return;
+    if (handled === 'accepted') {
+      setIsDraft(false);
+      setPayload((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: 'submitted',
+              buyerReviewEligible: false,
+              workflowState: prev.workflowState || 'Accepted',
+            }
+          : prev
+      );
+    } else if (handled === 'rejected') {
+      setPayload((prev) =>
+        prev
+          ? {
+              ...prev,
+              buyerReviewEligible: false,
+              workflowState: prev.workflowState || 'Rejected',
+              erpnextStatus: prev.erpnextStatus || 'Rejected',
+            }
+          : prev
+      );
+    }
+  }, [handled]);
+
   /** Load existing invoice for UI strip only — creation happens when supplier starts payment. */
   useEffect(() => {
     const name = sqName.trim();
@@ -390,6 +418,7 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
     viewerSup === quotationSupplierId;
   const cardShowBuyer =
     showBuyerActions &&
+    !handled &&
     !submitted &&
     !hideBuyerAsQuotationAuthor &&
     payload.buyerReviewEligible !== false;

@@ -28,6 +28,7 @@ import type { OrderItem } from '../types';
 import { formatGhanaCedis } from '../utils/currency';
 import { confirmSalesOrderShareable } from '../utils/salesOrderShareGuard';
 import { getSalesOrderShareUiState } from '../utils/salesOrderShareState';
+import { isSupplierPortalUser } from '../utils/isSupplierPortalUser';
 import {
   ErpDocumentPreviewLayout,
   ErpDocSheet,
@@ -102,7 +103,7 @@ export const OrderDetailsScreen: React.FC = () => {
   const route = useRoute();
   const { t } = useTranslation();
   const { user } = useUserSession();
-  const isSupplierPortal = user?.appMode === 'supplier' || !!user?.supplierId?.trim();
+  const isSupplierPortal = isSupplierPortalUser(user);
   const { orderId, orderNumber } = (route.params as { orderId?: string; orderNumber?: string }) || {};
   const resolvedOrderId = String(orderId || orderNumber || '').trim();
 
@@ -111,6 +112,7 @@ export const OrderDetailsScreen: React.FC = () => {
   const [linkedQuotations, setLinkedQuotations] = useState<Record<string, unknown>[]>([]);
   const [linksLoading, setLinksLoading] = useState(false);
   const [canShareWithSupplier, setCanShareWithSupplier] = useState(false);
+  const [canEditOrder, setCanEditOrder] = useState(false);
   const [shareStateLoading, setShareStateLoading] = useState(true);
   const [addressPickerOpen, setAddressPickerOpen] = useState(false);
   const [savedAddresses, setSavedAddresses] = useState<ErpCustomerAddressRow[]>([]);
@@ -123,19 +125,22 @@ export const OrderDetailsScreen: React.FC = () => {
     const key = String(orderName || resolvedOrderId).trim();
     if (!key) {
       setCanShareWithSupplier(false);
+      setCanEditOrder(false);
       setShareStateLoading(false);
       return;
     }
     setShareStateLoading(true);
     try {
-      const state = await getSalesOrderShareUiState(key);
+      const state = await getSalesOrderShareUiState(key, { viewerIsSupplier: isSupplierPortal });
       setCanShareWithSupplier(state.canShare);
+      setCanEditOrder(state.canEdit);
     } catch {
       setCanShareWithSupplier(fallbackDraft);
+      setCanEditOrder(fallbackDraft);
     } finally {
       setShareStateLoading(false);
     }
-  }, [resolvedOrderId]);
+  }, [resolvedOrderId, isSupplierPortal]);
 
   const loadLinkedQuotations = useCallback(async () => {
     if (!resolvedOrderId) {
@@ -197,6 +202,7 @@ export const OrderDetailsScreen: React.FC = () => {
   });
   const accent = useMemo(() => orderStatusAccent(statusKey), [statusKey]);
   const showSendToSupplier = !!order && canShareWithSupplier && !shareStateLoading && !isSupplierPortal;
+  const showEditOrder = !!order && canEditOrder && !shareStateLoading && !isSupplierPortal;
 
   const copyTracking = useCallback(
     async (value: string) => {
@@ -227,6 +233,13 @@ export const OrderDetailsScreen: React.FC = () => {
     }
     return facts.length ? facts : undefined;
   }, [order]);
+
+  const onEditOrder = useCallback(() => {
+    if (!resolvedOrderId || isSupplierPortal) return;
+    (navigation as { navigate: (name: string, params: object) => void }).navigate('SourcingRequest', {
+      salesOrderName: resolvedOrderId,
+    });
+  }, [navigation, resolvedOrderId, isSupplierPortal]);
 
   const onShareOrder = useCallback(async () => {
     if (!resolvedOrderId) return;
@@ -341,9 +354,11 @@ export const OrderDetailsScreen: React.FC = () => {
                     <ErpDocLineItem
                       key={item.id || `${item.productId}-${item.quantity}`}
                       title={orderItemTitle(item)}
-                      qty={item.quantity}
-                      rate={item.price}
-                      amount={item.price * item.quantity}
+                      detail={t('orderDetails.salesOrderLineDetail', {
+                        qty: item.quantity,
+                        budget: formatGhanaCedis(item.price),
+                      })}
+                      amount={item.price}
                       imageUri={pickLineDisplayImageUri(null, item.product?.images?.[0])}
                     />
                   ))}
@@ -420,6 +435,21 @@ export const OrderDetailsScreen: React.FC = () => {
               </TouchableOpacity>
             ) : null}
           </ErpDocCard>
+
+          {showEditOrder ? (
+            <View style={styles.editSection}>
+              <Text style={styles.sendHint}>{t('orderDetails.editOrderHint')}</Text>
+              <TouchableOpacity
+                style={styles.editButton}
+                onPress={onEditOrder}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+              >
+                <Ionicons name="create-outline" size={20} color={Colors.WINE} />
+                <Text style={styles.editButtonText}>{t('orderDetails.editOrder')}</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
 
           {showSendToSupplier ? (
             <View style={styles.sendSection}>
@@ -635,6 +665,26 @@ const styles = StyleSheet.create({
   sendSection: {
     marginTop: 20,
     paddingHorizontal: 4,
+  },
+  editSection: {
+    marginTop: 20,
+    paddingHorizontal: 4,
+  },
+  editButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: Colors.WHITE,
+    borderRadius: 10,
+    paddingVertical: 16,
+    borderWidth: 1,
+    borderColor: Colors.WINE,
+  },
+  editButtonText: {
+    color: Colors.WINE,
+    fontSize: 16,
+    fontWeight: '700',
   },
   sendHint: {
     fontSize: 14,

@@ -19,6 +19,8 @@ import { OrderHistoryScreen } from '../screens/OrderHistoryScreen';
 import { OrderDetailsScreen } from '../screens/OrderDetailsScreen';
 import { InvoiceDetailsScreen } from '../screens/InvoiceDetailsScreen';
 import { InvoicesPaymentsScreen } from '../screens/InvoicesPaymentsScreen';
+import { CustomerInvoicesScreen } from '../screens/CustomerInvoicesScreen';
+import { CustomerPaymentsScreen } from '../screens/CustomerPaymentsScreen';
 import { PaymentEntryDetailScreen } from '../screens/PaymentEntryDetailScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { EditProfileScreen } from '../screens/EditProfileScreen';
@@ -144,6 +146,8 @@ export const AppNavigator = () => {
         />
         <Stack.Screen name="OrderHistory" component={OrderHistoryScreen} options={{ presentation: 'card' }} />
         <Stack.Screen name="InvoicesPayments" component={InvoicesPaymentsScreen} options={{ presentation: 'card' }} />
+        <Stack.Screen name="CustomerInvoices" component={CustomerInvoicesScreen} options={{ presentation: 'card' }} />
+        <Stack.Screen name="CustomerPayments" component={CustomerPaymentsScreen} options={{ presentation: 'card' }} />
         <Stack.Screen name="OrderDetails" component={OrderDetailsScreen} options={{ presentation: 'card' }} />
         <Stack.Screen name="InvoiceDetails" component={InvoiceDetailsScreen} options={{ presentation: 'card' }} />
         <Stack.Screen name="PaymentEntryDetail" component={PaymentEntryDetailScreen} options={{ presentation: 'card' }} />

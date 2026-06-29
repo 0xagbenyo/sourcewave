@@ -240,13 +240,26 @@ export const ProfileScreen: React.FC = () => {
 
               <TouchableOpacity
                 style={styles.row}
-                onPress={() => nav.navigate('InvoicesPayments')}
+                onPress={() => nav.navigate('CustomerInvoices')}
                 activeOpacity={0.75}
               >
-                <Ionicons name="wallet-outline" size={22} color={Colors.WINE} style={styles.rowIcon} />
+                <Ionicons name="document-text-outline" size={22} color={Colors.WINE} style={styles.rowIcon} />
                 <View style={styles.rowMain}>
-                  <Text style={styles.rowTitle}>{t('profile.invoicesPayments')}</Text>
-                  <Text style={styles.rowSubtitle}>{t('profile.invoicesHint')}</Text>
+                  <Text style={styles.rowTitle}>{t('profile.myInvoices')}</Text>
+                  <Text style={styles.rowSubtitle}>{t('profile.myInvoicesHint')}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={Colors.TEXT_SECONDARY} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.row}
+                onPress={() => nav.navigate('CustomerPayments')}
+                activeOpacity={0.75}
+              >
+                <Ionicons name="card-outline" size={22} color={Colors.WINE} style={styles.rowIcon} />
+                <View style={styles.rowMain}>
+                  <Text style={styles.rowTitle}>{t('profile.paymentHistory')}</Text>
+                  <Text style={styles.rowSubtitle}>{t('profile.paymentHistoryHint')}</Text>
                 </View>
                 <Ionicons name="chevron-forward" size={18} color={Colors.TEXT_SECONDARY} />
               </TouchableOpacity>

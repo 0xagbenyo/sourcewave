@@ -6,6 +6,10 @@
 
 import { encodeErpFileUrl } from '../utils/erpImageUrl';
 import { readErpDocLineImage } from '../utils/erpDocLineImageField';
+import {
+  readSalesOrderLineBudget,
+  readSalesOrderLineRequestedQty,
+} from '../utils/erpSalesOrderLineFields';
 
 import {
   User,
@@ -673,7 +677,7 @@ const mapERPSalesOrderItemToOrderItem = (erpItem: any): OrderItem => {
       id: erpItem.item_code,
       name: itemName,
       description: '',
-      price: erpItem.rate,
+      price: readSalesOrderLineBudget(erpItem),
       category: '',
       subcategory: '',
       brand: '',
@@ -709,8 +713,8 @@ const mapERPSalesOrderItemToOrderItem = (erpItem: any): OrderItem => {
           },
         }
       : {}),
-    quantity: erpItem.qty,
-    price: erpItem.rate,
+    quantity: readSalesOrderLineRequestedQty(erpItem),
+    price: readSalesOrderLineBudget(erpItem),
   };
 };
 

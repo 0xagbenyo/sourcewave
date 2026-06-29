@@ -21,6 +21,12 @@ import {
 } from '../utils/subscriptionPromoCode';
 import { ERP_DOC_LINE_IMAGE_FIELD, readErpDocLineImage } from '../utils/erpDocLineImageField';
 import {
+  ERP_SO_LINE_REQUESTED_QTY_FIELD,
+  ERP_SO_SERIES_COPY_FIELD,
+  readSalesOrderSeriesCopy,
+  salesOrderHeaderPreservePatch,
+} from '../utils/erpSalesOrderLineFields';
+import {
   mapSupplierQuotationLineFilesToItemCodes,
   type ErpDocAttachmentRow,
 } from '../utils/erpLineItemImages';
@@ -2600,12 +2606,32 @@ class ERPNextClient {
       amount?: number;
       description?: string;
       custom_new_image?: string;
+      custom_new_quantity?: number;
     }>;
     delivery_date?: string;
   }): Promise<any> {
     try {
-      const response = await this.client.post(`${API_VERSION}/Sales Order`, orderData);
-      return response.data.data;
+      const payload: Record<string, unknown> = { ...orderData };
+      const seriesCopy = readSalesOrderSeriesCopy(payload as Record<string, unknown>);
+      if (seriesCopy) {
+        payload[ERP_SO_SERIES_COPY_FIELD] = seriesCopy;
+      }
+      const response = await this.client.post(`${API_VERSION}/Sales Order`, payload);
+      const created = response.data.data;
+      const createdSeries = readSalesOrderSeriesCopy(created as Record<string, unknown>);
+      if (!createdSeries && created?.name) {
+        const namingSeries = String(created.naming_series ?? '').trim();
+        if (namingSeries) {
+          try {
+            await this.updateSalesOrder(String(created.name), {
+              [ERP_SO_SERIES_COPY_FIELD]: namingSeries,
+            });
+          } catch {
+            /* optional backfill */
+          }
+        }
+      }
+      return created;
     } catch (error) {
       throw this.handleError(error);
     }
@@ -2727,7 +2753,6 @@ class ERPNextClient {
     if (!fresh) throw new Error('Sales Invoice not found.');
     if (Number(fresh.docstatus) === 1) return fresh;
 
-    const { hasFrappeRavenSession, ravenCallFrappeMethod } = await import('./frappeRavenSession');
     const doc: Record<string, unknown> =
       typeof fresh === 'object' && String((fresh as { name?: unknown }).name || '').trim() === n
         ? ({ ...fresh } as Record<string, unknown>)
@@ -2740,9 +2765,7 @@ class ERPNextClient {
     };
 
     try {
-      const raw = hasFrappeRavenSession()
-        ? await ravenCallFrappeMethod('frappe.client.submit', { doc })
-        : await this.callFrappeMethod('frappe.client.submit', { doc });
+      const raw = await this.callFrappeMethod('frappe.client.submit', { doc });
       const submitted = unwrapSubmit(raw);
       await new Promise((r) => setTimeout(r, 300));
       const verified = await this.getSalesInvoiceRaw(n);
@@ -4367,14 +4390,90 @@ class ERPNextClient {
 
   async updateSalesOrder(orderName: string, data: Record<string, any>): Promise<any> {
     try {
+      const n = String(orderName || '').trim();
+      const patch: Record<string, unknown> = { ...data };
+      const seriesField =
+        String(process.env.EXPO_PUBLIC_ERPNEXT_SO_SERIES_COPY_FIELD || ERP_SO_SERIES_COPY_FIELD).trim() ||
+        ERP_SO_SERIES_COPY_FIELD;
+      if (n && patch[seriesField] == null) {
+        try {
+          const raw = await this.getSalesOrder(n);
+          Object.assign(patch, salesOrderHeaderPreservePatch(raw as Record<string, unknown>));
+        } catch {
+          /* preserve best-effort */
+        }
+      }
       const response = await this.client.put(
-        `${API_VERSION}/Sales Order/${orderName}?ignore_version=1`,
-        data
+        `${API_VERSION}/Sales Order/${n}?ignore_version=1`,
+        patch
       );
       return response.data.data;
     } catch (error) {
       throw this.handleError(error);
     }
+  }
+
+  /** Update a draft Sales Order from the buyer sourcing form (lines, ship-to, line images). */
+  async updateDraftSalesOrder(
+    orderName: string,
+    args: {
+      shipping_address_name?: string;
+      items: Array<{
+        item_code: string;
+        qty: number;
+        rate: number;
+        amount: number;
+        description: string;
+        custom_new_quantity: number;
+        custom_new_image?: string;
+      }>;
+    }
+  ): Promise<{ name: string }> {
+    const n = String(orderName || '').trim();
+    if (!n) throw new Error('Order name required');
+
+    const raw = await this.getSalesOrder(n);
+    const ds = Number(raw?.docstatus ?? 0);
+    if (ds !== 0) {
+      const err = new Error('SALES_ORDER_NOT_EDITABLE');
+      (err as { code?: string }).code = 'SALES_ORDER_NOT_EDITABLE';
+      throw err;
+    }
+    const quotation = String(raw?.[this.salesOrderQuotationLinkField()] || '').trim();
+    if (quotation) {
+      const err = new Error('SALES_ORDER_NOT_EDITABLE');
+      (err as { code?: string }).code = 'SALES_ORDER_NOT_EDITABLE';
+      throw err;
+    }
+
+    const lines = Array.isArray(args.items) ? args.items : [];
+    if (lines.length === 0) {
+      throw new Error('Add at least one line item.');
+    }
+
+    const itemRows: Record<string, unknown>[] = lines.map((l) => {
+      const row: Record<string, unknown> = {
+        item_code: String(l.item_code || '').trim(),
+        qty: 1,
+        rate: Number(l.rate),
+        amount: Number(l.amount),
+        description: String(l.description || '').trim(),
+        [ERP_SO_LINE_REQUESTED_QTY_FIELD]: Math.max(1, Math.floor(Number(l.custom_new_quantity)) || 1),
+      };
+      const img = String(l.custom_new_image || '').trim();
+      if (img) row[ERP_DOC_LINE_IMAGE_FIELD] = img;
+      return row;
+    });
+
+    const payload: Record<string, unknown> = {
+      items: itemRows,
+      ...salesOrderHeaderPreservePatch(raw as Record<string, unknown>),
+    };
+    const shipTo = String(args.shipping_address_name || '').trim();
+    if (shipTo) payload.shipping_address_name = shipTo;
+
+    await this.updateSalesOrder(n, payload);
+    return { name: n };
   }
 
   /**
@@ -5105,14 +5204,26 @@ class ERPNextClient {
 
       const erpError = raw as ERPNextError;
       
-      // Try to extract message from _server_messages
+      // Try to extract message from _server_messages (prefer real errors over info toasts)
       if (erpError._server_messages) {
         try {
           const serverMessages = JSON.parse(erpError._server_messages);
           if (Array.isArray(serverMessages) && serverMessages.length > 0) {
+            let best: string | null = null;
+            for (const entry of serverMessages) {
+              const parsed = typeof entry === 'string' ? JSON.parse(entry) : entry;
+              const msg = String(parsed?.message || '')
+                .replace(/<[^>]+>/g, '')
+                .trim();
+              if (!msg) continue;
+              if (/^Error:/i.test(msg) || /mandatory|missing|required/i.test(msg)) {
+                best = msg;
+              }
+            }
+            if (best) return new Error(best);
             const firstMessage = JSON.parse(serverMessages[0]);
             if (firstMessage?.message) {
-              return new Error(firstMessage.message);
+              return new Error(String(firstMessage.message).replace(/<[^>]+>/g, '').trim());
             }
           }
         } catch (parseError) {
@@ -5125,6 +5236,10 @@ class ERPNextClient {
             }
           }
         }
+      }
+
+      if (erpError.exception) {
+        return new Error(String(erpError.exception).trim());
       }
       
       const st = error.response?.status;
@@ -6283,9 +6398,25 @@ class ERPNextClient {
     throw this.handleError(lastError);
   }
 
-  async submitSupplierQuotation(name: string): Promise<any> {
+  async submitSupplierQuotation(
+    name: string,
+    opts?: { billToFrappeUserId?: string | null }
+  ): Promise<any> {
     const n = String(name || '').trim();
     if (!n) throw new Error('Quotation name required');
+
+    const finishAcceptance = async (fresh?: Record<string, unknown> | null) => {
+      await this.linkSalesOrderAfterQuotationAcceptance(n, fresh);
+      const invResult = await this.ensureSalesInvoiceForSupplierQuotation(n, opts);
+      if (!invResult.invoice) {
+        const err = new Error(
+          invResult.error || 'Sales invoice could not be created after accepting this quotation.'
+        );
+        (err as { code?: string }).code = 'SALES_INVOICE_AFTER_ACCEPT_FAILED';
+        throw err;
+      }
+      return invResult.invoice;
+    };
 
     const fresh0 = (await this.getSupplierQuotationByName(n)) as Record<string, unknown> | null;
     const wf = String(fresh0?.workflow_state ?? '').trim();
@@ -6306,7 +6437,7 @@ class ERPNextClient {
         const ds = fresh1?.docstatus != null ? Number(fresh1.docstatus) : 0;
         const result =
           Number.isFinite(ds) && ds === 0 ? await this.submitSupplierQuotationDocument(n) : applied;
-        await this.linkSalesOrderAfterQuotationAcceptance(n, fresh1);
+        await finishAcceptance(fresh1);
         return result;
       }
       const { hasFrappeRavenSession } = await import('./frappeRavenSession');
@@ -6317,7 +6448,7 @@ class ERPNextClient {
     }
 
     const result = await this.submitSupplierQuotationDocument(n);
-    await this.linkSalesOrderAfterQuotationAcceptance(n);
+    await finishAcceptance();
     return result;
   }
 
@@ -6328,6 +6459,12 @@ class ERPNextClient {
   private salesInvoiceSupplierQuotationLinkField(): string {
     const f = String(process.env.EXPO_PUBLIC_ERPNEXT_SI_QUOTATION_LINK_FIELD || 'custom_quotation').trim();
     return f || 'custom_quotation';
+  }
+
+  /** Sales Invoice Link → Supplier (default **`custom_supplier`**). */
+  private salesInvoiceSupplierLinkField(): string {
+    const f = String(process.env.EXPO_PUBLIC_ERPNEXT_SI_SUPPLIER_LINK_FIELD || 'custom_supplier').trim();
+    return f || 'custom_supplier';
   }
 
   /** Supplier Quotation Link → Customer (default **`custom_customer`**). */
@@ -6731,6 +6868,8 @@ class ERPNextClient {
       'payment_type',
       'docstatus',
       'status',
+      'mode_of_payment',
+      'modified',
     ];
 
     const passesDate = (pe: any): boolean => {
@@ -7263,7 +7402,8 @@ class ERPNextClient {
   }
 
   /**
-   * Create and **submit** a Sales Invoice from a submitted Supplier Quotation, setting **`custom_quotation`**.
+   * Create and **submit** a Sales Invoice from a submitted Supplier Quotation, setting **`custom_quotation`**
+   * and **`custom_supplier`** (from the quotation's supplier).
    * Throws if quotation is not submitted (`docstatus !== 1`) or lines are empty.
    */
   async createSalesInvoiceFromSupplierQuotation(
@@ -7328,6 +7468,8 @@ class ERPNextClient {
     const currency = String(sq.currency || 'GHS').trim() || 'GHS';
 
     const linkField = this.salesInvoiceSupplierQuotationLinkField();
+    const supplierField = this.salesInvoiceSupplierLinkField();
+    const supplier = String((sq as { supplier?: unknown }).supplier || '').trim();
     const payload: Record<string, unknown> = {
       doctype: 'Sales Invoice',
       company,
@@ -7342,15 +7484,13 @@ class ERPNextClient {
       })),
       [linkField]: n,
     };
-
-    const { hasFrappeRavenSession, ravenCreateResourceDoc } = await import('./frappeRavenSession');
-    let inv: any;
-    if (hasFrappeRavenSession()) {
-      inv = await ravenCreateResourceDoc('Sales Invoice', payload);
-    } else {
-      const res = await this.client.post(`${API_VERSION}/Sales Invoice`, payload);
-      inv = res.data?.data;
+    if (supplier) {
+      payload[supplierField] = supplier;
     }
+
+    // Sales Invoice create/submit runs as the integration API user — buyers in chat lack SI Create.
+    const res = await this.client.post(`${API_VERSION}/Sales Invoice`, payload);
+    const inv = res.data?.data;
     const invName = inv?.name != null ? String(inv.name).trim() : '';
     if (!invName) throw new Error('ERPNext did not return a Sales Invoice name.');
 
@@ -7426,6 +7566,440 @@ class ERPNextClient {
   }
 
 
+  private resolveErpSiteUrl(pathOrUrl: string): string {
+    const u = String(pathOrUrl || '').trim();
+    if (!u) return '';
+    if (/^https?:\/\//i.test(u)) return u;
+    const base = String(this.config.baseUrl || ERPNEXT_BASE_URL || '').replace(/\/$/, '');
+    return `${base}${u.startsWith('/') ? u : `/${u}`}`;
+  }
+
+  private stripFrappeDocMetaForCreate(d: Record<string, unknown>): Record<string, unknown> {
+    const o = { ...d };
+    for (const k of Object.keys(o)) {
+      if (k.startsWith('__')) delete o[k];
+    }
+    delete o.name;
+    delete o.owner;
+    delete o.creation;
+    delete o.modified;
+    delete o.modified_by;
+    return o;
+  }
+
+  private parseGetPaymentEntryDoc(raw: unknown): Record<string, unknown> {
+    const msg = raw != null && typeof raw === 'object' && 'message' in raw ? (raw as { message: unknown }).message : raw;
+    let peDoc: unknown = Array.isArray(msg) ? msg[0] : msg;
+    if (peDoc != null && typeof peDoc === 'object' && (peDoc as { docs?: unknown[] }).docs) {
+      const docs = (peDoc as { docs: unknown[] }).docs;
+      if (Array.isArray(docs) && docs[0]) peDoc = docs[0];
+    }
+    if (!peDoc || typeof peDoc !== 'object') {
+      throw new Error(
+        'Could not build payment entry. Check ERPNext accounts permissions and Payment Entry defaults for this company.'
+      );
+    }
+    return peDoc as Record<string, unknown>;
+  }
+
+  private allocatePaymentEntryToSalesInvoice(
+    peDoc: Record<string, unknown>,
+    invName: string,
+    pay: number
+  ): Record<string, unknown> {
+    const doc: Record<string, unknown> = { ...peDoc, paid_amount: pay, received_amount: pay };
+    const refs = doc['references'];
+    if (Array.isArray(refs)) {
+      doc['references'] = (refs as Array<Record<string, unknown>>).map((row) => {
+        if (
+          String(row?.reference_doctype || '') === 'Sales Invoice' &&
+          String(row?.reference_name || '') === invName
+        ) {
+          return { ...row, allocated_amount: pay };
+        }
+        return row;
+      });
+    }
+    return doc;
+  }
+
+  private async findPaymentEntryByPaystackReference(reference: string): Promise<any | null> {
+    const ref = String(reference || '').trim();
+    if (!ref) return null;
+    try {
+      const rows = await this.listResourceRows('Payment Entry', {
+        filters: [['custom_paystack_reference', '=', ref]],
+        fields: ['name'],
+        limit_page_length: 1,
+      });
+      const name = rows?.[0]?.name != null ? String(rows[0].name).trim() : '';
+      if (name) return await this.getPaymentEntry(name);
+    } catch {
+      /* custom_paystack_reference may not exist on this site */
+    }
+    return null;
+  }
+
+  /**
+   * Verify a successful Paystack charge (subscription-style) and create + submit a **Payment Entry**
+   * allocated to the Sales Invoice. Idempotent per Paystack reference.
+   */
+  async recordPaystackPaymentAgainstSalesInvoice(args: {
+    salesInvoiceName: string;
+    paystackReference: string;
+  }): Promise<any> {
+    const invName = String(args.salesInvoiceName || '').trim();
+    const ref = String(args.paystackReference || '').trim();
+    if (!invName) throw new Error('Invoice name required');
+    if (!ref) throw new Error('Payment reference is missing.');
+
+    const existing = await this.findPaymentEntryByPaystackReference(ref);
+    if (existing?.name) return existing;
+
+    const { verifyPaystackPayment, paystackVerifyPaymentChannel } = await import('./paystack');
+    const verify = await verifyPaystackPayment(ref);
+    if (!verify?.status || String(verify.data?.status || '').trim().toLowerCase() !== 'success') {
+      throw new Error(
+        String(verify.data?.gateway_response || '').trim() || 'Paystack payment is not successful yet.'
+      );
+    }
+
+    const paidGhs = Number(verify.data?.amount) / 100;
+    if (!Number.isFinite(paidGhs) || paidGhs <= 0) {
+      throw new Error('Paystack returned an invalid payment amount.');
+    }
+
+    const inv = await this.getSalesInvoiceRaw(invName);
+    if (!inv) throw new Error('Sales Invoice not found.');
+    if (Number(inv.docstatus) !== 1) {
+      throw new Error('This invoice must be submitted before payment can be recorded.');
+    }
+
+    const outstanding = this.effectiveSalesInvoiceOutstanding(inv as Record<string, unknown>);
+    if (!Number.isFinite(outstanding) || outstanding <= 0) {
+      throw new Error('This invoice has no outstanding balance.');
+    }
+
+    const pay = Math.min(paidGhs, outstanding);
+    if (pay <= 0) throw new Error('Nothing to allocate to this invoice.');
+
+    const channel = paystackVerifyPaymentChannel(verify.data);
+    const modeOfPayment = await this.resolveModeOfPaymentFromPaystackChannel(channel);
+
+    const methodPath = 'erpnext.accounts.doctype.payment_entry.payment_entry.get_payment_entry';
+    const raw = await this.callFrappeMethod(methodPath, {
+      dt: 'Sales Invoice',
+      dn: invName,
+      party_amount: pay,
+    });
+
+    let peDoc = this.parseGetPaymentEntryDoc(raw);
+    peDoc = this.allocatePaymentEntryToSalesInvoice(peDoc, invName, pay);
+
+    const toSave = this.stripFrappeDocMetaForCreate(peDoc);
+    if (modeOfPayment) toSave.mode_of_payment = modeOfPayment;
+    toSave.custom_paystack_reference = ref;
+    toSave.custom_paystack_status = String(verify.data.status || 'success');
+    const gatewayResponse = String(verify.data.gateway_response || '').trim();
+    if (gatewayResponse) toSave.custom_display_text = gatewayResponse;
+
+    const res = await this.client.post(`${API_VERSION}/Payment Entry`, toSave);
+    const saved = res.data?.data;
+    const peName = saved?.name != null ? String(saved.name).trim() : '';
+    if (!peName) throw new Error('ERPNext did not return a Payment Entry name.');
+
+    await this.submitPaymentEntry(peName);
+    return await this.getPaymentEntry(peName);
+  }
+
+  /** True when a **Mode of Payment** document exists (Link target for Payment Request). */
+  private async modeOfPaymentExists(name: string): Promise<boolean> {
+    const n = String(name || '').trim();
+    if (!n) return false;
+    try {
+      const rows = await this.listResourceRows('Mode of Payment', {
+        filters: [['name', '=', n]],
+        fields: ['name'],
+        limit_page_length: 1,
+      });
+      return rows.some((row) => String(row?.name || '').trim() === n);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Pick the first **Mode of Payment** that exists in ERPNext from the candidate list.
+   */
+  private async resolveModeOfPaymentFromCandidates(candidates: string[]): Promise<string | undefined> {
+    const seen = new Set<string>();
+    for (const candidate of candidates) {
+      const n = String(candidate || '').trim();
+      if (!n || seen.has(n)) continue;
+      seen.add(n);
+      if (await this.modeOfPaymentExists(n)) return n;
+    }
+    return undefined;
+  }
+
+  /** Resolve ERPNext **Mode of Payment** from Paystack `channel` after a successful charge. */
+  private async resolveModeOfPaymentFromPaystackChannel(channel: string): Promise<string | undefined> {
+    const { paystackChannelToModeOfPaymentCandidates, erpPaystackModeOfPayment } = await import(
+      '../constants/invoicePaystack'
+    );
+    const candidates = [...paystackChannelToModeOfPaymentCandidates(channel)];
+    const envMode = erpPaystackModeOfPayment();
+    if (envMode) candidates.unshift(envMode);
+    return this.resolveModeOfPaymentFromCandidates(candidates);
+  }
+
+  private async setIntegrationDocFieldValue(
+    doctype: string,
+    docName: string,
+    fieldname: string,
+    value: string
+  ): Promise<void> {
+    const dt = String(doctype || '').trim();
+    const name = String(docName || '').trim();
+    const field = String(fieldname || '').trim();
+    const val = String(value ?? '').trim();
+    if (!dt || !name || !field || !val) return;
+    await this.callFrappeMethod('frappe.client.set_value', {
+      doctype: dt,
+      name,
+      fieldname: field,
+      value: val,
+    });
+  }
+
+  /**
+   * After Paystack reports **success**, set **mode_of_payment** on the linked **Payment Entry**
+   * (and Payment Request when still updatable) from the Paystack channel.
+   */
+  async applyModeOfPaymentFromPaystackVerification(args: {
+    paystackReference: string;
+    salesInvoiceName: string;
+    paymentRequestName?: string;
+  }): Promise<{ modeOfPayment: string | null; paymentEntryName: string | null }> {
+    const ref = String(args.paystackReference || '').trim();
+    const siName = String(args.salesInvoiceName || '').trim();
+    if (!ref || !siName) return { modeOfPayment: null, paymentEntryName: null };
+
+    const { verifyPaystackPayment, paystackVerifyPaymentChannel } = await import('./paystack');
+    let verify: Awaited<ReturnType<typeof verifyPaystackPayment>>;
+    try {
+      verify = await verifyPaystackPayment(ref);
+    } catch (e) {
+      console.warn('[Paystack PR] verify failed — cannot derive mode of payment:', e);
+      return { modeOfPayment: null, paymentEntryName: null };
+    }
+
+    if (!verify?.status || String(verify.data?.status || '').trim().toLowerCase() !== 'success') {
+      return { modeOfPayment: null, paymentEntryName: null };
+    }
+
+    const channel = paystackVerifyPaymentChannel(verify.data);
+    const mode = await this.resolveModeOfPaymentFromPaystackChannel(channel);
+    if (!mode) {
+      console.warn('[Paystack PR] no ERPNext Mode of Payment matched Paystack channel:', channel || '(unknown)');
+      return { modeOfPayment: null, paymentEntryName: null };
+    }
+
+    const prName = String(args.paymentRequestName || '').trim();
+    if (prName) {
+      try {
+        await this.setIntegrationDocFieldValue('Payment Request', prName, 'mode_of_payment', mode);
+      } catch {
+        /* PR is often submitted before pay — PE is the main target */
+      }
+    }
+
+    let paymentEntryName: string | null = null;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const entries = await this.listPaymentEntriesForSalesInvoice(siName, { limit: 8 });
+      const target =
+        entries.find((pe) => !String(pe?.mode_of_payment || '').trim()) ||
+        entries.find((pe) => String(pe?.mode_of_payment || '').trim() !== mode) ||
+        entries[0];
+      const peName = target?.name != null ? String(target.name).trim() : '';
+      if (peName) {
+        paymentEntryName = peName;
+        try {
+          await this.setIntegrationDocFieldValue('Payment Entry', peName, 'mode_of_payment', mode);
+          return { modeOfPayment: mode, paymentEntryName: peName };
+        } catch (e) {
+          console.warn('[Paystack PR] could not set Payment Entry mode_of_payment:', e);
+        }
+      }
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+
+    return { modeOfPayment: mode, paymentEntryName };
+  }
+
+  /**
+   * Poll Payment Request until paid, then apply **mode_of_payment** from Paystack verify response.
+   */
+  async confirmPaystackSalesInvoicePayment(args: {
+    paymentRequestName: string;
+    paystackReference: string;
+    salesInvoiceName: string;
+    timeoutMs?: number;
+    intervalMs?: number;
+  }): Promise<Record<string, unknown> | null> {
+    const pr = await this.waitForPaymentRequestSettled(args.paymentRequestName, {
+      timeoutMs: args.timeoutMs ?? 120_000,
+      intervalMs: args.intervalMs ?? 2_000,
+    });
+    const status = String(pr?.status || '').trim().toLowerCase();
+    if (status === 'paid' || status === 'partially paid') {
+      const ref =
+        String(args.paystackReference || '').trim() ||
+        String(pr?.name || args.paymentRequestName || '').trim();
+      await this.applyModeOfPaymentFromPaystackVerification({
+        paystackReference: ref,
+        salesInvoiceName: args.salesInvoiceName,
+        paymentRequestName: args.paymentRequestName,
+      });
+    }
+    return pr;
+  }
+
+  /** Payment Request linked to a Sales Invoice (Paystack / gateway checkout). */
+  async getPaymentRequest(paymentRequestName: string): Promise<Record<string, unknown> | null> {
+    const name = String(paymentRequestName || '').trim();
+    if (!name) return null;
+    try {
+      const response = await this.client.get(`${API_VERSION}/Payment Request/${encodeURIComponent(name)}`);
+      return (response.data?.data as Record<string, unknown>) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Create a submitted ERPNext **Payment Request** for a partial Paystack payment against a Sales Invoice.
+   * Mirrors ERPNext **Create → Payment** on the invoice (Paystack gateway); returns the hosted checkout URL.
+   */
+  async initiatePaystackPaymentRequestForSalesInvoice(args: {
+    salesInvoiceName: string;
+    amount: number;
+    payerEmail: string;
+    paymentGateway?: string;
+  }): Promise<{
+    paymentRequestName: string;
+    paymentUrl: string;
+    amount: number;
+    currency: string;
+  }> {
+    const { erpPaystackPaymentGateway } = await import('../constants/invoicePaystack');
+    const invName = String(args.salesInvoiceName || '').trim();
+    const payerEmail = String(args.payerEmail || '').trim();
+    const gateway = String(args.paymentGateway || erpPaystackPaymentGateway()).trim();
+    const amt = Number(args.amount);
+
+    if (!invName) throw new Error('Invoice name required');
+    if (!payerEmail) throw new Error('Sign in with your email to pay this invoice.');
+    if (!Number.isFinite(amt) || amt <= 0) throw new Error('Enter an amount greater than zero.');
+
+    const inv = await this.getSalesInvoiceRaw(invName);
+    if (!inv) throw new Error('Sales Invoice not found.');
+    if (Number(inv.docstatus) !== 1) throw new Error('This invoice must be submitted before you can pay.');
+
+    const outstanding = this.effectiveSalesInvoiceOutstanding(inv as Record<string, unknown>);
+    if (!Number.isFinite(outstanding) || outstanding <= 0) {
+      throw new Error('This invoice has no outstanding balance.');
+    }
+
+    const pay = Math.min(amt, outstanding);
+    if (pay <= 0) throw new Error('Nothing to pay on this invoice.');
+
+    const company = String(inv.company || process.env.EXPO_PUBLIC_ERPNEXT_DEFAULT_COMPANY || '').trim();
+    if (!company) throw new Error('Invoice company is missing.');
+
+    const prMethod = 'erpnext.accounts.doctype.payment_request.payment_request.make_payment_request';
+    // Mode of payment is set after Paystack success (from verify `channel`), not at checkout start.
+    const raw = await this.callFrappeMethod(prMethod, {
+      dt: 'Sales Invoice',
+      dn: invName,
+      company,
+      payment_gateway_account: { payment_gateway: gateway, company },
+      mode_of_payment: '',
+      recipient_id: payerEmail,
+      mute_email: 1,
+      return_doc: 1,
+      submit_doc: 0,
+    });
+
+    const msg = raw != null && typeof raw === 'object' && 'message' in raw ? (raw as { message: unknown }).message : raw;
+    let prDoc: Record<string, unknown> | null =
+      msg != null && typeof msg === 'object' && !Array.isArray(msg) ? (msg as Record<string, unknown>) : null;
+    if (Array.isArray(msg) && msg[0] && typeof msg[0] === 'object') {
+      prDoc = msg[0] as Record<string, unknown>;
+    }
+    const prName = String(prDoc?.name || '').trim();
+    if (!prName) {
+      throw new Error(
+        'Could not create a payment request. Check Paystack gateway settings and Payment Gateway Account for this company.'
+      );
+    }
+
+    const draft = (await this.getPaymentRequest(prName)) || prDoc;
+    const toSave = {
+      ...draft,
+      doctype: 'Payment Request',
+      name: prName,
+      grand_total: pay,
+      outstanding_amount: pay,
+    };
+
+    await this.callFrappeMethod('frappe.client.save', { doc: toSave });
+    const saved = await this.getPaymentRequest(prName);
+    if (!saved) throw new Error('Payment request could not be saved.');
+
+    await this.callFrappeMethod('frappe.client.submit', { doc: saved });
+
+    const submitted = await this.getPaymentRequest(prName);
+    if (!submitted) throw new Error('Payment request could not be submitted.');
+
+    let paymentUrl = String(submitted.payment_url || '').trim();
+    if (!paymentUrl) {
+      throw new Error(
+        'Paystack checkout URL was not generated. Confirm Paystack is enabled under Payment Gateway Account.'
+      );
+    }
+    paymentUrl = this.resolveErpSiteUrl(paymentUrl);
+
+    const currency = String(submitted.currency || inv.currency || 'GHS').trim() || 'GHS';
+    return {
+      paymentRequestName: prName,
+      paymentUrl,
+      amount: pay,
+      currency,
+    };
+  }
+
+  /** Poll Payment Request until paid or timeout (Paystack webhook updates ERPNext). */
+  async waitForPaymentRequestSettled(
+    paymentRequestName: string,
+    options?: { timeoutMs?: number; intervalMs?: number }
+  ): Promise<Record<string, unknown> | null> {
+    const name = String(paymentRequestName || '').trim();
+    if (!name) return null;
+    const timeoutMs = options?.timeoutMs ?? 120_000;
+    const intervalMs = options?.intervalMs ?? 3_000;
+    const deadline = Date.now() + timeoutMs;
+    const paidStatuses = new Set(['paid', 'partially paid']);
+
+    while (Date.now() < deadline) {
+      const pr = await this.getPaymentRequest(name);
+      const status = String(pr?.status || '').trim().toLowerCase();
+      if (paidStatuses.has(status)) return pr;
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    return this.getPaymentRequest(name);
+  }
+
   /**
    * Record a **Receive** payment against a submitted Sales Invoice (partial or full).
    * Uses ERPNext **`get_payment_entry`** to fill bank / GL accounts, then creates and submits the Payment Entry.
@@ -7458,40 +8032,9 @@ class ERPNextClient {
       party_amount: pay,
     });
 
-    const msg = raw != null && typeof raw === 'object' && 'message' in raw ? (raw as any).message : raw;
-    let peDoc: any = Array.isArray(msg) ? msg[0] : msg;
-    if (peDoc != null && typeof peDoc === 'object' && peDoc.docs && Array.isArray(peDoc.docs)) {
-      peDoc = peDoc.docs[0];
-    }
-    if (!peDoc || typeof peDoc !== 'object') {
-      throw new Error(
-        'Could not build payment entry. Check ERPNext accounts permissions and Payment Entry defaults for this company.'
-      );
-    }
-
-    peDoc.paid_amount = pay;
-    peDoc.received_amount = pay;
-    if (Array.isArray(peDoc.references)) {
-      for (const row of peDoc.references) {
-        if (String(row?.reference_doctype || '') === 'Sales Invoice' && String(row?.reference_name || '') === invName) {
-          row.allocated_amount = pay;
-        }
-      }
-    }
-
-    const stripMeta = (d: Record<string, unknown>) => {
-      const o = { ...d };
-      for (const k of Object.keys(o)) {
-        if (k.startsWith('__')) delete o[k];
-      }
-      delete o.name;
-      delete o.owner;
-      delete o.creation;
-      delete o.modified;
-      delete o.modified_by;
-      return o;
-    };
-    const toSave = stripMeta(peDoc as Record<string, unknown>);
+    let peDoc = this.parseGetPaymentEntryDoc(raw);
+    peDoc = this.allocatePaymentEntryToSalesInvoice(peDoc, invName, pay);
+    const toSave = this.stripFrappeDocMetaForCreate(peDoc);
 
     const { hasFrappeRavenSession, ravenCreateResourceDoc } = await import('./frappeRavenSession');
     let saved: any;
