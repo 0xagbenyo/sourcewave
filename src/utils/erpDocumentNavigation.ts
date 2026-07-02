@@ -56,3 +56,21 @@ export function navigateToSalesOrderDetail(
   }
   navigation.navigate('OrderDetails', params);
 }
+
+export function navigateToDeliveryNoteDetail(
+  navigation: Nav,
+  deliveryNoteName: string,
+  isSupplierPortal: boolean
+): void {
+  const name = deliveryNoteName.trim();
+  if (!name) return;
+  if (isSupplierPortal) {
+    navigation.navigate('SupplierDeliveryNoteDetail', { name });
+    return;
+  }
+  if (rootNavigationRef.isReady()) {
+    rootNavigationRef.navigate('DeliveryNoteDetail', { deliveryNoteId: name });
+    return;
+  }
+  navigation.navigate('DeliveryNoteDetail', { deliveryNoteId: name });
+}

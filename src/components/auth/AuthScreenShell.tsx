@@ -20,11 +20,11 @@ import { Spacing } from '../../constants/spacing';
 const hairline = StyleSheet.hairlineWidth;
 
 type AuthScreenShellProps = {
-  heroTitle: string;
+  heroTitle?: string;
   heroSubtitle?: string;
   heroLogo?: ImageSourcePropType;
-  /** Show SOURCEWAVE GH wordmark above the hero logo (sign-in). */
-  showBrandAboveHeroLogo?: boolean;
+  /** Show SOURCEWAVE GH wordmark below the hero logo (sign-in). */
+  showBrandBelowHeroLogo?: boolean;
   showBack?: boolean;
   onBack?: () => void;
   /** Vertically center the form; horizontally center headings. */
@@ -38,7 +38,7 @@ export const AuthScreenShell: React.FC<AuthScreenShellProps> = ({
   heroTitle,
   heroSubtitle,
   heroLogo,
-  showBrandAboveHeroLogo,
+  showBrandBelowHeroLogo,
   showBack,
   onBack,
   centered,
@@ -89,20 +89,22 @@ export const AuthScreenShell: React.FC<AuthScreenShellProps> = ({
             <View style={[styles.body, centered && styles.bodyCentered]}>
               {heroLogo ? (
                 <>
-                  {showBrandAboveHeroLogo ? (
-                    <Text style={[styles.heroBrand, centered && styles.heroBrandCentered]}>
-                      SOURCEWAVE<Text style={styles.brandSuffix}> GH</Text>
-                    </Text>
-                  ) : null}
                   <Image
                     source={heroLogo}
                     style={[styles.heroLogo, centered && styles.heroLogoCentered]}
                     resizeMode="contain"
                     accessibilityLabel="SourceWave"
                   />
+                  {showBrandBelowHeroLogo ? (
+                    <Text style={[styles.heroBrandBelow, centered && styles.heroBrandCentered]}>
+                      SOURCEWAVE<Text style={styles.heroBrandSuffix}> GH</Text>
+                    </Text>
+                  ) : null}
                 </>
               ) : null}
-              <Text style={[styles.title, centered && styles.titleCentered]}>{heroTitle}</Text>
+              {heroTitle ? (
+                <Text style={[styles.title, centered && styles.titleCentered]}>{heroTitle}</Text>
+              ) : null}
               {heroSubtitle ? (
                 <Text style={[styles.subtitle, centered && styles.subtitleCentered]}>{heroSubtitle}</Text>
               ) : null}
@@ -275,21 +277,27 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 400,
   },
-  heroBrand: {
-    fontSize: 14,
-    fontWeight: '800',
+  heroBrandBelow: {
+    fontSize: 10,
+    fontWeight: '700',
     color: Colors.BRAND_NAVY,
-    letterSpacing: 1.2,
-    marginBottom: Spacing.SM,
+    letterSpacing: 0.9,
+    marginTop: 4,
+    marginBottom: Spacing.LG,
   },
-  heroBrandCentered: {
-    alignSelf: 'center',
-    textAlign: 'center',
+  heroBrandSuffix: {
+    fontWeight: '600',
+    color: Colors.TEXT_SECONDARY,
+    letterSpacing: 0,
   },
   heroLogo: {
     width: 200,
     height: 72,
-    marginBottom: Spacing.MD,
+    marginBottom: 0,
+  },
+  heroBrandCentered: {
+    alignSelf: 'center',
+    textAlign: 'center',
   },
   heroLogoCentered: {
     alignSelf: 'center',

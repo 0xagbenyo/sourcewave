@@ -1,3 +1,4 @@
+import { isLocalMediaUri } from './localMediaUri';
 import { encodeErpFileUrl } from './erpImageUrl';
 import { readErpDocLineImage } from './erpDocLineImageField';
 
@@ -9,9 +10,9 @@ export function pickLineDisplayImageUri(
   fallbackImage?: string | null
 ): string | undefined {
   const sup = String(supplierImage || '').trim();
-  if (sup) return encodeErpFileUrl(sup) || sup;
+  if (sup) return isLocalMediaUri(sup) ? sup : encodeErpFileUrl(sup) || sup;
   const fb = String(fallbackImage || '').trim();
-  if (fb) return encodeErpFileUrl(fb) || fb;
+  if (fb) return isLocalMediaUri(fb) ? fb : encodeErpFileUrl(fb) || fb;
   return undefined;
 }
 

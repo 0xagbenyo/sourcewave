@@ -58,13 +58,19 @@ type Props = {
   maxAmount: number;
   onClose: () => void;
   onSuccess: () => void;
+  /** When `delivery_note`, `invoiceName` is the Delivery Note id and only the delivery fee is paid. */
+  paymentKind?: 'sales_invoice' | 'delivery_note';
+  /** Lock checkout to `maxAmount` (delivery fee only). */
+  lockAmount?: boolean;
 };
 
-function invoicePaystackReference(invoiceName: string): string {
-  const safe = String(invoiceName || '')
+function paystackDocReference(kind: 'sales_invoice' | 'delivery_note', docName: string): string {
+  const safe = String(docName || '')
     .replace(/[^a-zA-Z0-9-]/g, '')
     .slice(0, 24);
-  return `SW-INV-${safe || 'SI'}-${Date.now()}`;
+  const prefix = kind === 'delivery_note' ? 'SW-DN' : 'SW-INV';
+  const fallback = kind === 'delivery_note' ? 'DN' : 'SI';
+  return `${prefix}-${safe || fallback}-${Date.now()}`;
 }
 
 function formatMoney(amount: number, currency: string): string {
@@ -84,8 +90,11 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
   maxAmount,
   onClose,
   onSuccess,
+  paymentKind = 'sales_invoice',
+  lockAmount = false,
 }) => {
   const { t } = useTranslation();
+  const isDelivery = paymentKind === 'delivery_note';
   const { user } = useUserSession();
   const insets = useSafeAreaInsets();
 
@@ -104,7 +113,7 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
   } | null>(null);
   const [cardCheckoutLoading, setCardCheckoutLoading] = useState(false);
   const [cardCheckoutError, setCardCheckoutError] = useState<string | null>(null);
-  const [cardInitKey, setCardInitKey] = useState(0);
+  const [cardPaymentStarted, setCardPaymentStarted] = useState(false);
 
   const cardSessionCacheRef = useRef<{
     key: string;
@@ -115,7 +124,6 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
     reference: string;
     amountGhs: number;
   } | null> | null>(null);
-  const momoAutoPayRef = useRef(false);
 
   const defaultAmount = useMemo(() => {
     const max = Number.isFinite(maxAmount) ? maxAmount : 0;
@@ -125,6 +133,10 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
   }, [maxAmount]);
 
   const payAmountGhs = useMemo(() => {
+    if (lockAmount) {
+      const max = Number.isFinite(maxAmount) ? maxAmount : 0;
+      return max > 0 ? max : 0;
+    }
     const v = parseFloat(String(amountText).replace(/,/g, '').trim());
     if (!Number.isFinite(v) || v <= 0) return 0;
     if (maxAmount > 0 && maxAmount >= PAYSTACK_MIN_CHARGE_GHS) return Math.min(v, maxAmount);
@@ -132,7 +144,7 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
       return Math.max(v, PAYSTACK_MIN_CHARGE_GHS);
     }
     return v;
-  }, [amountText, maxAmount]);
+  }, [amountText, maxAmount, lockAmount]);
 
   const lowOutstanding = maxAmount > 0 && maxAmount < PAYSTACK_MIN_CHARGE_GHS;
   const paystackReady = getPaystackConfigStatus().configured;
@@ -167,6 +179,7 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
     setCardCheckoutError(null);
     cardSessionCacheRef.current = null;
     cardInitPromiseRef.current = null;
+    setCardPaymentStarted(false);
   }, [defaultAmount]);
 
   useEffect(() => {
@@ -179,7 +192,7 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
       setCardCheckoutError(null);
       cardSessionCacheRef.current = null;
       cardInitPromiseRef.current = null;
-      momoAutoPayRef.current = false;
+      setCardPaymentStarted(false);
     }
   }, [visible, defaultAmount]);
 
@@ -200,24 +213,39 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
   const finishInvoicePayment = useCallback(
     async (reference: string) => {
       const ref = String(reference || '').trim();
-      if (!ref || !invoiceName.trim()) return;
+      const docName = invoiceName.trim();
+      if (!ref || !docName) return;
       setVerifying(true);
       try {
-        await getERPNextClient().recordPaystackPaymentAgainstSalesInvoice({
-          salesInvoiceName: invoiceName.trim(),
-          paystackReference: ref,
-        });
-        Alert.alert(t('invoicePayment.successTitle'), t('invoicePayment.successBody'));
+        if (isDelivery) {
+          await getERPNextClient().recordPaystackPaymentAgainstDeliveryNote({
+            deliveryNoteName: docName,
+            paystackReference: ref,
+          });
+          Alert.alert(t('deliveryPayment.successTitle'), t('deliveryPayment.successBody'));
+        } else {
+          await getERPNextClient().recordPaystackPaymentAgainstSalesInvoice({
+            salesInvoiceName: docName,
+            paystackReference: ref,
+          });
+          Alert.alert(t('invoicePayment.successTitle'), t('invoicePayment.successBody'));
+        }
         resetState();
         onSuccess();
         onClose();
       } catch (e: unknown) {
-        Alert.alert(t('invoicePayment.failedTitle'), userFacingError(e, t('invoicePayment.failedBody')));
+        Alert.alert(
+          isDelivery ? t('deliveryPayment.failedTitle') : t('invoicePayment.failedTitle'),
+          userFacingError(
+            e,
+            isDelivery ? t('deliveryPayment.failedBody') : t('invoicePayment.failedBody')
+          )
+        );
       } finally {
         setVerifying(false);
       }
     },
-    [invoiceName, onClose, onSuccess, resetState, t]
+    [invoiceName, isDelivery, onClose, onSuccess, resetState, t]
   );
 
   const processPaystackChargeResponse = useCallback(
@@ -236,7 +264,6 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
 
       const step = getPaystackChargeStep(paystackResponse);
       if (step === 'failed' || step === 'timeout') {
-        momoAutoPayRef.current = false;
         Alert.alert(
           t('subscriptionPage.paymentFailed'),
           paystackResponse.data?.display_text || paystackResponse.message || t('subscriptionPage.momoFailed')
@@ -269,9 +296,13 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
           const res = await checkPendingPaystackCharge(pendingPayment.reference);
           if (cancelled) return;
           if (isPaystackChargeTransactionSuccessful(res)) {
-            await finishInvoicePayment(pendingPayment.reference);
-            setPendingPayment(null);
-            setPaymentOtp('');
+            try {
+              await finishInvoicePayment(pendingPayment.reference);
+              setPendingPayment(null);
+              setPaymentOtp('');
+            } catch {
+              /* finishInvoicePayment already alerts */
+            }
             return;
           }
           const step = getPaystackChargeStep(res);
@@ -313,7 +344,7 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
     if (cardInitPromiseRef.current) return cardInitPromiseRef.current;
 
     const promise = (async () => {
-      const reference = invoicePaystackReference(invoiceName);
+      const reference = paystackDocReference(paymentKind, invoiceName);
       try {
         const init = await initializePaystackCardTransaction({
           email: user.email,
@@ -321,10 +352,15 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
           currency: currency.trim() || 'GHS',
           reference,
           channels: ['card'],
-          metadata: {
-            sales_invoice: invoiceName,
-            amount_ghs: String(payAmountGhs),
-          },
+          metadata: isDelivery
+            ? {
+                delivery_note: invoiceName,
+                amount_ghs: String(payAmountGhs),
+              }
+            : {
+                sales_invoice: invoiceName,
+                amount_ghs: String(payAmountGhs),
+              },
         });
         const ref = init.data.reference || reference;
         const session = {
@@ -343,55 +379,49 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
 
     cardInitPromiseRef.current = promise;
     return promise;
-  }, [currency, invoiceName, payAmountGhs, user?.email]);
+  }, [currency, invoiceName, isDelivery, payAmountGhs, paymentKind, user?.email]);
 
-  useEffect(() => {
-    if (!visible || selectedPayment !== 'card') {
-      setCardCheckoutError(null);
-      if (!cardCheckoutLoading) setCardCheckoutLoading(false);
+  const startCardCheckout = useCallback(async () => {
+    const setupErr = paystackConfigurationError();
+    if (setupErr) {
+      Alert.alert(t('invoicePayment.failedTitle'), setupErr);
       return;
     }
-    if (!user?.email?.trim() || payAmountGhs <= 0) return;
-
-    let cancelled = false;
-    const sessionKey = `${invoiceName}-${payAmountGhs}`;
-    const cached = cardSessionCacheRef.current;
-
-    if (cached?.key === sessionKey) {
-      setCardCheckout(cached.session);
-      setCardCheckoutLoading(false);
-      setCardCheckoutError(null);
+    if (!user?.email?.trim()) {
+      Alert.alert(t('subscriptionPage.signInRequired'), t('subscriptionPage.signInBody'));
+      return;
+    }
+    if (payAmountGhs <= 0) {
+      Alert.alert(t('invoicePayment.failedTitle'), t('invoicePayment.amountInvalid'));
+      return;
+    }
+    if (!isPaystackChargeAmountValid(payAmountGhs)) {
+      Alert.alert(t('invoicePayment.failedTitle'), t('invoicePayment.paystackMinAmount'));
       return;
     }
 
+    setCardPaymentStarted(true);
     setCardCheckoutLoading(true);
     setCardCheckoutError(null);
 
-    void (async () => {
-      const session = await loadCardCheckout();
-      if (cancelled) return;
-      if (!session) {
-        setCardCheckout(null);
-        setCardCheckoutError(t('subscriptionPage.cardLoadFailed'));
-      } else {
-        setCardCheckout(session);
-        setCardCheckoutError(null);
-      }
-      setCardCheckoutLoading(false);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [visible, selectedPayment, user?.email, invoiceName, payAmountGhs, cardInitKey, loadCardCheckout, t]);
+    const session = await loadCardCheckout();
+    if (!session) {
+      setCardCheckout(null);
+      setCardCheckoutError(t('subscriptionPage.cardLoadFailed'));
+    } else {
+      setCardCheckout(session);
+      setCardCheckoutError(null);
+    }
+    setCardCheckoutLoading(false);
+  }, [loadCardCheckout, payAmountGhs, t, user?.email]);
 
   useEffect(() => {
-    if (selectedPayment === 'card') {
-      cardSessionCacheRef.current = null;
-      cardInitPromiseRef.current = null;
-      setCardCheckout(null);
-      setCardInitKey((k) => k + 1);
-    }
+    setCardPaymentStarted(false);
+    cardSessionCacheRef.current = null;
+    cardInitPromiseRef.current = null;
+    setCardCheckout(null);
+    setCardCheckoutError(null);
+    setCardCheckoutLoading(false);
   }, [payAmountGhs, selectedPayment]);
 
   const handlePayMoMo = useCallback(async () => {
@@ -431,7 +461,7 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
     setPaying(true);
     setPendingPayment(null);
     setPaymentOtp('');
-    const reference = invoicePaystackReference(invoiceName);
+    const reference = paystackDocReference(paymentKind, invoiceName);
 
     try {
       const paystackResponse = await initializePaystackCharge({
@@ -443,16 +473,20 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
           phone: momoPhone,
           provider: mapProviderToPaystack(provider),
         },
-        metadata: {
-          sales_invoice: invoiceName,
-          amount_ghs: String(payAmountGhs),
-        },
+        metadata: isDelivery
+          ? {
+              delivery_note: invoiceName,
+              amount_ghs: String(payAmountGhs),
+            }
+          : {
+              sales_invoice: invoiceName,
+              amount_ghs: String(payAmountGhs),
+            },
       });
 
       const ref = paystackResponse.data?.reference || reference;
       await processPaystackChargeResponse(paystackResponse, ref, payAmountGhs, provider);
     } catch (e: unknown) {
-      momoAutoPayRef.current = false;
       const msg = e instanceof Error ? e.message : t('invoicePayment.failedBody');
       Alert.alert(t('subscriptionPage.paymentFailed'), msg);
     } finally {
@@ -461,7 +495,9 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
   }, [
     currency,
     invoiceName,
+    isDelivery,
     payAmountGhs,
+    paymentKind,
     paymentNumber,
     processPaystackChargeResponse,
     selectedPayment,
@@ -469,53 +505,16 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
     user?.email,
   ]);
 
-  useEffect(() => {
-    if (!momoPhoneReady) momoAutoPayRef.current = false;
-  }, [momoPhoneReady]);
-
-  useEffect(() => {
-    if (!visible) return;
-    if (
-      !(selectedPayment === 'mtn' || selectedPayment === 'telecel') ||
-      !momoPhoneReady ||
-      !paystackAmountOk ||
-      paying ||
-      pendingPayment ||
-      momoAutoPayRef.current
-    ) {
-      return;
-    }
-    momoAutoPayRef.current = true;
-    void handlePayMoMo();
-  }, [
-    visible,
-    selectedPayment,
-    momoPhoneReady,
-    paystackAmountOk,
-    paying,
-    pendingPayment,
-    handlePayMoMo,
-  ]);
-
   const handleCardPaymentRedirect = async (reference: string) => {
-    setVerifying(true);
-    try {
-      const v = await verifyPaystackPayment(reference);
-      if (v.data?.status === 'success') {
-        setCardCheckout(null);
-        await finishInvoicePayment(v.data.reference || reference);
-      } else {
-        Alert.alert(
-          t('subscriptionPage.notCompleted'),
-          v.data?.gateway_response || t('subscriptionPage.notCompleted')
-        );
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : t('subscriptionPage.verifyFailed');
-      Alert.alert(t('subscriptionPage.verifyFailed'), msg);
-    } finally {
-      setVerifying(false);
-    }
+    const ref = String(reference || '').trim();
+    if (!ref) return;
+    await finishInvoicePayment(ref);
+  };
+
+  const handleConfirmCardPayment = async () => {
+    const ref = String(cardCheckout?.reference || '').trim();
+    if (!ref) return;
+    await finishInvoicePayment(ref);
   };
 
   const handleSubmitPaymentOtp = async () => {
@@ -559,6 +558,14 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
       setVerifying(false);
     }
   };
+
+  const canStartCard =
+    paystackReady &&
+    selectedPayment === 'card' &&
+    paystackAmountOk &&
+    !!user?.email?.trim() &&
+    !cardCheckoutLoading &&
+    !verifying;
 
   const handleClose = () => {
     if (paying || verifying || submittingOtp) return;
@@ -615,9 +622,13 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
       <SafeAreaView style={styles.safe} edges={['bottom']}>
         <View style={[styles.head, { paddingTop: insets.top + 12 }]}>
           <View style={styles.headTextWrap}>
-            <Text style={styles.headTitle}>{t('invoicePayment.title')}</Text>
+            <Text style={styles.headTitle}>
+              {isDelivery ? t('deliveryPayment.title') : t('invoicePayment.title')}
+            </Text>
             <Text style={styles.headSubtitle} numberOfLines={1}>
-              {t('invoicePayment.invoiceRef', { name: invoiceName })}
+              {isDelivery
+                ? t('deliveryPayment.deliveryRef', { name: invoiceName })
+                : t('invoicePayment.invoiceRef', { name: invoiceName })}
             </Text>
           </View>
           <TouchableOpacity
@@ -653,7 +664,9 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
                   <View style={styles.heroTopRow}>
                     <View style={styles.heroBadge}>
                       <Ionicons name="document-text-outline" size={14} color={Colors.WHITE} />
-                      <Text style={styles.heroBadgeText}>{t('invoicePayment.youPay')}</Text>
+                      <Text style={styles.heroBadgeText}>
+                        {isDelivery ? t('deliveryPayment.deliveryFee') : t('invoicePayment.youPay')}
+                      </Text>
                     </View>
                     <Text style={styles.heroBalance}>
                       {t('invoicePayment.balanceDue')}: {formatMoney(maxAmount, currency)}
@@ -671,9 +684,7 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
                         min: formatMoney(PAYSTACK_MIN_CHARGE_GHS, currency),
                       })}
                     </Text>
-                  ) : (
-                    <Text style={styles.heroHint}>{t('invoicePayment.outstandingHint', { amount: formatMoney(maxAmount, currency) })}</Text>
-                  )}
+                  ) : null}
 
                   <View style={styles.stepRow}>
                     {renderStepPill(1, t('invoicePayment.stepAmount'))}
@@ -691,6 +702,7 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
                   </View>
                 ) : null}
 
+                {!lockAmount ? (
                 <View style={styles.card}>
                   <Text style={styles.cardTitle}>{t('invoicePayment.editAmount')}</Text>
                   <View style={styles.amountInputRow}>
@@ -715,10 +727,12 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
                         : t('invoicePayment.payAmountHint', { amount: formatGhanaCedis(payAmountGhs) })}
                     </Text>
                   ) : null}
+                  <Text style={styles.partialPayNote}>{t('invoicePayment.payPartialPaymentNote')}</Text>
                   {payAmountGhs > 0 && !paystackAmountOk ? (
                     <Text style={styles.amountWarn}>{t('invoicePayment.paystackMinAmount')}</Text>
                   ) : null}
                 </View>
+                ) : null}
 
                 <Text style={styles.sectionTitle}>{t('invoicePayment.chooseMethod')}</Text>
                 <View style={styles.methodGrid}>
@@ -797,6 +811,24 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
                       <Text style={styles.fieldHint}>{t('subscriptionPage.signInBody')}</Text>
                     ) : payAmountGhs <= 0 ? (
                       <Text style={styles.fieldHint}>{t('invoicePayment.amountInvalid')}</Text>
+                    ) : !cardPaymentStarted ? (
+                      <TouchableOpacity
+                        style={[styles.payBtn, !canStartCard && styles.btnDisabled]}
+                        onPress={() => void startCardCheckout()}
+                        disabled={!canStartCard}
+                        activeOpacity={0.88}
+                      >
+                        {cardCheckoutLoading ? (
+                          <ActivityIndicator color={Colors.WHITE} />
+                        ) : (
+                          <>
+                            <Ionicons name="lock-closed" size={18} color={Colors.WHITE} />
+                            <Text style={styles.payBtnText}>
+                              {t('subscriptionPage.payCtaShort', { amount: formatGhanaCedis(payAmountGhs) })}
+                            </Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
                     ) : (
                       <SubscriptionPaystackCardCheckout
                         authorizationUrl={cardCheckout?.authorizationUrl}
@@ -808,13 +840,23 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
                             ? () => {
                                 cardSessionCacheRef.current = null;
                                 cardInitPromiseRef.current = null;
-                                setCardInitKey((key) => key + 1);
+                                void startCardCheckout();
                               }
                             : undefined
                         }
                         onPaymentRedirect={handleCardPaymentRedirect}
                       />
                     )}
+                    {cardPaymentStarted && cardCheckout?.reference ? (
+                      <TouchableOpacity
+                        style={[styles.confirmPayBtn, verifying && styles.btnDisabled]}
+                        onPress={() => void handleConfirmCardPayment()}
+                        disabled={verifying}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={styles.confirmPayBtnText}>{t('invoicePayment.verifyCta')}</Text>
+                      </TouchableOpacity>
+                    ) : null}
                   </View>
                 ) : (
                   <View style={styles.chooseHintCard}>
@@ -839,7 +881,6 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
                 onCancel={() => {
                   setPendingPayment(null);
                   setPaymentOtp('');
-                  momoAutoPayRef.current = false;
                 }}
               />
             ) : null}
@@ -1063,6 +1104,12 @@ const styles = StyleSheet.create({
     marginTop: 10,
     lineHeight: 17,
   },
+  partialPayNote: {
+    fontSize: 12,
+    color: Colors.TEXT_SECONDARY,
+    marginTop: 10,
+    lineHeight: 18,
+  },
   amountWarn: {
     fontSize: 12,
     color: Colors.ERROR,
@@ -1175,6 +1222,16 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   payBtnText: { color: Colors.WHITE, fontSize: 17, fontWeight: '700' },
+  confirmPayBtn: {
+    marginTop: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 10,
+    borderWidth: hairline,
+    borderColor: Colors.WINE,
+  },
+  confirmPayBtnText: { color: Colors.WINE, fontSize: 15, fontWeight: '600' },
   chooseHintCard: {
     flexDirection: 'row',
     alignItems: 'center',

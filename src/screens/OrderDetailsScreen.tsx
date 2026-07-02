@@ -16,6 +16,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { Colors } from '../constants/colors';
+import { ERP_DOC_FLAT } from '../constants/erpDocFlatUi';
 import { Spacing } from '../constants/spacing';
 import { useOrder } from '../hooks/erpnext';
 import { useSessionCustomerId } from '../hooks/useSessionCustomerId';
@@ -26,7 +27,8 @@ import { pickLineDisplayImageUri } from '../utils/erpLineItemImages';
 import { erpLineItemTitle } from '../utils/erpLineItemDisplay';
 import type { OrderItem } from '../types';
 import { formatGhanaCedis } from '../utils/currency';
-import { confirmSalesOrderShareable } from '../utils/salesOrderShareGuard';
+import { salesOrderSupplierUiLabel } from '../utils/erpSalesOrderSupplier';
+import { navigateShareSalesOrderToSuppliers } from '../utils/navigateShareSalesOrderToSuppliers';
 import { getSalesOrderShareUiState } from '../utils/salesOrderShareState';
 import { isSupplierPortalUser } from '../utils/isSupplierPortalUser';
 import {
@@ -34,7 +36,9 @@ import {
   ErpDocSheet,
   ErpDocCard,
   ErpDocHero,
+  ErpDocHeroActionButton,
   ErpDocSection,
+  ErpDocMetaRow,
   ErpDocLineItem,
   ErpDocItemsList,
   ErpDocEmptyState,
@@ -205,6 +209,7 @@ export const OrderDetailsScreen: React.FC = () => {
   const accent = useMemo(() => orderStatusAccent(statusKey), [statusKey]);
   const showSendToSupplier = !!order && canShareWithSupplier && !shareStateLoading && !isSupplierPortal;
   const showEditOrder = !!order && canEditOrder && !shareStateLoading && !isSupplierPortal;
+  const supplierLabel = order ? salesOrderSupplierUiLabel(order, t) : '';
 
   const copyTracking = useCallback(
     async (value: string) => {
@@ -246,14 +251,10 @@ export const OrderDetailsScreen: React.FC = () => {
 
   const onShareOrder = useCallback(async () => {
     if (!resolvedOrderId) return;
-    const ok = await confirmSalesOrderShareable(
-      resolvedOrderId,
-      t,
-      navigation as { navigate: (name: string, params?: object) => void }
-    );
-    if (!ok) return;
-    (navigation as { navigate: (name: string, params: object) => void }).navigate('BuyerSalesOrderShareCompose', {
+    await navigateShareSalesOrderToSuppliers({
+      navigation: navigation as { dispatch: (action: unknown) => void },
       salesOrderName: resolvedOrderId,
+      t,
     });
   }, [navigation, resolvedOrderId, t]);
 
@@ -348,7 +349,23 @@ export const OrderDetailsScreen: React.FC = () => {
               amountLabel={t('orderDetails.orderBudget')}
               subtitle={`${t('orderDetails.orderPlaced')} ${formatErpDocDate(order.createdAt)}`}
               facts={heroFacts}
+              statusTrailing={
+                showEditOrder ? (
+                  <ErpDocHeroActionButton
+                    label={t('orderDetails.editOrder')}
+                    onPress={onEditOrder}
+                    variant="outline"
+                    accessibilityLabel={t('orderDetails.editOrder')}
+                  />
+                ) : undefined
+              }
             />
+
+            {!isSupplierPortal ? (
+              <ErpDocSection title={t('orderDetails.supplier')}>
+                <ErpDocMetaRow label={t('orderDetails.supplierField')} value={supplierLabel} />
+              </ErpDocSection>
+            ) : null}
 
             <ErpDocSection title={`Items · ${order.items?.length ?? 0}`}>
               {order.items?.length ? (
@@ -383,7 +400,9 @@ export const OrderDetailsScreen: React.FC = () => {
                   const currency = String(row.currency || 'GHS');
                   const total = formatErpDocMoney(row.grand_total, currency);
                   const supplier = String(row.supplier_name || row.supplier || '').trim();
-                  const subtitle = [supplier, total].filter(Boolean).join(' · ');
+                  const subtitle = isSupplierPortal
+                    ? total || undefined
+                    : [supplier, total].filter(Boolean).join(' · ') || undefined;
                   return (
                     <ErpDocLinkButton
                       key={qName}
@@ -438,21 +457,6 @@ export const OrderDetailsScreen: React.FC = () => {
               </TouchableOpacity>
             ) : null}
           </ErpDocCard>
-
-          {showEditOrder ? (
-            <View style={styles.editSection}>
-              <Text style={styles.sendHint}>{t('orderDetails.editOrderHint')}</Text>
-              <TouchableOpacity
-                style={styles.editButton}
-                onPress={onEditOrder}
-                activeOpacity={0.85}
-                accessibilityRole="button"
-              >
-                <Ionicons name="create-outline" size={20} color={Colors.WINE} />
-                <Text style={styles.editButtonText}>{t('orderDetails.editOrder')}</Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
 
           {showSendToSupplier ? (
             <View style={styles.sendSection}>
@@ -646,15 +650,14 @@ const styles = StyleSheet.create({
     marginHorizontal: Spacing.MD,
     marginTop: Spacing.MD,
     paddingVertical: 14,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: Colors.WINE,
-    backgroundColor: 'rgba(230, 0, 18, 0.04)',
+    borderWidth: ERP_DOC_FLAT.hairline,
+    borderColor: ERP_DOC_FLAT.accent,
+    backgroundColor: ERP_DOC_FLAT.surface,
   },
   addAddressBtnText: {
     fontSize: 15,
-    fontWeight: '700',
-    color: Colors.WINE,
+    fontWeight: '600',
+    color: ERP_DOC_FLAT.accent,
   },
   copyBtn: {
     marginTop: 12,
@@ -669,26 +672,6 @@ const styles = StyleSheet.create({
     marginTop: 20,
     paddingHorizontal: 4,
   },
-  editSection: {
-    marginTop: 20,
-    paddingHorizontal: 4,
-  },
-  editButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    backgroundColor: Colors.WHITE,
-    borderRadius: 10,
-    paddingVertical: 16,
-    borderWidth: 1,
-    borderColor: Colors.WINE,
-  },
-  editButtonText: {
-    color: Colors.WINE,
-    fontSize: 16,
-    fontWeight: '700',
-  },
   sendHint: {
     fontSize: 14,
     lineHeight: 20,
@@ -701,8 +684,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 10,
-    backgroundColor: Colors.WINE,
-    borderRadius: 10,
+    backgroundColor: ERP_DOC_FLAT.accent,
     paddingVertical: 16,
   },
   sendButtonText: {

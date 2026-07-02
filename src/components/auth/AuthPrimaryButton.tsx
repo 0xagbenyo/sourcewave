@@ -58,11 +58,12 @@ export const AuthInlineSwitch: React.FC<{
   prefix: string;
   action: string;
   onPress: () => void;
-}> = ({ prefix, action, onPress }) => (
+  actionColor?: string;
+}> = ({ prefix, action, onPress, actionColor = Colors.WINE }) => (
   <View style={linkStyles.inlineRow}>
     <Text style={linkStyles.inlinePrefix}>{prefix}</Text>
     <TouchableOpacity onPress={onPress}>
-      <Text style={linkStyles.inlineAction}>{action}</Text>
+      <Text style={[linkStyles.inlineAction, { color: actionColor }]}>{action}</Text>
     </TouchableOpacity>
   </View>
 );

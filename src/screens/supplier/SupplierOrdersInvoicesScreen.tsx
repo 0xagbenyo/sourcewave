@@ -479,15 +479,11 @@ export const SupplierOrdersInvoicesScreen: React.FC = () => {
     const accent = accentForPayKind(kind);
     const statusLabel = isSi ? salesInvoiceStatusLabel(item, kind) : paymentEntryStatusLabel(item, kind);
     const dateStr = item.posting_date || '—';
+    const invoiceName = String(item?.name || '').trim();
+    const shareable = isSi && Number(item?.docstatus) !== 2;
 
-    return (
-      <Pressable
-        style={({ pressed }) => [styles.rowTouchable, pressed && styles.rowTouchablePressed]}
-        onPress={() => openRow(item)}
-        onLongPress={isSi ? () => onInvoiceLongPress(item) : undefined}
-        delayLongPress={420}
-        android_ripple={{ color: 'rgba(0,0,0,0.04)' }}
-      >
+    const rowBody = (
+      <>
         <View style={[styles.rowAccent, { backgroundColor: accent }]} />
         <View style={styles.rowContent}>
           <View style={styles.rowTop}>
@@ -522,6 +518,50 @@ export const SupplierOrdersInvoicesScreen: React.FC = () => {
             <Text style={styles.rowRef}>Ref. {item._linked_sales_invoice}</Text>
           ) : null}
         </View>
+      </>
+    );
+
+    if (isSi) {
+      return (
+        <View style={styles.rowTouchable}>
+          <Pressable
+            style={({ pressed }) => [styles.rowMainPress, pressed && styles.rowTouchablePressed]}
+            onPress={() => openRow(item)}
+            onLongPress={() => onInvoiceLongPress(item)}
+            delayLongPress={420}
+            android_ripple={{ color: 'rgba(0,0,0,0.04)' }}
+          >
+            {rowBody}
+          </Pressable>
+          {shareable ? (
+            <TouchableOpacity
+              style={styles.rowShareBtn}
+              onPress={() =>
+                (navigation as { navigate: (n: string, p?: object) => void }).navigate(
+                  'SupplierInvoiceShare',
+                  { documentName: invoiceName }
+                )
+              }
+              hitSlop={8}
+              accessibilityLabel={`Share invoice ${invoiceName}`}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="paper-plane-outline" size={18} color={Colors.WINE} />
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.rowShareBtnSpacer} />
+          )}
+        </View>
+      );
+    }
+
+    return (
+      <Pressable
+        style={({ pressed }) => [styles.rowTouchable, pressed && styles.rowTouchablePressed]}
+        onPress={() => openRow(item)}
+        android_ripple={{ color: 'rgba(0,0,0,0.04)' }}
+      >
+        {rowBody}
       </Pressable>
     );
   };
@@ -812,6 +852,16 @@ const styles = StyleSheet.create({
   rowSep: { height: hairline, backgroundColor: ROW_SEP, marginLeft: 15 },
   rowTouchable: { flexDirection: 'row', backgroundColor: '#FFFFFF' },
   rowTouchablePressed: { backgroundColor: '#FAFAFA' },
+  rowMainPress: { flex: 1, flexDirection: 'row', minWidth: 0 },
+  rowShareBtn: {
+    width: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'stretch',
+    borderLeftWidth: hairline,
+    borderLeftColor: ROW_SEP,
+  },
+  rowShareBtnSpacer: { width: 44 },
   rowAccent: { width: 3 },
   rowContent: { flex: 1, paddingVertical: 10, paddingRight: 12, paddingLeft: 10 },
   rowTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 8 },

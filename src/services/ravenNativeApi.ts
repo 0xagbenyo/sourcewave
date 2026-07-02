@@ -397,6 +397,11 @@ export function ravenRepliedDetailsPlainText(details: unknown): string | undefin
   return s || undefined;
 }
 
+/** Raven / Frappe Check or API flag for “this message was forwarded”. */
+export function ravenIsForwardedMessage(v: unknown): boolean {
+  return v === true || v === 1 || v === '1';
+}
+
 /** Raven / Frappe Check or API flag for “this message is a reply”. */
 export function ravenIsReplyMessage(v: unknown): boolean {
   return v === true || v === 1 || v === '1';
@@ -431,6 +436,18 @@ export function ravenRowIsSalesOrderDocLink(linkDoctype: unknown, linkDocument: 
     .replace(/_/g, ' ')
     .replace(/\s+/g, ' ');
   return norm === 'sales order' || norm === 'salesorder';
+}
+
+/** True when the row links to ERPNext **Delivery Note**. */
+export function ravenRowIsDeliveryNoteDocLink(linkDoctype: unknown, linkDocument: unknown): boolean {
+  const dn = String(linkDocument ?? '').trim();
+  if (!dn) return false;
+  const norm = String(linkDoctype ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ');
+  return norm === 'delivery note' || norm === 'deliverynote';
 }
 
 /** True when the row links to ERPNext **Sales Invoice**. */
@@ -542,6 +559,9 @@ function mapApiRecordToRavenMessageRow(m: Record<string, unknown>): RavenMessage
         : undefined;
   const linked = coerceLinkedMessageFromApiRecord(m);
   const { link_doctype: ldt, link_document: ldn } = pickLinkFieldsFromApiRecord(m);
+  const md = messageDetailsAsRecord(m.message_details);
+  const isForwarded =
+    ravenIsForwardedMessage(m.is_forwarded) || (md != null && ravenIsForwardedMessage(md.is_forwarded));
   return {
     name: String(m.name ?? ''),
     channel_id: m.channel_id != null ? String(m.channel_id) : undefined,
@@ -564,7 +584,7 @@ function mapApiRecordToRavenMessageRow(m: Record<string, unknown>): RavenMessage
     link_document: ldn,
     message_reactions:
       m.message_reactions != null ? String(m.message_reactions) : undefined,
-    is_forwarded: m.is_forwarded as RavenMessageRow['is_forwarded'],
+    is_forwarded: isForwarded ? 1 : (m.is_forwarded as RavenMessageRow['is_forwarded']),
     is_edited: m.is_edited as RavenMessageRow['is_edited'],
   };
 }
@@ -721,13 +741,18 @@ export function ravenCoalesceDocumentLinkFields(fresh: RavenMessageRow, previous
   if (!previous) return fresh;
   const fdt = String(fresh.link_doctype || '').trim();
   const fdn = String(fresh.link_document || '').trim();
-  if (fdt && fdn) return fresh;
-  const pdt = String(previous.link_doctype || '').trim();
-  const pdn = String(previous.link_document || '').trim();
-  if (pdt && pdn) {
-    return { ...fresh, link_doctype: pdt, link_document: pdn };
+  let out = fresh;
+  if (!fdt || !fdn) {
+    const pdt = String(previous.link_doctype || '').trim();
+    const pdn = String(previous.link_document || '').trim();
+    if (pdt && pdn) {
+      out = { ...out, link_doctype: pdt, link_document: pdn };
+    }
   }
-  return fresh;
+  if (!ravenIsForwardedMessage(out.is_forwarded) && ravenIsForwardedMessage(previous.is_forwarded)) {
+    out = { ...out, is_forwarded: 1 };
+  }
+  return out;
 }
 
 /** Apply {@link ravenCoalesceDocumentLinkFields} for every row in `rows` against `previous` by message `name`. */

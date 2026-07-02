@@ -19,7 +19,8 @@ import {
   buildAppliedSubscriptionPromo,
   isPricingRuleValidForPromo,
 } from '../utils/subscriptionPromoCode';
-import { ERP_DOC_LINE_IMAGE_FIELD, readErpDocLineImage } from '../utils/erpDocLineImageField';
+import { ERP_DOC_LINE_IMAGE_FIELD, applyErpDocLineImage, readErpDocLineImage } from '../utils/erpDocLineImageField';
+import { applyErpLineWeightToRow, readErpLineWeightFromRow } from '../utils/erpLineWeight';
 import {
   ERP_SO_LINE_REQUESTED_QTY_FIELD,
   ERP_SO_SERIES_COPY_FIELD,
@@ -27,11 +28,30 @@ import {
   readSalesOrderSeriesCopy,
   salesOrderHeaderPreservePatch,
 } from '../utils/erpSalesOrderLineFields';
+import { salesOrderSupplierFieldName } from '../utils/erpSalesOrderSupplier';
 import {
   mapSupplierQuotationLineFilesToItemCodes,
   type ErpDocAttachmentRow,
 } from '../utils/erpLineItemImages';
 import { logFrappeHttpError, parseFrappeResponseData } from '../utils/frappeHttpError';
+import {
+  deliveryNoteAllowsDeliveryPayment,
+  deliveryNoteIsSupplierErpValue,
+  deliveryNoteIsSupplierFieldName,
+  deliveryNoteShippingOutstanding,
+  deliveryNoteLogisticsFieldName,
+  deliveryNoteSupplierFieldName,
+  paymentEntryDeliveryNoteFieldName,
+  readDeliveryNoteIsSupplier,
+  readDeliveryNoteLogistics,
+  readDeliveryNoteSupplier,
+} from '../utils/deliveryNoteAmounts';
+import { readSalesInvoiceSupplier } from '../utils/erpSalesInvoiceSupplier';
+import {
+  defaultQuotationValidTillIso,
+  erpDateIsoToday,
+  parseErpDateInput,
+} from '../utils/erpDateInput';
 
 // Configuration
 const ERPNEXT_BASE_URL = process.env.EXPO_PUBLIC_ERPNEXT_URL || 'http://localhost:8000';
@@ -2827,6 +2847,338 @@ class ERPNextClient {
     }
   }
 
+  /** Delivery Note custom field for buyer-selected shipping (default **`custom_shipping_option`**). */
+  private deliveryNoteShippingOptionField(): string {
+    const f = String(process.env.EXPO_PUBLIC_ERPNEXT_DN_SHIPPING_OPTION_FIELD || 'custom_shipping_option').trim();
+    return f || 'custom_shipping_option';
+  }
+
+  /** Default line valuation when ERPNext rejects zero rates (default **1**). */
+  private deliveryNoteDefaultValuationRate(): number {
+    const n = Number(process.env.EXPO_PUBLIC_ERPNEXT_DN_DEFAULT_VALUATION_RATE ?? 1);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  }
+
+  private patchDeliveryNoteItemsFromInvoice(
+    draft: Record<string, unknown>,
+    inv: Record<string, unknown>
+  ): void {
+    const valuationRate = this.deliveryNoteDefaultValuationRate();
+    const items = Array.isArray(draft.items) ? (draft.items as Record<string, unknown>[]) : [];
+    const invItems = Array.isArray(inv.items) ? (inv.items as Record<string, unknown>[]) : [];
+    draft.items = items.map((row, idx) => {
+      const siRow =
+        invItems[idx] ?? invItems.find((r) => String(r.item_code) === String(row.item_code));
+      const next: Record<string, unknown> = { ...row };
+      if (siRow) {
+        applyErpLineWeightToRow(next, readErpLineWeightFromRow(siRow));
+      }
+      next.valuation_rate = valuationRate;
+      const rate = Number(next.rate);
+      if (!Number.isFinite(rate) || rate <= 0) {
+        const siRate = siRow ? Number(siRow.rate) : NaN;
+        next.rate = Number.isFinite(siRate) && siRate > 0 ? siRate : valuationRate;
+      }
+      const basic = Number(next.basic_rate);
+      if (!Number.isFinite(basic) || basic <= 0) {
+        next.basic_rate = Number(next.rate) > 0 ? Number(next.rate) : valuationRate;
+      }
+      return next;
+    });
+  }
+
+  /** List non-cancelled Delivery Notes created from a Sales Invoice. */
+  async listDeliveryNotesForSalesInvoice(invoiceName: string): Promise<any[]> {
+    const n = String(invoiceName || '').trim();
+    if (!n) return [];
+    try {
+      const data = await this.callFrappeMethod('frappe.client.get_list', {
+        doctype: 'Delivery Note',
+        filters: [['Delivery Note Item', 'against_sales_invoice', '=', n]],
+        fields: ['name', 'docstatus', 'status'],
+        limit_page_length: 20,
+        distinct: true,
+      });
+      const rows = data?.message ?? data;
+      const list = Array.isArray(rows) ? rows : [];
+      return list.filter((d) => Number(d?.docstatus) !== 2);
+    } catch (e) {
+      console.warn('[ERPNext] listDeliveryNotesForSalesInvoice failed', e);
+      return [];
+    }
+  }
+
+  async getDeliveryNoteRaw(name: string): Promise<Record<string, unknown> | null> {
+    const n = String(name || '').trim();
+    if (!n) return null;
+    try {
+      const res = await this.client.get(`${API_VERSION}/Delivery Note/${encodeURIComponent(n)}`);
+      return (res.data?.data as Record<string, unknown>) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async submitDeliveryNote(
+    name: string,
+    opts?: { supplierDocName?: string }
+  ): Promise<any> {
+    const n = String(name || '').trim();
+    if (!n) throw new Error('Delivery Note name required');
+
+    let fresh = await this.getDeliveryNoteRaw(n);
+    if (!fresh) throw new Error('Delivery Note not found.');
+    if (Number(fresh.docstatus) === 1) return fresh;
+
+    const logisticsDoc = String(opts?.supplierDocName || '').trim();
+    const logisticsField = deliveryNoteLogisticsFieldName();
+
+    if (logisticsDoc) {
+      fresh = { ...fresh, [logisticsField]: logisticsDoc };
+      const savedRaw = await this.callFrappeMethodRavenOrApi('frappe.client.save', { doc: fresh });
+      const saved = (savedRaw?.message ?? savedRaw) as Record<string, unknown> | undefined;
+      const reloaded = await this.getDeliveryNoteRaw(n);
+      fresh = (reloaded ?? saved ?? fresh) as Record<string, unknown>;
+      if (!String(fresh[logisticsField] ?? '').trim()) {
+        fresh[logisticsField] = logisticsDoc;
+      }
+    }
+
+    const doc: Record<string, unknown> =
+      typeof fresh === 'object' && String((fresh as { name?: unknown }).name || '').trim() === n
+        ? ({ ...fresh } as Record<string, unknown>)
+        : { doctype: 'Delivery Note', name: n };
+
+    const raw = await this.callFrappeMethodRavenOrApi('frappe.client.submit', { doc });
+    const submitted = raw?.message ?? raw;
+    await new Promise((r) => setTimeout(r, 300));
+    const verified = await this.getDeliveryNoteRaw(n);
+    if (verified && Number(verified.docstatus) === 1) return verified;
+    if (submitted && typeof submitted === 'object' && Number((submitted as any).docstatus) === 1) {
+      return submitted;
+    }
+    throw new Error('Delivery Note submit did not return a submitted document.');
+  }
+
+  /**
+   * Create a **draft** Delivery Note from a paid Sales Invoice after the buyer picks a shipping option.
+   * Sets **`custom_shipping_option`** (configurable) and line **`valuation_rate`** defaults before save.
+   * Does not submit — warehouse can submit in ERPNext once stock is available.
+   */
+  async createDeliveryNoteFromSalesInvoice(
+    invoiceName: string,
+    opts: { shippingOptionLabel: string; shippingInstructions?: string }
+  ): Promise<{ name: string; doc: any; submitted: boolean }> {
+    const n = String(invoiceName || '').trim();
+    if (!n) throw new Error('Sales Invoice name required');
+
+    const shippingLabel = String(opts.shippingOptionLabel || '').trim();
+    if (!shippingLabel) throw new Error('Shipping option is required.');
+
+    const inv = await this.getSalesInvoiceRaw(n);
+    if (!inv) throw new Error('Sales Invoice not found.');
+    if (Number(inv.docstatus) !== 1) {
+      throw new Error('Sales Invoice must be submitted before a delivery note can be created.');
+    }
+    const outstanding = this.effectiveSalesInvoiceOutstanding(inv as Record<string, unknown>);
+    if (outstanding > 0.009) {
+      throw new Error('Pay this invoice in full before arranging delivery.');
+    }
+
+    const existing = await this.listDeliveryNotesForSalesInvoice(n);
+    const active = existing.find((d) => Number(d?.docstatus) !== 2);
+    if (active?.name) {
+      const full = await this.getDeliveryNoteRaw(String(active.name));
+      return {
+        name: String(active.name),
+        doc: full ?? active,
+        submitted: Number((full ?? active)?.docstatus) === 1,
+      };
+    }
+
+    let draft: Record<string, unknown> | null = null;
+    try {
+      const raw = await this.callFrappeMethod(
+        'erpnext.accounts.doctype.sales_invoice.sales_invoice.make_delivery_note',
+        { source_name: n }
+      );
+      const msg = raw?.message ?? raw;
+      if (msg && typeof msg === 'object' && !Array.isArray(msg)) {
+        draft = msg as Record<string, unknown>;
+      }
+    } catch (e) {
+      console.warn('[ERPNext] make_delivery_note failed', e);
+    }
+
+    if (!draft) {
+      throw new Error('Could not prepare a delivery note from this invoice. Check ERPNext permissions and stock settings.');
+    }
+
+    const shipField = this.deliveryNoteShippingOptionField();
+    draft[shipField] = shippingLabel;
+    const shippingNote =
+      String(opts.shippingInstructions || '').trim() || shippingLabel;
+    draft.instructions = String(draft.instructions || '').trim()
+      ? `${String(draft.instructions).trim()}\nShipping: ${shippingNote}`
+      : `Shipping: ${shippingNote}`;
+
+    this.patchDeliveryNoteItemsFromInvoice(draft, inv as Record<string, unknown>);
+
+    const invoiceSupplier = readSalesInvoiceSupplier(inv as Record<string, unknown>);
+    if (invoiceSupplier) {
+      draft[deliveryNoteSupplierFieldName()] = invoiceSupplier;
+    }
+
+    const savedRaw = await this.callFrappeMethod('frappe.client.save', { doc: draft });
+    const saved = (savedRaw?.message ?? savedRaw) as Record<string, unknown>;
+    const dnName = String(saved?.name || draft.name || '').trim();
+    if (!dnName) throw new Error('ERPNext did not return a Delivery Note name.');
+
+    const fresh = await this.getDeliveryNoteRaw(dnName);
+    return {
+      name: dnName,
+      doc: fresh ?? saved,
+      submitted: Number((fresh ?? saved)?.docstatus) === 1,
+    };
+  }
+
+  readDeliveryNoteIsSupplier(doc: Record<string, unknown> | null | undefined): boolean {
+    return readDeliveryNoteIsSupplier(doc);
+  }
+
+  readDeliveryNoteSupplier(doc: Record<string, unknown> | null | undefined): string {
+    return readDeliveryNoteSupplier(doc);
+  }
+
+  readDeliveryNoteLogistics(doc: Record<string, unknown> | null | undefined): string {
+    return readDeliveryNoteLogistics(doc);
+  }
+
+  /** Delivery Note **custom_is_supplier** (default **`custom_is_supplier`**, Check 0/1). */
+  private deliveryNoteIsSupplierField(): string {
+    return deliveryNoteIsSupplierFieldName();
+  }
+
+  readDeliveryNoteShippingOption(doc: Record<string, unknown> | null | undefined): string {
+    if (!doc) return '';
+    return String(doc[this.deliveryNoteShippingOptionField()] ?? '').trim();
+  }
+
+  /** Active ERPNext Shipping Rules (optionally filtered by company). */
+  async listShippingRules(company?: string): Promise<
+    Array<{ name: string; label: string; shipping_rule_type?: string }>
+  > {
+    try {
+      const filters: unknown[][] = [['disabled', '=', 0]];
+      const co = String(company || '').trim();
+      if (co) filters.push(['company', '=', co]);
+      const response = await this.client.get(`${API_VERSION}/Shipping Rule`, {
+        params: {
+          fields: JSON.stringify(['name', 'label', 'shipping_rule_type', 'company']),
+          filters: JSON.stringify(filters),
+          order_by: 'name asc',
+          limit_page_length: 100,
+        },
+      });
+      const rows = response.data?.data;
+      if (!Array.isArray(rows)) return [];
+      return rows
+        .map((r: Record<string, unknown>) => ({
+          name: String(r.name || '').trim(),
+          label: String(r.label || r.name || '').trim(),
+          shipping_rule_type: r.shipping_rule_type ? String(r.shipping_rule_type) : undefined,
+        }))
+        .filter((r) => r.name.length > 0);
+    } catch (e) {
+      console.warn('[ERPNext] listShippingRules failed', e);
+      return [];
+    }
+  }
+
+  /**
+   * Supplier edits a **draft** Delivery Note — header fields (not items), shipping, and flags.
+   */
+  async updateDeliveryNoteForSupplier(
+    name: string,
+    patch: {
+      shipping_rule?: string | null;
+      shipping_option_label?: string | null;
+      is_supplier?: boolean;
+      posting_date?: string | null;
+      shipping_address_name?: string | null;
+      contact_person?: string | null;
+      contact_mobile?: string | null;
+      contact_email?: string | null;
+      transporter?: string | null;
+      lr_no?: string | null;
+      vehicle_no?: string | null;
+      driver_name?: string | null;
+      driver_mobile?: string | null;
+      mode_of_transport?: string | null;
+      incoterm?: string | null;
+      instructions?: string | null;
+      terms?: string | null;
+    }
+  ): Promise<Record<string, unknown>> {
+    const n = String(name || '').trim();
+    if (!n) throw new Error('Delivery Note name required');
+
+    const fresh = await this.getDeliveryNoteRaw(n);
+    if (!fresh) throw new Error('Delivery Note not found.');
+    if (Number(fresh.docstatus) !== 0) {
+      throw new Error('Only draft delivery notes can be edited.');
+    }
+
+    const doc: Record<string, unknown> = { ...fresh };
+    const valuationRate = this.deliveryNoteDefaultValuationRate();
+    const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
+    doc.items = items.map((row) => {
+      const next = { ...row };
+      const vr = Number(next.valuation_rate);
+      if (!Number.isFinite(vr) || vr <= 0) next.valuation_rate = valuationRate;
+      return next;
+    });
+
+    if (patch.shipping_rule !== undefined) {
+      doc.shipping_rule = patch.shipping_rule ? String(patch.shipping_rule).trim() : '';
+    }
+    if (patch.shipping_option_label !== undefined) {
+      doc[this.deliveryNoteShippingOptionField()] = String(patch.shipping_option_label || '').trim();
+    }
+    if (patch.is_supplier !== undefined) {
+      const supplierField = this.deliveryNoteIsSupplierField();
+      doc[supplierField] = deliveryNoteIsSupplierErpValue(patch.is_supplier, fresh[supplierField]);
+    }
+
+    const headerKeys = [
+      'posting_date',
+      'shipping_address_name',
+      'contact_person',
+      'contact_mobile',
+      'contact_email',
+      'transporter',
+      'lr_no',
+      'vehicle_no',
+      'driver_name',
+      'driver_mobile',
+      'mode_of_transport',
+      'incoterm',
+      'instructions',
+      'terms',
+    ] as const;
+    for (const key of headerKeys) {
+      if (patch[key] !== undefined) {
+        doc[key] = String(patch[key] ?? '').trim();
+      }
+    }
+
+    const savedRaw = await this.callFrappeMethod('frappe.client.save', { doc });
+    const saved = (savedRaw?.message ?? savedRaw) as Record<string, unknown>;
+    const dnName = String(saved?.name || n).trim();
+    const reloaded = await this.getDeliveryNoteRaw(dnName);
+    return reloaded ?? saved;
+  }
+
   async getCustomerByEmail(
     email: string,
     options?: { includePortalUsersChildScan?: boolean }
@@ -3584,9 +3936,21 @@ class ERPNextClient {
         filters.push(['Sales Order', 'company', '=', company]);
       }
 
+      const supplierField = salesOrderSupplierFieldName();
       const response = await this.client.get(`${API_VERSION}/Sales Order`, {
         params: {
-          fields: JSON.stringify(['name', 'customer', 'company', 'status', 'docstatus', 'total', 'transaction_date', 'grand_total', 'creation']),
+          fields: JSON.stringify([
+            'name',
+            'customer',
+            'company',
+            'status',
+            'docstatus',
+            'total',
+            'transaction_date',
+            'grand_total',
+            'creation',
+            supplierField,
+          ]),
           filters: JSON.stringify(filters),
           limit_page_length: limit,
           limit_start: start,
@@ -4418,6 +4782,51 @@ class ERPNextClient {
     const fallback = soName ? await this.resolveSalesOrderLineImages(soName) : {};
 
     return { supplier, fallback };
+  }
+
+  /**
+   * Sales Invoice line `custom_new_image`, with fallback to the linked Supplier Quotation (and its SO images).
+   */
+  async resolveSalesInvoiceLineImages(
+    lineRows: Array<Record<string, unknown>>,
+    linkedQuotationName?: string | null
+  ): Promise<Record<string, string>> {
+    const merged: Record<string, string> = {};
+    const codes: string[] = [];
+    for (const row of lineRows) {
+      const code = String(row.item_code || '').trim();
+      if (!code) continue;
+      codes.push(code);
+      const img = readErpDocLineImage(row);
+      if (img) merged[code] = img;
+    }
+
+    const missing = [...new Set(codes.filter((c) => !merged[c]))];
+    const sqName = String(linkedQuotationName || '').trim();
+    if (missing.length === 0 || !sqName) return merged;
+
+    try {
+      const sq = await this.getSupplierQuotationByName(sqName);
+      if (!sq) return merged;
+      const orderField = this.supplierQuotationOrderLinkField();
+      const soName = String(sq[orderField] || '').trim();
+      const sqItems = Array.isArray(sq.items) ? (sq.items as Record<string, unknown>[]) : [];
+      const { supplier, fallback } = await this.resolveSupplierQuotationLineImages(sqName, sqItems, soName);
+      for (const code of missing) {
+        const uri = supplier[code] || fallback[code];
+        if (uri) merged[code] = uri;
+      }
+    } catch (e) {
+      console.warn('[SalesInvoice] resolveSalesInvoiceLineImages quotation fallback failed', e);
+    }
+
+    return merged;
+  }
+
+  linkedQuotationFromSalesInvoice(doc: Record<string, unknown> | null | undefined): string {
+    if (!doc) return '';
+    const f = this.salesInvoiceSupplierQuotationLinkField();
+    return String(doc[f] || '').trim();
   }
 
   async uploadDocLineImage(
@@ -5379,6 +5788,34 @@ class ERPNextClient {
     }
   }
 
+  /** Supplier portal: update catalog fields buyers see on the supplier profile. */
+  async updateSupplierProfile(
+    supplierName: string,
+    patch: { supplier_details?: string; image?: string | null }
+  ): Promise<Record<string, unknown>> {
+    const key = (supplierName || '').trim();
+    if (!key) throw new Error('Supplier name required');
+
+    const updateData: Record<string, unknown> = {};
+    if (patch.supplier_details !== undefined) {
+      updateData.supplier_details = patch.supplier_details;
+    }
+    if (patch.image !== undefined) {
+      updateData.image = patch.image === '' ? null : patch.image;
+    }
+    if (!Object.keys(updateData).length) {
+      const existing = await this.getSupplier(key);
+      if (!existing) throw new Error('Supplier not found');
+      return existing;
+    }
+
+    const response = await this.client.put(
+      `${API_VERSION}/Supplier/${encodeURIComponent(key)}`,
+      updateData
+    );
+    return (response.data?.data as Record<string, unknown>) || updateData;
+  }
+
   /**
    * List ERPNext **Subscription** rows for a Customer (Accounts module).
    * Requires API user with read on Subscription.
@@ -6084,7 +6521,18 @@ class ERPNextClient {
     referenceTitle?: string;
     /** When quoting from a buyer Sales Order, link **`custom_order`**. */
     salesOrderName?: string;
-    lines: Array<{ item_code: string; qty: number; rate: number; uom?: string | null; description?: string | null; custom_new_image?: string | null }>;
+    /** ERPNext **valid_till** (`YYYY-MM-DD`). Defaults to 30 days from today. */
+    valid_till?: string;
+    lines: Array<{
+      item_code: string;
+      qty: number;
+      rate: number;
+      uom?: string | null;
+      description?: string | null;
+      custom_new_image?: string | null;
+      weight_per_unit?: number | null;
+      total_weight?: number | null;
+    }>;
   }): Promise<{ name: string; grand_total: number; currency: string }> {
     const supplier = String(args.supplier || '').trim();
     if (!supplier) throw new Error('Supplier is required');
@@ -6098,6 +6546,8 @@ class ERPNextClient {
         uom: l.uom != null ? String(l.uom).trim() : '',
         description: l.description != null ? String(l.description).trim() : '',
         custom_new_image: l.custom_new_image != null ? String(l.custom_new_image).trim() : '',
+        weight_per_unit: l.weight_per_unit != null ? Number(l.weight_per_unit) : null,
+        total_weight: l.total_weight != null ? Number(l.total_weight) : null,
       }))
       .filter((l) => l.item_code.length > 0 && Number.isFinite(l.qty) && l.qty > 0 && Number.isFinite(l.rate) && l.rate >= 0);
 
@@ -6110,13 +6560,9 @@ class ERPNextClient {
 
     const currency = String(args.currency || 'USD').trim() || 'USD';
 
-    const today = new Date();
-    const y = today.getFullYear();
-    const m = String(today.getMonth() + 1).padStart(2, '0');
-    const d = String(today.getDate()).padStart(2, '0');
-    const transaction_date = `${y}-${m}-${d}`;
-    const vt = new Date(today.getTime() + 30 * 86400000);
-    const valid_till = `${vt.getFullYear()}-${String(vt.getMonth() + 1).padStart(2, '0')}-${String(vt.getDate()).padStart(2, '0')}`;
+    const transaction_date = erpDateIsoToday();
+    const valid_till =
+      parseErpDateInput(String(args.valid_till || '')) || defaultQuotationValidTillIso();
 
     const itemRows: Record<string, unknown>[] = lines.map((l) => {
       const row: Record<string, unknown> = {
@@ -6127,6 +6573,10 @@ class ERPNextClient {
       if (l.uom) row.uom = l.uom;
       if (l.description) row.description = l.description;
       if (l.custom_new_image) row[ERP_DOC_LINE_IMAGE_FIELD] = l.custom_new_image;
+      applyErpLineWeightToRow(row, {
+        weight_per_unit: l.weight_per_unit,
+        total_weight: l.total_weight,
+      });
       return row;
     });
 
@@ -6239,7 +6689,17 @@ class ERPNextClient {
     args: {
       currency?: string;
       referenceTitle?: string;
-      lines: Array<{ item_code: string; qty: number; rate: number; uom?: string | null; description?: string | null; custom_new_image?: string | null }>;
+      valid_till?: string;
+      lines: Array<{
+      item_code: string;
+      qty: number;
+      rate: number;
+      uom?: string | null;
+      description?: string | null;
+      custom_new_image?: string | null;
+      weight_per_unit?: number | null;
+      total_weight?: number | null;
+    }>;
     }
   ): Promise<{ name: string; grand_total: number; currency: string }> {
     const n = String(name || '').trim();
@@ -6259,6 +6719,8 @@ class ERPNextClient {
         uom: l.uom != null ? String(l.uom).trim() : '',
         description: l.description != null ? String(l.description).trim() : '',
         custom_new_image: l.custom_new_image != null ? String(l.custom_new_image).trim() : '',
+        weight_per_unit: l.weight_per_unit != null ? Number(l.weight_per_unit) : null,
+        total_weight: l.total_weight != null ? Number(l.total_weight) : null,
       }))
       .filter((l) => l.item_code.length > 0 && Number.isFinite(l.qty) && l.qty > 0 && Number.isFinite(l.rate) && l.rate >= 0);
 
@@ -6275,6 +6737,10 @@ class ERPNextClient {
       if (l.uom) row.uom = l.uom;
       if (l.description) row.description = l.description;
       if (l.custom_new_image) row[ERP_DOC_LINE_IMAGE_FIELD] = l.custom_new_image;
+      applyErpLineWeightToRow(row, {
+        weight_per_unit: l.weight_per_unit,
+        total_weight: l.total_weight,
+      });
       return row;
     });
 
@@ -6283,6 +6749,8 @@ class ERPNextClient {
     payload.currency = currency;
     const referenceTitle = String(args.referenceTitle || fresh.title || '').trim();
     if (referenceTitle) payload.title = referenceTitle;
+    const validTill = parseErpDateInput(String(args.valid_till || ''));
+    if (validTill) payload.valid_till = validTill;
 
     await this.client.put(
       `${API_VERSION}/Supplier Quotation/${encodeURIComponent(n)}?ignore_version=1`,
@@ -6532,9 +7000,19 @@ class ERPNextClient {
   }
 
   /** Sales Order Link → Supplier (default **`custom_supplier`**). */
-  private salesOrderSupplierLinkField(): string {
-    const f = String(process.env.EXPO_PUBLIC_ERPNEXT_SO_SUPPLIER_LINK_FIELD || 'custom_supplier').trim();
-    return f || 'custom_supplier';
+  salesOrderSupplierLinkField(): string {
+    return salesOrderSupplierFieldName();
+  }
+
+  /** Batch-fetch supplier display names for order list enrichment. */
+  async listSupplierNamesByIds(ids: string[]): Promise<Array<Record<string, unknown>>> {
+    const names = [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))];
+    if (!names.length) return [];
+    return await this.listResourceRows('Supplier', {
+      filters: [['name', 'in', names]],
+      fields: ['name', 'supplier_name'],
+      limit_page_length: names.length,
+    });
   }
 
   /** Throws when a buyer tries to share a Sales Order that is no longer draft. */
@@ -7000,6 +7478,127 @@ class ERPNextClient {
   }
 
   /**
+   * **Payment Entries** allocated to a **Delivery Note** (delivery / shipping fee).
+   */
+  async listPaymentEntriesForDeliveryNote(
+    deliveryNoteName: string,
+    opts?: { fromDate?: string; toDate?: string; limit?: number; customerId?: string }
+  ): Promise<any[]> {
+    const dnName = String(deliveryNoteName || '').trim();
+    if (!dnName) return [];
+    const customerId = String(opts?.customerId || '').trim();
+    const maxOut = Math.min(Math.max(1, opts?.limit ?? 40), 150);
+    const fromD = (opts?.fromDate || '').trim();
+    const toD = (opts?.toDate || '').trim();
+    const peFields = [
+      'name',
+      'posting_date',
+      'party',
+      'party_type',
+      'paid_amount',
+      'received_amount',
+      'payment_type',
+      'docstatus',
+      'status',
+      'mode_of_payment',
+      'modified',
+    ];
+
+    const passesDate = (pe: any): boolean => {
+      const pd = String(pe?.posting_date || '').trim().slice(0, 10);
+      if (fromD && pd && pd < fromD) return false;
+      if (toD && pd && pd > toD) return false;
+      return true;
+    };
+
+    const annotate = (pe: any, allocated?: number) => ({
+      ...pe,
+      _linked_delivery_note: dnName,
+      ...(allocated != null && Number.isFinite(allocated) ? { _allocated_amount: allocated } : {}),
+    });
+
+    const scopeToCustomer = (rows: any[]): any[] => {
+      if (!customerId) return rows;
+      return (rows || []).filter((pe) => {
+        const partyType = String(pe?.party_type || 'Customer').trim();
+        const party = String(pe?.party || '').trim();
+        return partyType === 'Customer' && party === customerId;
+      });
+    };
+
+    const dnLinkField = paymentEntryDeliveryNoteFieldName();
+
+    const filterSets: any[][][] = [
+      [[dnLinkField, '=', dnName], ['docstatus', '!=', 2]],
+      [
+        ['Payment Entry Reference', 'reference_doctype', '=', 'Delivery Note'],
+        ['Payment Entry Reference', 'reference_name', '=', dnName],
+        ['docstatus', '!=', 2],
+      ],
+      [
+        ['references', 'reference_doctype', '=', 'Delivery Note'],
+        ['references', 'reference_name', '=', dnName],
+        ['docstatus', '!=', 2],
+      ],
+    ];
+    for (const filters of filterSets) {
+      try {
+        const rows = await this.listResourceRows('Payment Entry', {
+          filters,
+          fields: peFields,
+          limit_page_length: maxOut,
+          order_by: 'posting_date desc',
+        });
+        const out = scopeToCustomer((rows || []).filter(passesDate).map((pe) => annotate(pe)));
+        if (out.length) return out.slice(0, maxOut);
+      } catch {
+        /* try next filter shape */
+      }
+    }
+
+    try {
+      const refs = await this.listResourceRows('Payment Entry Reference', {
+        filters: [
+          ['reference_doctype', '=', 'Delivery Note'],
+          ['reference_name', '=', dnName],
+        ],
+        fields: ['parent', 'allocated_amount'],
+        limit_page_length: maxOut,
+      });
+      const byParent = new Map<string, number>();
+      for (const r of refs || []) {
+        const parent = String(r?.parent || '').trim();
+        const alloc = Number(r?.allocated_amount);
+        if (!parent) continue;
+        byParent.set(parent, (byParent.get(parent) || 0) + (Number.isFinite(alloc) ? alloc : 0));
+      }
+      const parentNames = [...byParent.keys()];
+      if (parentNames.length) {
+        const peRows = await this.listResourceRows('Payment Entry', {
+          filters: [
+            ['name', 'in', parentNames],
+            ['docstatus', '!=', 2],
+          ],
+          fields: peFields,
+          limit_page_length: maxOut,
+          order_by: 'posting_date desc',
+        });
+        const out = scopeToCustomer(
+          (peRows || []).filter(passesDate).map((pe) => {
+            const name = String(pe?.name || '').trim();
+            return annotate(pe, byParent.get(name));
+          })
+        );
+        if (out.length) return out.slice(0, maxOut);
+      }
+    } catch {
+      /* ignore */
+    }
+
+    return [];
+  }
+
+  /**
    * **Payment Entries** that reference a **Sales Invoice** linked to this supplier’s quotations (Receive / pay flows).
    */
   async listPaymentEntriesForSupplier(
@@ -7133,6 +7732,44 @@ class ERPNextClient {
           'currency',
           'outstanding_amount',
           'docstatus',
+        ],
+        limit_page_length: lim,
+        order_by: 'posting_date desc',
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  /** **Delivery Notes** for a **Customer** (`Customer.name`). */
+  async listDeliveryNotesForCustomer(
+    customerDocName: string,
+    opts?: { fromDate?: string; toDate?: string; limit?: number }
+  ): Promise<any[]> {
+    const c = String(customerDocName || '').trim();
+    if (!c) return [];
+    const filters: any[][] = [
+      ['customer', '=', c],
+      ['docstatus', '!=', 2],
+    ];
+    const fromD = (opts?.fromDate || '').trim();
+    const toD = (opts?.toDate || '').trim();
+    if (fromD) filters.push(['posting_date', '>=', fromD]);
+    if (toD) filters.push(['posting_date', '<=', toD]);
+    const lim = Math.min(Math.max(1, opts?.limit ?? 80), 150);
+    try {
+      return await this.listResourceRows('Delivery Note', {
+        filters,
+        fields: [
+          'name',
+          'customer',
+          'customer_name',
+          'posting_date',
+          'grand_total',
+          'status',
+          'currency',
+          'docstatus',
+          'company',
         ],
         limit_page_length: lim,
         order_by: 'posting_date desc',
@@ -7493,12 +8130,31 @@ class ERPNextClient {
     }
 
     const rawItems = Array.isArray(sq.items) ? sq.items : [];
+    const linkedSo = String((sq as Record<string, unknown>)[this.supplierQuotationOrderLinkField()] || '').trim();
+    const sqLineRows = rawItems as Record<string, unknown>[];
+    const { supplier: sqLineImages, fallback: soLineImages } = await this.resolveSupplierQuotationLineImages(
+      n,
+      sqLineRows,
+      linkedSo
+    );
+
     const items = rawItems
-      .map((row: any) => ({
-        item_code: String(row?.item_code || row?.item || '').trim(),
-        qty: Number(row?.qty ?? row?.qty_consumed ?? row?.stock_qty),
-        rate: Number(row?.rate ?? row?.net_rate ?? row?.price_list_rate),
-      }))
+      .map((row: any) => {
+        const code = String(row?.item_code || row?.item || '').trim();
+        const weights = readErpLineWeightFromRow(row as Record<string, unknown>);
+        const lineImage =
+          readErpDocLineImage(row as Record<string, unknown>) ||
+          sqLineImages[code] ||
+          soLineImages[code] ||
+          '';
+        return {
+          item_code: code,
+          qty: Number(row?.qty ?? row?.qty_consumed ?? row?.stock_qty),
+          rate: Number(row?.rate ?? row?.net_rate ?? row?.price_list_rate),
+          custom_new_image: lineImage,
+          ...weights,
+        };
+      })
       .filter(
         (it: { item_code: string; qty: number; rate: number }) =>
           it.item_code.length > 0 && Number.isFinite(it.qty) && it.qty > 0 && Number.isFinite(it.rate) && it.rate >= 0
@@ -7523,11 +8179,24 @@ class ERPNextClient {
       posting_date,
       due_date,
       currency,
-      items: items.map((it: { item_code: string; qty: number; rate: number }) => ({
-        item_code: it.item_code,
-        qty: it.qty,
-        rate: it.rate,
-      })),
+      items: items.map(
+        (it: {
+          item_code: string;
+          qty: number;
+          rate: number;
+          custom_new_image?: string;
+          weight_per_unit?: number | null;
+          total_weight?: number | null;
+        }) => {
+          const row: Record<string, unknown> = {
+            item_code: it.item_code,
+            qty: it.qty,
+            rate: it.rate,
+          };
+          applyErpLineWeightToRow(row, it);
+          return applyErpDocLineImage(row, it.custom_new_image);
+        }
+      ),
       [linkField]: n,
     };
     if (supplier) {
@@ -7669,6 +8338,155 @@ class ERPNextClient {
     return doc;
   }
 
+  private linkedSalesInvoiceNameFromDeliveryNote(doc: Record<string, unknown>): string | null {
+    const rows = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
+    const siName = rows
+      .map((row) => String(row.against_sales_invoice || '').trim())
+      .find((n) => n.length > 0);
+    return siName || null;
+  }
+
+  /**
+   * ERPNext `get_payment_entry` does not support Delivery Note out of the box
+   * (`set_party_type` fails). Payment Entry references also cannot point at Delivery Note
+   * on submit — link via `custom_delivery_note` and leave the amount unallocated to party.
+   */
+  private async getPaymentEntryDocForDeliveryNote(
+    dnName: string,
+    pay: number,
+    dn: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const methodPath = 'erpnext.accounts.doctype.payment_entry.payment_entry.get_payment_entry';
+    const receiveArgs = {
+      party_amount: pay,
+      party_type: 'Customer',
+      payment_type: 'Receive',
+    };
+
+    try {
+      const raw = await this.callFrappeMethodRavenOrApi(methodPath, {
+        dt: 'Delivery Note',
+        dn: dnName,
+        ...receiveArgs,
+      });
+      return this.parseGetPaymentEntryDoc(raw);
+    } catch (dnErr) {
+      console.warn('[ERPNext] get_payment_entry against Delivery Note failed', dnErr);
+    }
+
+    const siName = this.linkedSalesInvoiceNameFromDeliveryNote(dn);
+    if (siName) {
+      try {
+        const raw = await this.callFrappeMethodRavenOrApi(methodPath, {
+          dt: 'Sales Invoice',
+          dn: siName,
+          ...receiveArgs,
+        });
+        return this.parseGetPaymentEntryDoc(raw);
+      } catch (siErr) {
+        console.warn('[ERPNext] get_payment_entry SI template for DN payment failed', siErr);
+      }
+    }
+
+    throw new Error(
+      'Could not open a payment entry for this delivery note. Check company bank account and customer receivable account in ERPNext.'
+    );
+  }
+
+  private allocatePaymentEntryToDeliveryNote(
+    peDoc: Record<string, unknown>,
+    dnName: string,
+    pay: number
+  ): Record<string, unknown> {
+    const dnField = paymentEntryDeliveryNoteFieldName();
+    const remarks = String(peDoc.remarks || '').trim();
+    return {
+      ...peDoc,
+      paid_amount: pay,
+      received_amount: pay,
+      [dnField]: dnName,
+      references: [],
+      remarks: remarks || `Delivery fee — ${dnName}`,
+    };
+  }
+
+  /** Create + submit a Payment Entry using Frappe session when logged in (same path as manual receive). */
+  private async createAndSubmitPaymentEntry(toSave: Record<string, unknown>): Promise<any> {
+    const { hasFrappeRavenSession, ravenCreateResourceDoc, ravenGetResourceDoc } = await import(
+      './frappeRavenSession'
+    );
+
+    const saveDoc = async (payload: Record<string, unknown>) => {
+      if (hasFrappeRavenSession()) {
+        return await ravenCreateResourceDoc('Payment Entry', payload);
+      }
+      const res = await this.client.post(`${API_VERSION}/Payment Entry`, payload);
+      return res.data?.data;
+    };
+
+    let saved: any;
+    try {
+      saved = await saveDoc(toSave);
+    } catch (firstError) {
+      const hasCustomPaystack =
+        'custom_paystack_reference' in toSave ||
+        'custom_paystack_status' in toSave ||
+        'custom_display_text' in toSave;
+      if (!hasCustomPaystack) throw firstError;
+      const fallback = { ...toSave };
+      delete fallback.custom_paystack_reference;
+      delete fallback.custom_paystack_status;
+      delete fallback.custom_display_text;
+      saved = await saveDoc(fallback);
+    }
+
+    const peName = saved?.name != null ? String(saved.name).trim() : '';
+    if (!peName) throw new Error('ERPNext did not return a Payment Entry name.');
+
+    if (hasFrappeRavenSession()) {
+      let doc = await ravenGetResourceDoc('Payment Entry', peName);
+      try {
+        await this.callFrappeMethodRavenOrApi('frappe.client.submit', { doc });
+      } catch (submitErr) {
+        const refs = doc?.references;
+        if (!Array.isArray(refs) || refs.length === 0) throw submitErr;
+        const paid = Number(doc.paid_amount) || Number(doc.received_amount) || 0;
+        doc = { ...doc, references: [], unallocated_amount: paid };
+        await this.callFrappeMethodRavenOrApi('frappe.client.save', { doc });
+        await this.callFrappeMethodRavenOrApi('frappe.client.submit', { doc });
+      }
+      return await ravenGetResourceDoc('Payment Entry', peName);
+    }
+
+    await this.submitPaymentEntry(peName);
+    return await this.getPaymentEntry(peName);
+  }
+
+  private async linkedInvoiceGrandTotalForDeliveryNote(
+    doc: Record<string, unknown>
+  ): Promise<number | null> {
+    const siName = this.linkedSalesInvoiceNameFromDeliveryNote(doc);
+    if (!siName) return null;
+    try {
+      const inv = await this.getSalesInvoiceRaw(siName);
+      const gt = Number(inv?.grand_total);
+      return Number.isFinite(gt) && gt > 0 ? gt : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Delivery (shipping) fee still due — submitted notes with a delivery charge. */
+  async effectiveDeliveryNoteShippingOutstanding(deliveryNoteName: string): Promise<number> {
+    const dnName = String(deliveryNoteName || '').trim();
+    if (!dnName) return 0;
+    const dn = await this.getDeliveryNoteRaw(dnName);
+    if (!dn || !deliveryNoteAllowsDeliveryPayment(dn)) return 0;
+    const invoiceGt = await this.linkedInvoiceGrandTotalForDeliveryNote(dn);
+    const payments = await this.listPaymentEntriesForDeliveryNote(dnName);
+    return deliveryNoteShippingOutstanding(dn, invoiceGt, payments);
+  }
+
   private async findPaymentEntryByPaystackReference(reference: string): Promise<any | null> {
     const ref = String(reference || '').trim();
     if (!ref) return null;
@@ -7733,7 +8551,7 @@ class ERPNextClient {
     const modeOfPayment = await this.resolveModeOfPaymentFromPaystackChannel(channel);
 
     const methodPath = 'erpnext.accounts.doctype.payment_entry.payment_entry.get_payment_entry';
-    const raw = await this.callFrappeMethod(methodPath, {
+    const raw = await this.callFrappeMethodRavenOrApi(methodPath, {
       dt: 'Sales Invoice',
       dn: invName,
       party_amount: pay,
@@ -7749,13 +8567,65 @@ class ERPNextClient {
     const gatewayResponse = String(verify.data.gateway_response || '').trim();
     if (gatewayResponse) toSave.custom_display_text = gatewayResponse;
 
-    const res = await this.client.post(`${API_VERSION}/Payment Entry`, toSave);
-    const saved = res.data?.data;
-    const peName = saved?.name != null ? String(saved.name).trim() : '';
-    if (!peName) throw new Error('ERPNext did not return a Payment Entry name.');
+    return await this.createAndSubmitPaymentEntry(toSave);
+  }
 
-    await this.submitPaymentEntry(peName);
-    return await this.getPaymentEntry(peName);
+  /**
+   * Verify Paystack and record payment against the **delivery (shipping) portion** of a Delivery Note only.
+   */
+  async recordPaystackPaymentAgainstDeliveryNote(args: {
+    deliveryNoteName: string;
+    paystackReference: string;
+  }): Promise<any> {
+    const dnName = String(args.deliveryNoteName || '').trim();
+    const ref = String(args.paystackReference || '').trim();
+    if (!dnName) throw new Error('Delivery note name required');
+    if (!ref) throw new Error('Payment reference is missing.');
+
+    const existing = await this.findPaymentEntryByPaystackReference(ref);
+    if (existing?.name) return existing;
+
+    const { verifyPaystackPayment, paystackVerifyPaymentChannel } = await import('./paystack');
+    const verify = await verifyPaystackPayment(ref);
+    if (!verify?.status || String(verify.data?.status || '').trim().toLowerCase() !== 'success') {
+      throw new Error(
+        String(verify.data?.gateway_response || '').trim() || 'Paystack payment is not successful yet.'
+      );
+    }
+
+    const paidGhs = Number(verify.data?.amount) / 100;
+    if (!Number.isFinite(paidGhs) || paidGhs <= 0) {
+      throw new Error('Paystack returned an invalid payment amount.');
+    }
+
+    const dn = await this.getDeliveryNoteRaw(dnName);
+    if (!dn) throw new Error('Delivery Note not found.');
+    if (!deliveryNoteAllowsDeliveryPayment(dn)) {
+      throw new Error('This delivery note is not ready for delivery payment.');
+    }
+
+    const outstanding = await this.effectiveDeliveryNoteShippingOutstanding(dnName);
+    if (!Number.isFinite(outstanding) || outstanding <= 0) {
+      throw new Error('This delivery note has no delivery fee due.');
+    }
+
+    const pay = Math.min(paidGhs, outstanding);
+    if (pay <= 0) throw new Error('Nothing to allocate to this delivery note.');
+
+    const channel = paystackVerifyPaymentChannel(verify.data);
+    const modeOfPayment = await this.resolveModeOfPaymentFromPaystackChannel(channel);
+
+    let peDoc = await this.getPaymentEntryDocForDeliveryNote(dnName, pay, dn);
+    peDoc = this.allocatePaymentEntryToDeliveryNote(peDoc, dnName, pay);
+
+    const toSave = this.stripFrappeDocMetaForCreate(peDoc);
+    if (modeOfPayment) toSave.mode_of_payment = modeOfPayment;
+    toSave.custom_paystack_reference = ref;
+    toSave.custom_paystack_status = String(verify.data.status || 'success');
+    const gatewayResponse = String(verify.data.gateway_response || '').trim();
+    if (gatewayResponse) toSave.custom_display_text = gatewayResponse;
+
+    return await this.createAndSubmitPaymentEntry(toSave);
   }
 
   /** True when a **Mode of Payment** document exists (Link target for Payment Request). */
@@ -8082,18 +8952,40 @@ class ERPNextClient {
     peDoc = this.allocatePaymentEntryToSalesInvoice(peDoc, invName, pay);
     const toSave = this.stripFrappeDocMetaForCreate(peDoc);
 
-    const { hasFrappeRavenSession, ravenCreateResourceDoc } = await import('./frappeRavenSession');
-    let saved: any;
-    if (hasFrappeRavenSession()) {
-      saved = await ravenCreateResourceDoc('Payment Entry', toSave);
-    } else {
-      const res = await this.client.post(`${API_VERSION}/Payment Entry`, toSave);
-      saved = res.data?.data;
+    return await this.createAndSubmitPaymentEntry(toSave);
+  }
+
+  /**
+   * Record a **Receive** payment for the delivery (shipping) fee on a submitted Delivery Note.
+   */
+  async recordReceivePaymentAgainstDeliveryNote(args: {
+    deliveryNoteName: string;
+    amount: number;
+  }): Promise<any> {
+    const dnName = String(args.deliveryNoteName || '').trim();
+    const amt = Number(args.amount);
+    if (!dnName) throw new Error('Delivery note name required');
+    if (!Number.isFinite(amt) || amt <= 0) throw new Error('Enter an amount greater than zero.');
+
+    const dn = await this.getDeliveryNoteRaw(dnName);
+    if (!dn) throw new Error('Delivery Note not found.');
+    if (!deliveryNoteAllowsDeliveryPayment(dn)) {
+      throw new Error('This delivery note is not ready for delivery payment.');
     }
-    const peName = saved?.name != null ? String(saved.name).trim() : '';
-    if (!peName) throw new Error('ERPNext did not return a Payment Entry name.');
-    await this.submitPaymentEntry(peName);
-    return await this.getPaymentEntry(peName);
+
+    const outstanding = await this.effectiveDeliveryNoteShippingOutstanding(dnName);
+    if (!Number.isFinite(outstanding) || outstanding <= 0) {
+      throw new Error('This delivery note has no delivery fee due.');
+    }
+
+    const pay = Math.min(amt, outstanding);
+    if (pay <= 0) throw new Error('Nothing to allocate.');
+
+    let peDoc = await this.getPaymentEntryDocForDeliveryNote(dnName, pay, dn);
+    peDoc = this.allocatePaymentEntryToDeliveryNote(peDoc, dnName, pay);
+    const toSave = this.stripFrappeDocMetaForCreate(peDoc);
+
+    return await this.createAndSubmitPaymentEntry(toSave);
   }
 
   /**

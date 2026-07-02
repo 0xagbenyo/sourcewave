@@ -72,6 +72,7 @@ import {
   ravenMergeMessageRowFromSendResponse,
   ravenRowIsSupplierQuotationDocLink,
   ravenRowIsSalesOrderDocLink,
+  ravenRowIsDeliveryNoteDocLink,
   ravenRowIsSalesInvoiceDocLink,
   ravenMessageOwnerMatchesSession,
   fetchRavenUserProfilesByIds,
@@ -88,16 +89,18 @@ import {
 import {
   formatChatDateSeparator,
   formatMessageBubbleTime,
+  isRavenMessageContinuation,
   formatMessageHeaderTime,
   initialsFromUserId,
   isDmChannel,
   parseRavenDateTime,
   pastelAvatarBg,
   shouldShowChatDateSeparator,
-  shouldShowChatMessageSenderHeader,
   shouldShowChatMessageTextBubble,
   isChatMessageGroupedWithNewer,
+  ravenMessageCreatedAt,
 } from '../utils/ravenChatUi';
+import { useChatLaneLayout } from '../hooks/useChatLaneLayout';
 import { plainTextFromMaybeHtml, chatMessageBubbleBodyText } from '../utils/chatPlainText';
 import {
   ravenWorkspaceMemberIsAdmin,
@@ -108,7 +111,8 @@ import { ravenMessageHasVisualMedia, ravenSameMessageOwner } from '../utils/rave
 import {
   type RavenPendingAttachment,
 } from '../utils/ravenMediaPick';
-import { pickChatDocuments, pickChatMediaFromLibrary } from '../utils/ravenChatAttachPickers';
+import { pickChatDocuments, pickChatMediaWithSource } from '../utils/ravenChatAttachPickers';
+import { imagePickLabelsFromT } from '../utils/formImagePicker';
 import { getRavenLastChat, setRavenLastChat } from '../utils/ravenLastChatStorage';
 import { subscribeSuppliersTabReset } from '../utils/suppliersTabReset';
 import { consumeSkipSuppliersTabFocusReset } from '../utils/suppliersTabFocusReset';
@@ -132,6 +136,9 @@ import {
   sortRavenMessagesNewestFirst,
 } from '../utils/ravenChannelMessagesLoad';
 import { setRavenOpenChatFromProfileSubscriber } from '../utils/ravenOpenChatFromProfileBridge';
+import type { RavenOpenChatFromProfilePayload } from '../utils/ravenOpenChatFromProfileBridge';
+import { consumePendingSuppliersChatOpen } from '../utils/ravenPendingSuppliersChatOpen';
+import { resolveWorkspaceIdForSuppliersChat } from '../utils/openRavenChatAfterShare';
 import { resetToAuthScreen } from '../navigation/rootNavigation';
 import { getMainTabBarStyle } from '../navigation/mainTabBarStyle';
 import { RavenGlobalSearchModal } from '../components/RavenGlobalSearchModal';
@@ -142,11 +149,14 @@ import { RavenForwardMessageModal } from '../components/RavenForwardMessageModal
 import { RavenComposerEmojiSheet } from '../components/RavenComposerEmojiSheet';
 import { useRavenMessageActions } from '../hooks/useRavenMessageActions';
 import { useSqPaymentActionRegistry } from '../hooks/useSqPaymentActionRegistry';
+import { RavenForwardedLabel } from '../components/RavenForwardedLabel';
+import { primaryChannelIdAfterShare } from '../utils/openRavenChatAfterShare';
 import { ravenMessageIsForwarded } from '../utils/ravenMessageReactions';
 import { RavenSharedInChatList } from '../components/RavenSharedInChatList';
 import { RavenQuotationDraftCard } from '../components/RavenQuotationDraftCard';
 import { RavenLinkedSupplierQuotationMessage } from '../components/RavenLinkedSupplierQuotationMessage';
 import { RavenLinkedSalesOrderMessage } from '../components/RavenLinkedSalesOrderMessage';
+import { RavenLinkedDeliveryNoteMessage } from '../components/RavenLinkedDeliveryNoteMessage';
 import { RavenLinkedSalesInvoiceMessage } from '../components/RavenLinkedSalesInvoiceMessage';
 import { RavenLinkedGenericDocMessage } from '../components/RavenLinkedGenericDocMessage';
 import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
@@ -171,6 +181,7 @@ import { useAutoNavigateToSubscriptionWhenInactive } from '../hooks/useAutoNavig
 import { buyerRavenRouteNeedsSubscription } from '../utils/buyerSuppliersPremium';
 import { userFacingError } from '../utils/userFacingError';
 import { userFacingFrappeError } from '../utils/frappeHttpError';
+import { LOGISTICS_RAVEN_WORKSPACE_NAME } from '../constants/logisticsRavenWorkspace';
 
 const POLL_MS = 3000;
 
@@ -512,6 +523,11 @@ export const RavenUIMessagesScreen: React.FC = () => {
     const p = route.params as { shareSalesOrderName?: string } | undefined;
     return String(p?.shareSalesOrderName ?? '').trim();
   }, [isSuppliersBuyerTab, route.params]);
+  const shareDeliveryNoteName = useMemo(() => {
+    if (!isSuppliersBuyerTab) return '';
+    const p = route.params as { shareDeliveryNoteName?: string } | undefined;
+    return String(p?.shareDeliveryNoteName ?? '').trim();
+  }, [isSuppliersBuyerTab, route.params]);
   const insets = useSafeAreaInsets();
   const { user } = useUserSession();
   const { t } = useTranslation();
@@ -538,6 +554,17 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const { composerBottomPad, rootKeyboardPad } = useChatComposerInsets(!!channel);
   const [messages, setMessages] = useState<RavenMessageRow[]>([]);
   const [loadingBoot, setLoadingBoot] = useState(true);
+  const [openingSuppliersChat, setOpeningSuppliersChat] = useState(false);
+  /** Local dismiss before route params clear — avoids logistics lock re-applying on tab reset. */
+  const [sharePickDismissed, setSharePickDismissed] = useState(false);
+  const activeShareSalesOrderName = sharePickDismissed ? '' : shareSalesOrderName;
+  const activeShareDeliveryNoteName = sharePickDismissed ? '' : shareDeliveryNoteName;
+
+  useEffect(() => {
+    if (shareSalesOrderName || shareDeliveryNoteName) {
+      setSharePickDismissed(false);
+    }
+  }, [shareSalesOrderName, shareDeliveryNoteName]);
   const [loadingWorkspaceChannels, setLoadingWorkspaceChannels] = useState(false);
   const [loadingWorkspaceMembers, setLoadingWorkspaceMembers] = useState(false);
   const [loadingMsgs, setLoadingMsgs] = useState(true);
@@ -582,6 +609,20 @@ export const RavenUIMessagesScreen: React.FC = () => {
     [isSuppliersBuyerTab, user?.email]
   );
 
+  const clearSuppliersShareRouteParams = useCallback(() => {
+    setSharePickDismissed(true);
+    if (!isSuppliersBuyerTab) return;
+    try {
+      (navigation as unknown as { setParams: (obj: Record<string, unknown>) => void }).setParams({
+        shareSalesOrderName: undefined,
+        shareDeliveryNoteName: undefined,
+        openRavenWorkspaceId: undefined,
+      });
+    } catch {
+      /* noop */
+    }
+  }, [navigation, isSuppliersBuyerTab]);
+
   const resetSuppliersTabToRoot = useCallback(() => {
     setDrawerOpen(false);
     setSearchOpen(false);
@@ -593,7 +634,8 @@ export const RavenUIMessagesScreen: React.FC = () => {
     setMembers([]);
     setError(null);
     void setRavenLastChat(user?.email, null);
-  }, [user?.email]);
+    clearSuppliersShareRouteParams();
+  }, [user?.email, clearSuppliersShareRouteParams]);
 
   /** Same semantics as Raven `useIsUserActive` (get_active_users + Invisible on Raven User). */
   const [activeUserIds, setActiveUserIds] = useState<string[]>([]);
@@ -636,6 +678,8 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const skipSuppliersFocusResetRef = useRef(false);
   /** True after Suppliers tab loses focus (another tab selected). */
   const suppliersTabWasBlurredRef = useRef(false);
+
+  const { metrics: chatLane, onListLayout: onChatListLayout } = useChatLaneLayout();
 
   /** Latest hierarchy for back / swipe — refs avoid stale reads inside navigation gesture handlers. */
   const hierarchyForBackRef = useRef({
@@ -710,7 +754,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
   }, [isHeaderChatInbox, workspace, channel]);
 
   useEffect(() => {
-    if (route.name !== 'RavenChatInbox') return;
+    if (route.name !== 'RavenChatInbox' && route.name !== 'SupplierMessages') return;
     const p = route.params as
       | {
           openWorkspaceId?: string;
@@ -905,17 +949,8 @@ export const RavenUIMessagesScreen: React.FC = () => {
   useFocusEffect(
     useCallback(() => {
       if (!isSuppliersBuyerTab) return;
-      const p = route.params as
-        | {
-            openRavenChannelId?: string;
-            openRavenWorkspaceId?: string;
-            shareSalesOrderName?: string;
-          }
-        | undefined;
-      const hasDeepLink =
-        !!String(p?.openRavenChannelId ?? '').trim() ||
-        !!String(p?.openRavenWorkspaceId ?? '').trim() ||
-        !!String(p?.shareSalesOrderName ?? '').trim();
+      const p = route.params as { openRavenChannelId?: string } | undefined;
+      const hasDeepLink = !!String(p?.openRavenChannelId ?? '').trim();
       if (hasDeepLink || consumeSkipSuppliersTabFocusReset()) {
         skipSuppliersFocusResetRef.current = true;
       }
@@ -930,8 +965,11 @@ export const RavenUIMessagesScreen: React.FC = () => {
       suppliersTabWasBlurredRef.current = false;
       return () => {
         suppliersTabWasBlurredRef.current = true;
+        if (!skipSuppliersFocusResetRef.current) {
+          clearSuppliersShareRouteParams();
+        }
       };
-    }, [isSuppliersBuyerTab, resetSuppliersTabToRoot, route.params])
+    }, [isSuppliersBuyerTab, resetSuppliersTabToRoot, route.params, clearSuppliersShareRouteParams])
   );
 
   /** Buyer Suppliers tab only — supplier portal Chat has no “suggested suppliers” block. */
@@ -958,6 +996,32 @@ export const RavenUIMessagesScreen: React.FC = () => {
     if (row?.name != null && String(row.name).trim()) return String(row.name).trim();
     return id;
   }, [workspace, workspaceRows]);
+
+  useEffect(() => {
+    if (!isSuppliersBuyerTab || !activeShareDeliveryNoteName) return;
+    if (workspace?.trim()) return;
+    const p = route.params as { openRavenWorkspaceId?: string } | undefined;
+    const wsHint = String(p?.openRavenWorkspaceId ?? LOGISTICS_RAVEN_WORKSPACE_NAME).trim();
+    const logistics =
+      matchRavenWorkspaceRow(wsHint, workspaceRows) ||
+      matchRavenWorkspaceRow(LOGISTICS_RAVEN_WORKSPACE_NAME, workspaceRows);
+    if (!logistics?.name) return;
+    skipSuppliersFocusResetRef.current = true;
+    setWorkspace(String(logistics.name).trim());
+    setChannel(null);
+  }, [isSuppliersBuyerTab, activeShareDeliveryNoteName, workspace, workspaceRows, route.params]);
+
+  useEffect(() => {
+    if (!isSuppliersBuyerTab || !channel?.name?.trim()) return;
+    if (!shareSalesOrderName && !shareDeliveryNoteName) return;
+    clearSuppliersShareRouteParams();
+  }, [
+    isSuppliersBuyerTab,
+    channel?.name,
+    shareSalesOrderName,
+    shareDeliveryNoteName,
+    clearSuppliersShareRouteParams,
+  ]);
 
   const messagesById = useMemo(() => {
     const map = new Map<string, RavenMessageRow>();
@@ -1570,11 +1634,13 @@ export const RavenUIMessagesScreen: React.FC = () => {
                   openRavenWorkspaceId?: string;
                   openRavenChannelId?: string;
                   openRavenPeerUserId?: string;
+                  shareDeliveryNoteName?: string;
                 }
               | undefined;
             const wsFromRoute = String(p?.openRavenWorkspaceId ?? '').trim();
             const chFromRoute = String(p?.openRavenChannelId ?? '').trim();
             const peerFromRoute = String(p?.openRavenPeerUserId ?? '').trim();
+            const shareDn = String(p?.shareDeliveryNoteName ?? '').trim();
             if (wsFromRoute && chFromRoute) {
               initialWs = wsFromRoute;
               pendingOpenFromGlobalRef.current = {
@@ -1583,6 +1649,15 @@ export const RavenUIMessagesScreen: React.FC = () => {
                 ...(peerFromRoute ? { peerUserId: peerFromRoute } : {}),
               };
               skipSuppliersFocusResetRef.current = true;
+            } else if (shareDn) {
+              const wsHint = wsFromRoute || LOGISTICS_RAVEN_WORKSPACE_NAME;
+              const logistics =
+                matchRavenWorkspaceRow(wsHint, list) ||
+                matchRavenWorkspaceRow(LOGISTICS_RAVEN_WORKSPACE_NAME, list);
+              if (logistics?.name) {
+                initialWs = String(logistics.name).trim();
+                skipSuppliersFocusResetRef.current = true;
+              }
             }
           } else if (list.length > 0 && !isHeaderChatInbox) {
             const last = await getRavenLastChat(user?.email);
@@ -1737,7 +1812,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
           setError(userFacingError(e, 'Failed to load supplier group'));
         }
       } finally {
-        if (!cancelled && selectedWorkspaceRef.current === wsTarget) {
+        if (!cancelled) {
           setLoadingWorkspaceChannels(false);
         }
       }
@@ -1794,14 +1869,21 @@ export const RavenUIMessagesScreen: React.FC = () => {
   }, [channel?.name]);
 
   const sortedWorkspaceRows = useMemo(() => {
-    return [...workspaceRows]
-      .filter((w) => String(w.name || '').trim())
-      .sort((a, b) =>
-        workspaceListPrimaryLabel(a).localeCompare(workspaceListPrimaryLabel(b), undefined, {
-          sensitivity: 'base',
-        })
-      );
-  }, [workspaceRows]);
+    let rows = [...workspaceRows].filter((w) => String(w.name || '').trim());
+    if (activeShareDeliveryNoteName) {
+      const p = route.params as { openRavenWorkspaceId?: string } | undefined;
+      const wsHint = String(p?.openRavenWorkspaceId ?? LOGISTICS_RAVEN_WORKSPACE_NAME).trim();
+      const logistics =
+        matchRavenWorkspaceRow(wsHint, rows) ||
+        matchRavenWorkspaceRow(LOGISTICS_RAVEN_WORKSPACE_NAME, rows);
+      if (logistics) rows = [logistics];
+    }
+    return rows.sort((a, b) =>
+      workspaceListPrimaryLabel(a).localeCompare(workspaceListPrimaryLabel(b), undefined, {
+        sensitivity: 'base',
+      })
+    );
+  }, [workspaceRows, activeShareDeliveryNoteName, route.params]);
 
   const listSearchQ = listSearchQuery.trim().toLowerCase();
 
@@ -1829,13 +1911,11 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const isWorkspaceHubList = !isHeaderChatInbox && !channel && !workspace?.trim();
   const workspaceHubSubtitle = useMemo(() => {
     if (!isWorkspaceHubList) return '';
-    const total = sortedWorkspaceRows.length;
-    const shown = filteredSortedWorkspaceRows.length;
     const q = listSearchQuery.trim();
-    if (total === 0) return 'Choose a group to find suppliers';
-    if (q) return `${shown} matching`;
-    return '';
-  }, [isWorkspaceHubList, sortedWorkspaceRows.length, filteredSortedWorkspaceRows.length, listSearchQuery]);
+    if (!q) return '';
+    const shown = filteredSortedWorkspaceRows.length;
+    return `${shown} matching`;
+  }, [isWorkspaceHubList, filteredSortedWorkspaceRows.length, listSearchQuery]);
 
   const filteredWorkspaceSuppliersSorted = useMemo(() => {
     if (!listSearchQ) return workspaceSuppliersSorted;
@@ -2510,16 +2590,16 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const pickMedia = useCallback(async () => {
     if (!channel?.name) return;
     try {
-      const result = await pickChatMediaFromLibrary();
+      const result = await pickChatMediaWithSource(imagePickLabelsFromT(t));
       if (!result.ok) {
         if (!result.canceled) Alert.alert('Media', result.message);
         return;
       }
       setPendingAttachments((prev) => [...prev, ...result.data]);
     } catch (e: unknown) {
-      Alert.error('Media', userFacingError(e, 'Could not open photo library.'));
+      Alert.error('Media', userFacingError(e, 'Could not attach media.'));
     }
-  }, [channel?.name]);
+  }, [channel?.name, t]);
 
   const pickDocument = useCallback(async () => {
     if (!channel?.name) return;
@@ -2701,6 +2781,71 @@ export const RavenUIMessagesScreen: React.FC = () => {
     [workspace, persistLastChat, resolvedWorkspaceId]
   );
 
+  const openChannelAfterShare = useCallback(
+    async (channelId: string) => {
+      const id = channelId.trim();
+      if (!id) return;
+
+      let hit = channels.find((c) => String(c.name || '').trim() === id) ?? null;
+      if (!hit) {
+        const rows = await listRavenChannelsForSessionUser(user?.email ?? null);
+        hit = rows.find((c) => String(c.name || '').trim() === id) ?? null;
+      }
+      if (!hit) {
+        Alert.error('Chat', 'Could not open that conversation.');
+        return;
+      }
+
+      const realWorkspace = String(hit.workspace || '').trim();
+      pendingOpenFromGlobalRef.current = null;
+      channelIdRef.current = id;
+      persistLastChat({ workspace: realWorkspace || id, channelId: id });
+      setDrawerOpen(false);
+
+      if (isHeaderChatInbox && isDmChannel(hit) && !realWorkspace) {
+        workspaceHydratedRef.current = null;
+        setWorkspace(null);
+        setChannel(hit);
+        void loadMessages(id, { force: true });
+        return;
+      }
+
+      if (!realWorkspace) {
+        setChannel(hit);
+        void loadMessages(id, { force: true });
+        return;
+      }
+
+      const wsResolved = resolveRavenWorkspaceDocId(realWorkspace, workspaceRows) || realWorkspace;
+      if (workspace?.trim().toLowerCase() === realWorkspace.toLowerCase()) {
+        workspaceHydratedRef.current = wsResolved;
+        setChannel(hit);
+        void loadMessages(id, { force: true });
+        return;
+      }
+
+      const peer = getRavenDmPeerUserId(hit, user?.email);
+      pendingOpenFromGlobalRef.current = {
+        ws: realWorkspace,
+        channelId: id,
+        ...(peer ? { peerUserId: peer } : {}),
+      };
+      workspaceHydratedRef.current = wsResolved;
+      setWorkspace(realWorkspace);
+      setChannel(hit);
+      void loadMessages(id, { force: true });
+    },
+    [
+      channels,
+      user?.email,
+      isHeaderChatInbox,
+      persistLastChat,
+      workspace,
+      workspaceRows,
+      loadMessages,
+    ]
+  );
+
   const openThreadFromInboxRow = useCallback(
     (row: GlobalInboxRow, jumpMessageId?: string) => {
       const chId = row.channel.name.trim();
@@ -2853,6 +2998,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
       const chNorm = chRaw.trim();
       const peerNorm = (peerUserIdRaw || '').trim();
       if (!wsNorm || !chNorm) return;
+      if (isSuppliersBuyerTab) setOpeningSuppliersChat(true);
       skipSuppliersFocusResetRef.current = true;
       persistLastChat({ workspace: wsNorm, channelId: chNorm });
       const sameWs = workspace?.trim().toLowerCase() === wsNorm.toLowerCase();
@@ -2882,9 +3028,11 @@ export const RavenUIMessagesScreen: React.FC = () => {
             setChannel(opened);
             void loadMessages(chNorm);
           } else {
+            setOpeningSuppliersChat(false);
             Alert.alert('Chat', 'Could not open that conversation.');
           }
         } catch (e: any) {
+          setOpeningSuppliersChat(false);
           Alert.error('Chat', userFacingError(e, 'Could not load conversation.'));
         }
       } else {
@@ -2896,7 +3044,51 @@ export const RavenUIMessagesScreen: React.FC = () => {
         setWorkspace(wsNorm);
       }
     },
-    [workspace, persistLastChat, loadMessages]
+    [workspace, persistLastChat, loadMessages, isSuppliersBuyerTab]
+  );
+
+  useEffect(() => {
+    if (channel?.name?.trim()) {
+      setOpeningSuppliersChat(false);
+    }
+  }, [channel?.name]);
+
+  useEffect(() => {
+    if (!openingSuppliersChat) return;
+    const timer = setTimeout(() => setOpeningSuppliersChat(false), 20000);
+    return () => clearTimeout(timer);
+  }, [openingSuppliersChat]);
+
+  const applyPendingSuppliersChatOpen = useCallback(
+    (p: RavenOpenChatFromProfilePayload) => {
+      const ch = String(p.channelId || '').trim();
+      const peer = String(p.peerUserId || '').trim();
+      if (!ch) return;
+      setOpeningSuppliersChat(true);
+      void (async () => {
+        let ws = String(p.workspaceId || '').trim();
+        if (!ws) {
+          ws = await resolveWorkspaceIdForSuppliersChat({
+            sessionEmail: user?.email,
+            channelId: ch,
+            workspaceId: p.workspaceId,
+          });
+        }
+        if (!ws) {
+          setOpeningSuppliersChat(false);
+          return;
+        }
+        skipSuppliersFocusResetRef.current = true;
+        pendingOpenFromGlobalRef.current = {
+          ws,
+          channelId: ch,
+          ...(peer ? { peerUserId: peer } : {}),
+        };
+        setWorkspace(ws);
+        void openChannelFromSuppliersRouteParams(ws, ch, peer || undefined);
+      })();
+    },
+    [openChannelFromSuppliersRouteParams, user?.email]
   );
 
   useEffect(() => {
@@ -2911,6 +3103,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
 
     let cancelled = false;
     let raf = 0;
+    if (isSuppliersBuyerTab) setOpeningSuppliersChat(true);
     void (async () => {
       let ws = wsHint;
       if (!ws) {
@@ -2933,6 +3126,25 @@ export const RavenUIMessagesScreen: React.FC = () => {
       if (!ws || cancelled) return;
 
       skipSuppliersFocusResetRef.current = true;
+      pendingOpenFromGlobalRef.current = {
+        ws,
+        channelId: ch,
+        ...(peer ? { peerUserId: peer } : {}),
+      };
+      if (isSuppliersBuyerTab) {
+        setWorkspace((cur) => {
+          const curNorm = (cur || '').trim().toLowerCase();
+          const wsNorm = ws.trim().toLowerCase();
+          if (
+            curNorm &&
+            (curNorm === wsNorm ||
+              resolveRavenWorkspaceDocId(cur || '', workspaceRows).toLowerCase() === wsNorm)
+          ) {
+            return cur;
+          }
+          return ws;
+        });
+      }
       void openChannelFromSuppliersRouteParams(ws, ch, peer || undefined);
       raf = requestAnimationFrame(() => {
         try {
@@ -2941,6 +3153,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
             openRavenChannelId: undefined,
             openRavenPeerUserId: undefined,
             shareSalesOrderName: undefined,
+            shareDeliveryNoteName: undefined,
           });
         } catch {
           /* noop */
@@ -2952,7 +3165,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
       cancelled = true;
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [isHeaderChatInbox, route.params, openChannelFromSuppliersRouteParams, navigation, user?.email]);
+  }, [isHeaderChatInbox, isSuppliersBuyerTab, route.params, openChannelFromSuppliersRouteParams, navigation, user?.email, workspaceRows]);
 
   useEffect(() => {
     if (isHeaderChatInbox) {
@@ -2960,10 +3173,22 @@ export const RavenUIMessagesScreen: React.FC = () => {
       return;
     }
     setRavenOpenChatFromProfileSubscriber((p) => {
-      void openChannelFromSuppliersRouteParams(p.workspaceId, p.channelId, p.peerUserId);
+      applyPendingSuppliersChatOpen(p);
     });
+    if (isSuppliersBuyerTab) {
+      const pending = consumePendingSuppliersChatOpen();
+      if (pending) applyPendingSuppliersChatOpen(pending);
+    }
     return () => setRavenOpenChatFromProfileSubscriber(null);
-  }, [isHeaderChatInbox, openChannelFromSuppliersRouteParams]);
+  }, [isHeaderChatInbox, isSuppliersBuyerTab, applyPendingSuppliersChatOpen]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!isSuppliersBuyerTab) return;
+      const pending = consumePendingSuppliersChatOpen();
+      if (pending) applyPendingSuppliersChatOpen(pending);
+    }, [isSuppliersBuyerTab, applyPendingSuppliersChatOpen])
+  );
 
   const openAdminSupplierSheet = useCallback(
     (m: RavenWorkspaceMemberRow) => {
@@ -2981,63 +3206,50 @@ export const RavenUIMessagesScreen: React.FC = () => {
         workspaceAdminUser: m.user,
         ...(workspace?.trim() ? { ravenWorkspaceId: workspace.trim() } : {}),
         ...(workspaceScreenTitle ? { ravenWorkspaceName: workspaceScreenTitle } : {}),
-        ...(shareSalesOrderName ? { shareSalesOrderName } : {}),
+        ...(activeShareSalesOrderName ? { shareSalesOrderName: activeShareSalesOrderName } : {}),
+        ...(activeShareDeliveryNoteName ? { shareDeliveryNoteName: activeShareDeliveryNoteName } : {}),
       });
     },
-    [navigation, workspace, workspaceScreenTitle, shareSalesOrderName]
+    [navigation, workspace, workspaceScreenTitle, activeShareSalesOrderName, activeShareDeliveryNoteName]
   );
 
   const clearShareSalesOrderIntent = useCallback(() => {
-    if (!isSuppliersBuyerTab) return;
-    try {
-      (navigation as unknown as { setParams: (obj: Record<string, unknown>) => void }).setParams({
-        shareSalesOrderName: undefined,
-      });
-    } catch {
-      /* noop */
-    }
-  }, [navigation, isSuppliersBuyerTab]);
+    clearSuppliersShareRouteParams();
+  }, [clearSuppliersShareRouteParams]);
+
+  const clearShareDeliveryNoteIntent = useCallback(() => {
+    clearSuppliersShareRouteParams();
+    setWorkspace(null);
+    setChannel(null);
+  }, [clearSuppliersShareRouteParams]);
 
   const renderWorkspaceRow = useCallback(({ item }: { item: RavenWorkspaceRow }) => {
     const primary = workspaceListPrimaryLabel(item);
-    const secondary = workspaceListSecondaryLabel(item);
     const logoUri = resolveRavenErpAttachImageUri(item.logo);
     return (
       <TouchableOpacity
-        style={s.refListRow}
+        style={s.workspaceHubRow}
         onPress={() => {
           setWorkspace(String(item.name).trim());
           setChannel(null);
         }}
-        activeOpacity={0.7}
+        activeOpacity={0.65}
       >
-        <View style={s.refListAvatarWrap}>
+        <View style={s.workspaceHubAvatarWrap}>
           {logoUri ? (
-            <View style={[s.refListInitCircle, s.refListLogoClip]}>
-              <ErpAuthenticatedImage uri={logoUri} style={s.refListWorkspaceLogoImg} resizeMode="cover" />
+            <View style={[s.workspaceHubAvatar, s.refListLogoClip]}>
+              <ErpAuthenticatedImage uri={logoUri} style={s.workspaceHubLogoImg} resizeMode="cover" />
             </View>
           ) : (
-            <View style={[s.refListInitCircle, { backgroundColor: pastelAvatarBg(item.name || '?') }]}>
-              <Text style={s.refListInitText}>{initialsFromUserId(primary)}</Text>
+            <View style={[s.workspaceHubAvatar, { backgroundColor: pastelAvatarBg(item.name || '?') }]}>
+              <Text style={s.workspaceHubAvatarText}>{initialsFromUserId(primary)}</Text>
             </View>
           )}
         </View>
-        <View style={s.refListMain}>
-          <View style={s.refListTopRow}>
-            <Text style={s.refListTitle} numberOfLines={1}>
-              {primary}
-            </Text>
-          </View>
-          <View style={s.refListSubRow}>
-            <Ionicons name="layers-outline" size={15} color={RavenLight.textSubtle} style={{ marginRight: 4 }} />
-            <Text style={s.refListSubtitle} numberOfLines={1}>
-              {secondary || 'Supplier group'}
-            </Text>
-          </View>
-        </View>
-        <View style={s.refListRight}>
-          <Ionicons name="chevron-forward" size={18} color={RavenLight.textSubtle} />
-        </View>
+        <Text style={s.workspaceHubTitle} numberOfLines={1}>
+          {primary}
+        </Text>
+        <Ionicons name="chevron-forward" size={18} color={RavenLight.textSubtle} />
       </TouchableOpacity>
     );
   }, []);
@@ -3050,28 +3262,17 @@ export const RavenUIMessagesScreen: React.FC = () => {
       const supplierImgUri = resolveRavenErpAttachImageUri(item.supplier_image);
       const avatarUri = userImgUri || supplierImgUri;
       const showDot = ravenUserIsActiveLikeWeb(item.user, viewerFrappeName, presenceActiveSet, presenceInvisibleSet);
-      const subLine = shareSalesOrderName
-        ? t('salesOrderShare.tapSupplierToShare')
-        : hasSupplier
-          ? 'Profile linked · tap to open supplier'
-          : 'No supplier profile linked';
+      const subLine = activeShareDeliveryNoteName
+        ? t('deliveryNoteShare.tapLogisticsProfile')
+        : activeShareSalesOrderName
+          ? t('salesOrderShare.tapSupplierProfile')
+          : hasSupplier
+            ? 'Profile linked · tap to open supplier'
+            : 'No supplier profile linked';
       return (
         <TouchableOpacity
           style={s.refListRow}
           onPress={() => {
-            const peer = (item.user || '').trim();
-            if (shareSalesOrderName && peer) {
-              (navigation as { navigate: (name: string, params: object) => void }).navigate(
-                'BuyerSalesOrderShareCompose',
-                {
-                  salesOrderName: shareSalesOrderName,
-                  peerUserId: peer,
-                  ...(workspace?.trim() ? { ravenWorkspaceId: workspace.trim() } : {}),
-                  supplierLabel: resolveDisplayName(item.user, item.full_name),
-                }
-              );
-              return;
-            }
             openAdminSupplierSheet(item);
           }}
           activeOpacity={0.7}
@@ -3111,7 +3312,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
         </TouchableOpacity>
       );
     },
-    [openAdminSupplierSheet, viewerFrappeName, presenceActiveSet, presenceInvisibleSet, resolveDisplayName, shareSalesOrderName, workspace, navigation, t]
+    [openAdminSupplierSheet, viewerFrappeName, presenceActiveSet, presenceInvisibleSet, resolveDisplayName, activeShareSalesOrderName, activeShareDeliveryNoteName, workspace, navigation, t]
   );
 
   const renderMessage = useCallback(
@@ -3125,14 +3326,16 @@ export const RavenUIMessagesScreen: React.FC = () => {
       const sqLink = isSupplierQuotationLink ? linkDnRaw : null;
       const isSalesOrderLink = !hasAttach && ravenRowIsSalesOrderDocLink(linkDtRaw, linkDnRaw);
       const soLink = isSalesOrderLink ? linkDnRaw : null;
+      const isDeliveryNoteLink = !hasAttach && ravenRowIsDeliveryNoteDocLink(linkDtRaw, linkDnRaw);
+      const dnLink = isDeliveryNoteLink ? linkDnRaw : null;
       const isSalesInvoiceLink = !hasAttach && ravenRowIsSalesInvoiceDocLink(linkDtRaw, linkDnRaw);
       const siLink = isSalesInvoiceLink ? linkDnRaw : null;
       const genericDocLink =
-        !hasAttach && !!linkDtRaw && !!linkDnRaw && !isSupplierQuotationLink && !isSalesOrderLink && !isSalesInvoiceLink
+        !hasAttach && !!linkDtRaw && !!linkDnRaw && !isSupplierQuotationLink && !isSalesOrderLink && !isDeliveryNoteLink && !isSalesInvoiceLink
           ? { doctype: linkDtRaw, document: linkDnRaw }
           : null;
       const qDraft =
-        !hasAttach && !sqLink && !soLink && !siLink && !genericDocLink ? tryParseQuotationDraftFromMessage(item.text) : null;
+        !hasAttach && !sqLink && !soLink && !dnLink && !siLink && !genericDocLink ? tryParseQuotationDraftFromMessage(item.text) : null;
       const isSupplierRoute = route.name === 'SupplierMessages';
       const isSupplierPortalUser = user?.appMode === 'supplier' || !!user?.supplierId?.trim();
       const showBuyerQuotationActions =
@@ -3165,19 +3368,21 @@ export const RavenUIMessagesScreen: React.FC = () => {
           onOpenImagePreview={onOpenChatImagePreview}
         />
       ) : null;
-      const tLine = formatMessageBubbleTime(item.creation || item.modified);
+      const createdAt = ravenMessageCreatedAt(item);
+      const isContinuation = isRavenMessageContinuation(index, messages);
+      const tLine = formatMessageBubbleTime(createdAt, { compact: isContinuation });
       const showDateSep = shouldShowChatDateSeparator(index, messages);
-      const dateSepLabel = formatChatDateSeparator(item.creation || item.modified);
+      const dateSepLabel = formatChatDateSeparator(createdAt);
       const groupedWithNewer = isChatMessageGroupedWithNewer(index, messages, ravenSameMessageOwner);
       const rowGap = groupedWithNewer ? 2 : 10;
-      const showSenderHeader = shouldShowChatMessageSenderHeader(index, messages, ravenSameMessageOwner);
+      const showSenderHeader = !isContinuation;
       const wrapWithDateSep = (node: React.ReactNode) => (
         <View>
           {showDateSep && dateSepLabel ? (
             <View style={s.chatDateSepRow}>
-              <View style={s.chatDateSepPill}>
-                <Text style={s.chatDateSepText}>{dateSepLabel}</Text>
-              </View>
+              <View style={s.chatDateSepLine} />
+              <Text style={s.chatDateSepText}>{dateSepLabel}</Text>
+              <View style={s.chatDateSepLine} />
             </View>
           ) : null}
           {node}
@@ -3190,11 +3395,13 @@ export const RavenUIMessagesScreen: React.FC = () => {
        * Always pass session user (including supplier Pay) so bill-to resolution runs; do not use Raven `owner`.
        */
       const customerPartyFrappeUserForSq = String(user?.user || user?.email || '').trim() || null;
+      const hasDocCard = !!(qDraft || sqLink || soLink || dnLink || siLink || genericDocLink);
 
       const quotationCard =
         sqLink != null ? (
           <RavenLinkedSupplierQuotationMessage
             sqName={sqLink}
+            mine={mine}
             billToFrappeUserId={customerPartyFrappeUserForSq}
             ravenChannelId={channel?.name}
             linkMessageId={item.name}
@@ -3225,17 +3432,21 @@ export const RavenUIMessagesScreen: React.FC = () => {
             registerSqPaymentAction={supplierSqSelfServeUx ? registerSqPaymentAction : undefined}
           />
         ) : soLink != null ? (
-          <RavenLinkedSalesOrderMessage orderName={soLink} ravenChannelId={channel?.name} />
+          <RavenLinkedSalesOrderMessage orderName={soLink} ravenChannelId={channel?.name} mine={mine} />
+        ) : dnLink != null ? (
+          <RavenLinkedDeliveryNoteMessage deliveryNoteName={dnLink} mine={mine} />
         ) : siLink != null ? (
-          <RavenLinkedSalesInvoiceMessage invoiceName={siLink} />
+          <RavenLinkedSalesInvoiceMessage invoiceName={siLink} mine={mine} />
         ) : genericDocLink != null ? (
           <RavenLinkedGenericDocMessage
             linkDoctype={genericDocLink.doctype}
             linkDocument={genericDocLink.document}
+            mine={mine}
           />
         ) : qDraft != null ? (
           <RavenQuotationDraftCard
             payload={qDraft}
+            mine={mine}
             showBuyerActions={showBuyerQuotationActions && qDraft.buyerReviewEligible !== false}
             handled={quotationActionByName[qDraft.name] ?? null}
             busy={quotationActionBusy === qDraft.name}
@@ -3264,7 +3475,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
       const showPlainTextBubble = shouldShowChatMessageTextBubble(
         item,
         hasAttach,
-        !!(qDraft || sqLink || soLink || siLink || genericDocLink)
+        !!(qDraft || sqLink || soLink || dnLink || siLink || genericDocLink)
       );
 
       if (mine) {
@@ -3274,7 +3485,42 @@ export const RavenUIMessagesScreen: React.FC = () => {
             alignEnd
             style={{ marginBottom: rowGap }}
           >
-            <Pressable style={s.msgColMine} onLongPress={openThisMessageActions} delayLongPress={380}>
+            {hasDocCard ? (
+              <View style={[s.msgColMineDoc, chatLane.outgoingDocLane]}>
+                <Pressable onLongPress={openThisMessageActions} delayLongPress={380}>
+                  {showReplyQuote ? (
+                    <RavenInlineReplyQuote
+                      item={item}
+                      mine={mine}
+                      messagesById={messagesById}
+                      onScrollToQuoted={scrollToMessageById}
+                      variant="raven"
+                      userDisplayProfiles={ravenUserProfilesById}
+                    />
+                  ) : null}
+                  {!showReplyQuote && !!item.is_reply ? (
+                    <Text style={[s.replyBadge, s.replyBadgeMine]}>Reply</Text>
+                  ) : null}
+                  {ravenMessageIsForwarded(item) ? (
+                    <RavenForwardedLabel mine onColoredBubble={false} />
+                  ) : null}
+                  {attachBody}
+                  {quotationCard}
+                  <RavenMessageReactionsRow
+                    messageReactions={item.message_reactions}
+                    currentUserId={viewerFrappeName}
+                    variant="raven"
+                    onToggleReaction={(emoji) => void toggleReaction(item, emoji)}
+                  />
+                  <Text style={s.msgTimeMine}>{tLine}</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <Pressable
+                style={[s.msgColMine, chatLane.outgoingLane]}
+                onLongPress={openThisMessageActions}
+                delayLongPress={380}
+              >
               {showReplyQuote ? (
                 <RavenInlineReplyQuote
                   item={item}
@@ -3286,13 +3532,16 @@ export const RavenUIMessagesScreen: React.FC = () => {
                 />
               ) : null}
               {!showReplyQuote && !!item.is_reply ? <Text style={[s.replyBadge, s.replyBadgeMine]}>Reply</Text> : null}
-              {ravenMessageIsForwarded(item) ? (
-                <Text style={[s.forwardedBadge, s.forwardedBadgeMine]}>Forwarded</Text>
+              {!showPlainTextBubble && ravenMessageIsForwarded(item) ? (
+                <RavenForwardedLabel mine onColoredBubble={false} />
               ) : null}
               {attachBody}
               {quotationCard}
               {showPlainTextBubble ? (
                 <View style={s.mineTextBubble}>
+                  {ravenMessageIsForwarded(item) ? (
+                    <RavenForwardedLabel mine onColoredBubble />
+                  ) : null}
                   <Text style={[s.bubbleBody, s.bubbleBodyMine]}>{chatMessageBubbleBodyText(item)}</Text>
                   <View style={s.bubbleMetaRow}>
                     {ravenMessageIsEdited(item) ? (
@@ -3310,6 +3559,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
               />
               {!showPlainTextBubble ? <Text style={s.msgTimeMine}>{tLine}</Text> : null}
             </Pressable>
+            )}
           </ChatMessageJumpHighlightBar>
         );
       }
@@ -3319,13 +3569,13 @@ export const RavenUIMessagesScreen: React.FC = () => {
         ravenUserProfilesById[ownerKey] ?? ravenUserProfilesById[ownerKey.toLowerCase()];
       const ownerAvatarUri = resolveRavenErpAttachImageUri(ownerProfile?.user_image ?? '');
       return wrapWithDateSep(
-        <ChatMessageJumpHighlightBar active={isHighlighted}>
+        <ChatMessageJumpHighlightBar active={isHighlighted} alignStart style={{ marginBottom: rowGap }}>
           <Pressable
-            style={[s.msgRowTheirs, { marginBottom: rowGap }]}
+            style={[s.msgRowTheirs, hasDocCard ? chatLane.incomingDocRow : chatLane.incomingLane]}
             onLongPress={openThisMessageActions}
             delayLongPress={380}
           >
-            <View style={s.msgAvatarWrap}>
+            <View style={[s.msgAvatarWrap, !showSenderHeader && s.msgAvatarWrapGrouped]}>
             {showSenderHeader ? (
               ownerAvatarUri ? (
                 <View style={[s.msgAvatarSq, s.msgAvatarSqClip]}>
@@ -3337,20 +3587,20 @@ export const RavenUIMessagesScreen: React.FC = () => {
                 </View>
               )
             ) : (
-              <View style={s.msgAvatarSpacer} />
+              <View style={[s.msgAvatarSpacer, !showSenderHeader && s.msgAvatarSpacerGrouped]} />
             )}
             {showSenderHeader &&
             ravenUserIsActiveLikeWeb(item.owner, viewerFrappeName, presenceActiveSet, presenceInvisibleSet) ? (
               <View style={s.onlineDot} />
             ) : null}
           </View>
-          <View style={s.msgColTheirs}>
+          <View style={[s.msgColTheirs, hasDocCard && s.msgColTheirsDoc]}>
             {showSenderHeader ? (
               <View style={s.msgNameRow}>
                 <Text style={s.msgAuthorName} numberOfLines={1}>
                   {resolveDisplayName(item.owner)}
                 </Text>
-                <Text style={s.msgHeaderTime}> {tLine}</Text>
+                <Text style={s.msgHeaderTime}> {formatMessageBubbleTime(createdAt)}</Text>
               </View>
             ) : null}
             {showReplyQuote ? (
@@ -3364,7 +3614,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
               />
             ) : null}
             {!showReplyQuote && !!item.is_reply ? <Text style={s.replyBadge}>Reply</Text> : null}
-            {ravenMessageIsForwarded(item) ? <Text style={s.forwardedBadge}>Forwarded</Text> : null}
+            {ravenMessageIsForwarded(item) ? <RavenForwardedLabel /> : null}
             {attachBody}
             {quotationCard}
             {showPlainTextBubble ? (
@@ -3415,6 +3665,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
       openMessageActionsForItem,
       toggleReaction,
       onOpenChatImagePreview,
+      chatLane,
     ]
   );
 
@@ -3465,6 +3716,22 @@ export const RavenUIMessagesScreen: React.FC = () => {
         </View>
       );
     }
+  }
+
+  if (openingSuppliersChat && isSuppliersBuyerTab && !channel) {
+    return (
+      <View style={s.safe}>
+        <StatusBar style="dark" backgroundColor={RavenLight.panel} translucent />
+        <View style={[s.bootCenter, { paddingTop: insets.top }]}>
+          <ActivityIndicator size="large" color={RavenLight.accent} />
+          <Text style={s.bootHint}>
+            {activeShareSalesOrderName
+              ? t('salesOrderShare.preparingChat')
+              : t('deliveryNoteShare.openingChat')}
+          </Text>
+        </View>
+      </View>
+    );
   }
 
   if (loadingBoot && !(isHeaderChatInbox && workspace == null)) {
@@ -3582,20 +3849,15 @@ export const RavenUIMessagesScreen: React.FC = () => {
                 </View>
               </TouchableOpacity>
             ) : isWorkspaceHubList ? (
-              <View style={s.headerHubIdentity}>
-                <View style={s.headerHubIconCircle}>
-                  <Ionicons name="layers" size={22} color={RavenLight.accent} />
-                </View>
-                <View style={s.headerTitleStack}>
-                  <Text style={s.headerHubTitle} numberOfLines={1} ellipsizeMode="tail">
-                    {hubListHeaderTitle}
+              <View style={[s.headerCenter, s.headerInboxCenter]} pointerEvents="none">
+                <Text style={s.headerInboxTitle} numberOfLines={1} ellipsizeMode="tail">
+                  {hubListHeaderTitle}
+                </Text>
+                {workspaceHubSubtitle ? (
+                  <Text style={s.headerHubSubtitleFlat} numberOfLines={1} ellipsizeMode="tail">
+                    {workspaceHubSubtitle}
                   </Text>
-                  {workspaceHubSubtitle ? (
-                    <Text style={s.headerHubSubtitle} numberOfLines={1} ellipsizeMode="tail">
-                      {workspaceHubSubtitle}
-                    </Text>
-                  ) : null}
-                </View>
+                ) : null}
               </View>
             ) : isWorkspaceMembersList ? (
               <View style={s.headerHubIdentity}>
@@ -3714,13 +3976,33 @@ export const RavenUIMessagesScreen: React.FC = () => {
           </View>
         ) : null}
 
-        {isSuppliersBuyerTab && !!shareSalesOrderName && !channel ? (
+        {isSuppliersBuyerTab && !!activeShareDeliveryNoteName && !channel ? (
+          <View style={s.shareOrderBanner}>
+            <Ionicons name="cube-outline" size={18} color={RavenLight.accent} style={{ marginRight: 10 }} />
+            <View style={s.shareOrderBannerText}>
+              <Text style={s.shareOrderBannerTitle}>{t('deliveryNoteShare.pickLogisticsBannerTitle')}</Text>
+              <Text style={s.shareOrderBannerSub} numberOfLines={2}>
+                {t('deliveryNoteShare.pickLogisticsBannerSub', { note: activeShareDeliveryNoteName })}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={clearShareDeliveryNoteIntent}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel={t('deliveryNoteShare.cancelSharePick')}
+            >
+              <Ionicons name="close" size={20} color={RavenLight.textMuted} />
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {isSuppliersBuyerTab && !!activeShareSalesOrderName && !channel ? (
           <View style={s.shareOrderBanner}>
             <Ionicons name="share-outline" size={18} color={RavenLight.accent} style={{ marginRight: 10 }} />
             <View style={s.shareOrderBannerText}>
               <Text style={s.shareOrderBannerTitle}>{t('salesOrderShare.pickSupplierBannerTitle')}</Text>
               <Text style={s.shareOrderBannerSub} numberOfLines={2}>
-                {t('salesOrderShare.pickSupplierBannerSub', { order: shareSalesOrderName })}
+                {t('salesOrderShare.pickSupplierBannerSub', { order: activeShareSalesOrderName })}
               </Text>
             </View>
             <TouchableOpacity
@@ -3887,7 +4169,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
           ) : loadingMsgs && messages.length === 0 ? (
             <RavenChatOpeningPlaceholder label="Loading chat…" hint="Fetching messages" />
           ) : (
-            <View style={s.messagesListShell}>
+            <View style={s.messagesListShell} onLayout={onChatListLayout}>
               <FlatList
                 ref={messagesListRef}
                 style={s.messagesListFlex}
@@ -4320,8 +4602,11 @@ export const RavenUIMessagesScreen: React.FC = () => {
         channels={channels}
         currentUserEmail={user?.email}
         userProfiles={ravenUserProfilesById}
-        variant="raven"
         onClose={() => setForwardMessage(null)}
+        onSent={(ids) => {
+          const id = primaryChannelIdAfterShare(ids);
+          if (id) void openChannelAfterShare(id);
+        }}
       />
       <RavenComposerEmojiSheet
         visible={composerEmojiOpen}
@@ -4540,6 +4825,13 @@ const s = StyleSheet.create({
     fontWeight: '500',
     color: RavenLight.textMuted,
   },
+  headerHubSubtitleFlat: {
+    marginTop: 2,
+    fontSize: 12,
+    fontWeight: '500',
+    color: RavenLight.textMuted,
+    textAlign: 'center',
+  },
   headerHubInfoBtn: {
     width: 44,
     height: 44,
@@ -4552,10 +4844,11 @@ const s = StyleSheet.create({
     paddingHorizontal: 8,
   },
   listSearchBarInnerHub: {
-    backgroundColor: RavenLight.bg,
+    backgroundColor: RavenLight.canvas,
     borderColor: RavenLight.border,
-    minHeight: 46,
-    paddingVertical: 4,
+    minHeight: 42,
+    paddingVertical: 2,
+    borderRadius: 10,
   },
   warnBanner: {
     flexDirection: 'row',
@@ -4615,6 +4908,48 @@ const s = StyleSheet.create({
     paddingTop: 0,
     paddingBottom: 32,
     flexGrow: 1,
+    backgroundColor: RavenLight.bg,
+  },
+  workspaceHubRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: Spacing.MD,
+    backgroundColor: RavenLight.bg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: RavenLight.border,
+    minHeight: 56,
+  },
+  workspaceHubAvatarWrap: {
+    width: 40,
+    height: 40,
+    marginRight: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  workspaceHubAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  workspaceHubLogoImg: {
+    width: 40,
+    height: 40,
+  },
+  workspaceHubAvatarText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: RavenLight.text,
+  },
+  workspaceHubTitle: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 16,
+    fontWeight: '600',
+    color: RavenLight.text,
+    marginRight: 8,
   },
   inboxListFooter: {
     paddingVertical: 16,
@@ -4883,29 +5218,35 @@ const s = StyleSheet.create({
   wsRowText: { flex: 1, minWidth: 0 },
   wsRowTitle: { fontSize: 18, fontWeight: '800', color: RavenLight.text, letterSpacing: -0.3 },
   wsRowSub: { marginTop: 3, fontSize: 13, color: RavenLight.textMuted },
-  listPad: { paddingHorizontal: Spacing.MD, paddingVertical: 10, paddingBottom: 16 },
+  listPad: { paddingLeft: 6, paddingRight: 10, paddingVertical: 10, paddingBottom: 16 },
   bubbleRow: { flexDirection: 'row', maxWidth: '100%', width: '100%', alignSelf: 'stretch' },
   msgRowTheirs: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    maxWidth: '100%',
-    width: '100%',
-    alignSelf: 'stretch',
+    alignSelf: 'flex-start',
   },
   msgAvatarWrap: {
     position: 'relative',
-    width: 40,
-    marginRight: 10,
-    paddingTop: 2,
+    width: 28,
+    marginRight: 4,
+    paddingTop: 1,
+  },
+  msgAvatarWrapGrouped: {
+    width: 16,
+    marginRight: 3,
   },
   msgAvatarSpacer: {
-    width: 34,
-    height: 34,
+    width: 24,
+    height: 24,
+  },
+  msgAvatarSpacerGrouped: {
+    width: 14,
+    height: 14,
   },
   msgAvatarSq: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -4914,11 +5255,11 @@ const s = StyleSheet.create({
     backgroundColor: RavenLight.canvas,
   },
   msgAvatarImage: {
-    width: 34,
-    height: 34,
+    width: 24,
+    height: 24,
   },
   msgAvatarSqText: {
-    fontSize: 13,
+    fontSize: 10,
     fontWeight: '700',
     color: RavenLight.text,
   },
@@ -4935,7 +5276,16 @@ const s = StyleSheet.create({
   },
   msgColTheirs: {
     flex: 1,
+    flexShrink: 1,
     minWidth: 0,
+    alignItems: 'flex-start',
+  },
+  msgColTheirsDoc: {
+    flexGrow: 1,
+    flexShrink: 1,
+    minWidth: 0,
+    width: '100%',
+    maxWidth: '100%',
   },
   msgNameRow: {
     flexDirection: 'row',
@@ -4955,26 +5305,11 @@ const s = StyleSheet.create({
     color: RavenLight.textSubtle,
   },
   chatDateSepRow: {
+    flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 14,
-  },
-  chatDateSepPill: {
-    paddingHorizontal: 14,
-    paddingVertical: 5,
-    borderRadius: RavenLight.radiusFull,
-    backgroundColor: RavenLight.panel,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: RavenLight.border,
-    ...Platform.select({
-      ios: {
-        shadowColor: RavenLight.shadowSoft,
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 1,
-        shadowRadius: 4,
-      },
-      android: { elevation: 2 },
-      default: {},
-    }),
+    paddingHorizontal: 12,
+    gap: 12,
   },
   chatDateSepLine: {
     flex: 1,
@@ -4983,9 +5318,10 @@ const s = StyleSheet.create({
   },
   chatDateSepText: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '400',
     color: RavenLight.textMuted,
-    letterSpacing: 0.2,
+    flexShrink: 0,
+    textAlign: 'center',
   },
   msgTextTheirs: {
     fontSize: 15,
@@ -5019,8 +5355,12 @@ const s = StyleSheet.create({
     marginTop: 0,
   },
   msgColMine: {
-    maxWidth: '82%',
+    alignSelf: 'flex-end',
     alignItems: 'flex-end',
+  },
+  msgColMineDoc: {
+    alignSelf: 'flex-end',
+    alignItems: 'stretch',
   },
   mineTextBubble: {
     alignSelf: 'flex-end',
@@ -5060,14 +5400,6 @@ const s = StyleSheet.create({
     marginBottom: 4,
   },
   replyBadgeMine: { color: 'rgba(255,255,255,0.85)' },
-  forwardedBadge: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: RavenLight.textSubtle,
-    marginBottom: 4,
-    textTransform: 'uppercase',
-  },
-  forwardedBadgeMine: { color: 'rgba(255,255,255,0.7)' },
   replyStrip: {
     flexDirection: 'row',
     alignItems: 'center',

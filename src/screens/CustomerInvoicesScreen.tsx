@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
@@ -38,6 +39,7 @@ const FILTER_CHIPS: { key: InvoiceStatusFilter; label: string }[] = [
 
 export const CustomerInvoicesScreen: React.FC = () => {
   const navigation = useNavigation();
+  const { t } = useTranslation();
   const { customerId, loading: cidLoading } = useSessionCustomerId();
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -169,6 +171,21 @@ export const CustomerInvoicesScreen: React.FC = () => {
           <Text style={styles.subtitle}>Sales invoices for your account</Text>
         </View>
       </View>
+
+      <TouchableOpacity
+        style={styles.hubLink}
+        onPress={() =>
+          (navigation as { navigate: (name: string) => void }).navigate('CustomerDeliveryNotes')
+        }
+        activeOpacity={0.85}
+      >
+        <Ionicons name="cube-outline" size={20} color={Colors.WINE} />
+        <View style={styles.hubLinkText}>
+          <Text style={styles.hubLinkTitle}>{t('deliveryNoteList.title')}</Text>
+          <Text style={styles.hubLinkSub}>{t('profile.myDeliveryNotesHint')}</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={Colors.TEXT_SECONDARY} />
+      </TouchableOpacity>
 
       <View style={styles.chipRow}>
         {FILTER_CHIPS.map((chip) => {
@@ -309,6 +326,22 @@ const styles = StyleSheet.create({
   headerText: { flex: 1 },
   title: { fontSize: 20, fontWeight: '800', color: Colors.BLACK },
   subtitle: { fontSize: 13, color: Colors.TEXT_SECONDARY, marginTop: 2 },
+  hubLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginHorizontal: Spacing.MD,
+    marginTop: Spacing.SM,
+    marginBottom: 4,
+    padding: 14,
+    backgroundColor: Colors.WHITE,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.BORDER,
+  },
+  hubLinkText: { flex: 1, minWidth: 0 },
+  hubLinkTitle: { fontSize: 15, fontWeight: '700', color: Colors.BLACK },
+  hubLinkSub: { fontSize: 12, color: Colors.TEXT_SECONDARY, marginTop: 2 },
   chipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',

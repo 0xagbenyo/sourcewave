@@ -16,12 +16,12 @@ import { appAlert as Alert } from '../services/appAlert';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
-import * as ImagePicker from 'expo-image-picker';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { Header } from '../components/Header';
 import { useUserSession } from '../context/UserContext';
 import { useTranslation } from 'react-i18next';
+import { imagePickLabelsFromT, pickSingleFormImage } from '../utils/formImagePicker';
 import { getERPNextClient } from '../services/erpnext';
 import { buildSourcingCategoryOptions } from '../utils/itemGroup';
 import { SearchableSelect } from '../components/SearchableSelect';
@@ -132,21 +132,16 @@ export const SourcingRequestScreen: React.FC = () => {
 
   const pickImageFor = async (formId: string) => {
     try {
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permission.granted) {
-        Alert.alert('Permission Required', 'Please allow media library access to select an image.');
+      const result = await pickSingleFormImage(imagePickLabelsFromT(t));
+      if (result.ok) {
+        updateForm(formId, { referenceImageUri: result.uri });
         return;
       }
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: Platform.OS === 'ios',
-        quality: 0.8,
-      });
-      if (!result.canceled && result.assets?.length) {
-        updateForm(formId, { referenceImageUri: result.assets[0].uri });
+      if (!result.canceled) {
+        Alert.alert('Image', result.message);
       }
     } catch {
-      Alert.alert('Image Error', 'Unable to pick image right now.');
+      Alert.alert('Image Error', t('sourcing.imagePickFailed'));
     }
   };
 

@@ -43,7 +43,7 @@ export const SupplierPaymentEntryDetailScreen: React.FC = () => {
     >
       {doc ? (
         <ErpDocSheet>
-          <ErpPaymentEntryPreview doc={doc} currency={currency} />
+          <ErpPaymentEntryPreview doc={doc} currency={currency} variant="supplier" />
         </ErpDocSheet>
       ) : null}
     </ErpDocumentPreviewLayout>

@@ -13,7 +13,7 @@ import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
-import { Header } from '../components/Header';
+import { sharePickerFlatStyles as flat } from '../constants/sharePickerFlatUi';
 import { RavenShareToContactPicker } from '../components/RavenShareToContactPicker';
 import { useUserSession } from '../context/UserContext';
 import { useTranslation } from 'react-i18next';
@@ -29,7 +29,8 @@ import { setPendingRavenDocLinkMessageMerge } from '../utils/ravenDocLinkMessage
 import { userFacingError } from '../utils/userFacingError';
 import { confirmSalesOrderShareable } from '../utils/salesOrderShareGuard';
 import { markSalesOrderSharedLocally } from '../utils/salesOrderShareMarks';
-import { showSalesOrderShareSentAndOpenChat } from '../utils/openRavenChatAfterShare';
+import { showSalesOrderShareSentAndOpenChat, buildMainSuppliersTabReset } from '../utils/openRavenChatAfterShare';
+import { requestSkipSuppliersTabFocusReset } from '../utils/suppliersTabFocusReset';
 import type { RootStackParamList } from '../types';
 
 type R = RouteProp<RootStackParamList, 'BuyerSalesOrderShareCompose'>;
@@ -198,7 +199,7 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
 
         succeeded = true;
         shareSentRef.current = true;
-        showSalesOrderShareSentAndOpenChat({
+        await showSalesOrderShareSentAndOpenChat({
           t,
           navigation: navigation as { dispatch: (action: unknown) => void },
           sessionEmail: user?.email,
@@ -320,10 +321,12 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
       Alert.alert(t('salesOrderShare.title'), t('salesOrderShare.pickOrderFirst'));
       return;
     }
-    (navigation as { navigate: (name: string, params: object) => void }).navigate('Main', {
-      screen: 'Suppliers',
-      params: { shareSalesOrderName: orderName },
-    });
+    requestSkipSuppliersTabFocusReset();
+    navigation.dispatch(
+      buildMainSuppliersTabReset({
+        shareSalesOrderName: orderName,
+      })
+    );
   };
 
   const leaveShareStep = () => {
@@ -371,15 +374,15 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
         searchPlaceholder={t('salesOrderShare.shareSearchPeople')}
         filterEmptyText={t('salesOrderShare.shareNoMatch')}
         listFooter={
-          <TouchableOpacity style={styles.findSupplierRow} onPress={onFindNewSupplier} activeOpacity={0.85}>
-            <View style={styles.findSupplierIcon}>
+          <TouchableOpacity style={flat.linkRow} onPress={onFindNewSupplier} activeOpacity={0.85}>
+            <View style={flat.linkRowIcon}>
               <Ionicons name="people-outline" size={22} color={Colors.WINE} />
             </View>
-            <View style={styles.findSupplierText}>
-              <Text style={styles.findSupplierTitle}>{t('salesOrderShare.findNewSupplier')}</Text>
-              <Text style={styles.findSupplierSub}>{t('salesOrderShare.findNewSupplierSub')}</Text>
+            <View style={flat.linkRowText}>
+              <Text style={flat.linkRowTitle}>{t('salesOrderShare.findNewSupplier')}</Text>
+              <Text style={flat.linkRowSub}>{t('salesOrderShare.findNewSupplierSub')}</Text>
             </View>
-            <Ionicons name="chevron-forward" size={20} color={Colors.TEXT_SECONDARY} />
+            <Ionicons name="chevron-forward" size={20} color={Colors.MEDIUM_GRAY} />
           </TouchableOpacity>
         }
       />
@@ -389,8 +392,17 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
   const showSendingOverlay = sharing || (lockedRecipient && paramOrderName && (resolvingChannel || !targetChannelId));
 
   return (
-    <SafeAreaView style={styles.safe} edges={['bottom', 'left', 'right']}>
-      <Header showBackButton title={t('salesOrderShare.title')} subtitle={pickSubtitle} />
+    <SafeAreaView style={flat.screen} edges={['top', 'bottom']}>
+      <View style={flat.topBar}>
+        <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={12} style={flat.backWrap}>
+          <Ionicons name="arrow-back" size={24} color={Colors.BRAND_NAVY} />
+        </TouchableOpacity>
+        <Text style={flat.topTitle} numberOfLines={1}>
+          {t('salesOrderShare.title')}
+        </Text>
+        <View style={{ width: 32 }} />
+      </View>
+      {pickSubtitle ? <Text style={flat.topSubtitle}>{pickSubtitle}</Text> : null}
       {lockedRecipient && resolvingChannel ? (
         <View style={styles.resolvingRow}>
           <ActivityIndicator size="small" color={Colors.WINE} />
@@ -398,18 +410,18 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
         </View>
       ) : null}
       {!lockedRecipient ? (
-        <TouchableOpacity style={styles.createRow} onPress={onCreateNew} activeOpacity={0.85}>
+        <TouchableOpacity style={flat.actionRow} onPress={onCreateNew} activeOpacity={0.85}>
           <Ionicons name="add-circle-outline" size={22} color={Colors.WINE} />
-          <Text style={styles.createText}>{t('salesOrderShare.createNew')}</Text>
+          <Text style={flat.actionRowText}>{t('salesOrderShare.createNew')}</Text>
         </TouchableOpacity>
       ) : null}
       {loadingOrders ? (
-        <View style={styles.center}>
+        <View style={flat.center}>
           <ActivityIndicator size="large" color={Colors.WINE} />
         </View>
       ) : orders.length === 0 ? (
-        <View style={styles.center}>
-          <Text style={styles.empty}>{t('salesOrderShare.noOrders')}</Text>
+        <View style={flat.center}>
+          <Text style={flat.emptyText}>{t('salesOrderShare.noOrders')}</Text>
         </View>
       ) : (
         <FlatList
@@ -419,18 +431,18 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
           scrollEnabled={!sharing}
           renderItem={({ item }) => (
             <TouchableOpacity
-              style={[styles.orderRow, sharing && styles.orderRowDisabled]}
+              style={[flat.documentRow, sharing && flat.documentRowDisabled]}
               onPress={() => onPickOrder(item)}
               disabled={sharing || (lockedRecipient && resolvingChannel)}
-              activeOpacity={0.75}
+              activeOpacity={0.85}
             >
-              <View style={styles.orderMain}>
-                <Text style={styles.orderName}>{item.name}</Text>
-                <Text style={styles.orderMeta} numberOfLines={1}>
+              <View style={flat.documentRowMain}>
+                <Text style={flat.documentRowTitle}>{item.name}</Text>
+                <Text style={flat.documentRowSub} numberOfLines={1}>
                   {orderCaption(item)}
                 </Text>
               </View>
-              <Ionicons name="chevron-forward" size={20} color={Colors.TEXT_SECONDARY} />
+              <Ionicons name="chevron-forward" size={20} color={Colors.MEDIUM_GRAY} />
             </TouchableOpacity>
           )}
         />
@@ -446,79 +458,22 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.BACKGROUND },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.LG },
-  empty: { fontSize: 15, color: Colors.TEXT_SECONDARY, textAlign: 'center', paddingHorizontal: Spacing.LG },
-  listPad: { paddingBottom: Spacing.XL },
+  listPad: { paddingBottom: Spacing.XL, paddingTop: Spacing.SM },
   resolvingRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    marginHorizontal: Spacing.SCREEN_PADDING,
+    marginHorizontal: Spacing.MD,
     marginBottom: Spacing.SM,
     paddingVertical: 8,
   },
-  resolvingText: { fontSize: 14, color: Colors.TEXT_SECONDARY },
-  createRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginHorizontal: Spacing.SCREEN_PADDING,
-    marginBottom: Spacing.MD,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-    backgroundColor: Colors.WHITE,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.BORDER,
-  },
-  createText: { fontSize: 15, fontWeight: '600', color: Colors.WINE },
-  orderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: Spacing.SCREEN_PADDING,
-    marginBottom: 10,
-    padding: 14,
-    borderRadius: 10,
-    backgroundColor: Colors.WHITE,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.BORDER,
-  },
-  orderRowDisabled: { opacity: 0.55 },
-  orderMain: { flex: 1, minWidth: 0, marginRight: 8 },
-  orderName: { fontSize: 15, fontWeight: '700', color: Colors.BLACK },
-  orderMeta: { marginTop: 4, fontSize: 13, color: Colors.TEXT_SECONDARY },
+  resolvingText: { fontSize: 14, color: Colors.MEDIUM_GRAY },
   sendingOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(255,255,255,0.85)',
+    backgroundColor: 'rgba(236, 239, 241, 0.92)',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 12,
   },
-  sendingText: { fontSize: 15, fontWeight: '600', color: Colors.BLACK },
-  findSupplierRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginTop: Spacing.MD,
-    marginHorizontal: Spacing.MD,
-    marginBottom: Spacing.SM,
-    paddingVertical: 14,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    backgroundColor: Colors.WHITE,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Colors.BORDER,
-  },
-  findSupplierIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFF5F7',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  findSupplierText: { flex: 1, minWidth: 0 },
-  findSupplierTitle: { fontSize: 15, fontWeight: '700', color: Colors.BLACK },
-  findSupplierSub: { marginTop: 3, fontSize: 13, color: Colors.TEXT_SECONDARY, lineHeight: 18 },
+  sendingText: { fontSize: 15, fontWeight: '600', color: Colors.BRAND_NAVY },
 });

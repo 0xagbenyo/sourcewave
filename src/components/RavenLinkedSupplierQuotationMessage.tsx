@@ -16,13 +16,10 @@ import { userFacingError } from '../utils/userFacingError';
 import type { SourcewaveQuotationDraftPayload } from '../utils/chatQuotationDraftMessage';
 import {
   supplierQuotationDocAllowsChatBuyerReview,
-  supplierQuotationAllowsSupplierResend,
-  supplierQuotationWorkflowStateIsApprovedLike,
 } from '../utils/chatQuotationDraftMessage';
 import { RavenLight } from '../constants/ravenLightTheme';
 import { useUserSession } from '../context/UserContext';
 import { navigateToSalesInvoiceDetail } from '../utils/erpDocumentNavigation';
-import type { RootStackParamList } from '../types';
 import { notifyErpDocStatusInChat } from '../utils/erpDocChatStatusReply';
 
 type Props = {
@@ -53,6 +50,8 @@ type Props = {
   busy?: boolean;
   onAccept?: () => void;
   onReject?: () => void;
+  /** Outgoing share — blue card styling on the quotation card. */
+  mine?: boolean;
 };
 
 type LinkedInvoice = {
@@ -93,6 +92,7 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
   onReject,
   registerSqPaymentAction,
   onMessageLongPress,
+  mine,
 }) => {
   const navigation = useNavigation();
   const { user } = useUserSession();
@@ -102,7 +102,6 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
   const [isDraft, setIsDraft] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [quotationSupplierId, setQuotationSupplierId] = useState<string | null>(null);
-  const [supplierResendEligible, setSupplierResendEligible] = useState(false);
   const [linkedInvoice, setLinkedInvoice] = useState<LinkedInvoice | null>(null);
   const [invoiceBusy, setInvoiceBusy] = useState(false);
   const [payModal, setPayModal] = useState(false);
@@ -159,7 +158,6 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
     setPayload(null);
     setLoadError(false);
     setQuotationSupplierId(null);
-    setSupplierResendEligible(false);
     (async () => {
       try {
         const doc = await getERPNextClient().getSupplierQuotationByName(name);
@@ -177,7 +175,6 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
         const txRaw = doc.transaction_date ?? doc.creation;
         const transactionDate = txRaw != null ? String(txRaw).trim() : '';
         const eligible = supplierQuotationDocAllowsChatBuyerReview(doc as Record<string, unknown>);
-        setSupplierResendEligible(supplierQuotationAllowsSupplierResend(doc as Record<string, unknown>));
         setPayload({
           name,
           currency: String(doc.currency || 'USD').trim() || 'USD',
@@ -327,23 +324,6 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
     }
   }, [navigation, linkedInvoice?.name, isSupplierPortal]);
 
-  const onReviseResendQuotation = useCallback(() => {
-    const n = sqName.trim();
-    if (!n) return;
-    try {
-      (navigation as { navigate: (screen: keyof RootStackParamList, params?: object) => void }).navigate(
-        'SupplierQuotationCompose',
-        {
-          resendFromQuotation: n,
-          ...(ravenChannelId ? { ravenChannelId } : {}),
-          ...(linkMessageId ? { linkMessageId } : {}),
-        }
-      );
-    } catch (e: unknown) {
-      Alert.error('Quotation', userFacingError(e, 'Could not open quotation editor.'));
-    }
-  }, [navigation, sqName, ravenChannelId, linkMessageId]);
-
   useEffect(() => {
     if (!registerSqPaymentAction) return;
     const n = sqName.trim();
@@ -395,6 +375,7 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
           title: 'Could not load quotation',
           status: 'draft',
         }}
+        mine={mine}
         showBuyerActions={false}
       />
     );
@@ -423,19 +404,6 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
     !hideBuyerAsQuotationAuthor &&
     payload.buyerReviewEligible !== false;
 
-  const approvedForSupplierMenu =
-    supplierQuotationWorkflowStateIsApprovedLike(payload.workflowState) ||
-    supplierQuotationWorkflowStateIsApprovedLike(payload.erpnextStatus) ||
-    handled === 'accepted' ||
-    (submitted && displayHandled === 'submitted');
-
-  const showSupplierResend =
-    enableSupplierUx &&
-    viewerSup.length > 0 &&
-    quotationSupplierId != null &&
-    viewerSup === quotationSupplierId &&
-    (supplierResendEligible || handled === 'rejected');
-
   const supplierSeesPaymentRow =
     enableSupplierUx &&
     viewerSup.length > 0 &&
@@ -453,6 +421,7 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
     <>
       <RavenQuotationDraftCard
         payload={payload}
+        mine={mine}
         showBuyerActions={cardShowBuyer}
         handled={displayHandled}
         busy={busy}
@@ -460,19 +429,6 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
         onReject={cardShowBuyer ? onReject : undefined}
         onCardLongPress={onMessageLongPress}
       />
-      {showSupplierResend ? (
-        <Pressable
-          onPress={onReviseResendQuotation}
-          onLongPress={onMessageLongPress}
-          delayLongPress={380}
-          style={({ pressed }) => [styles.resendBtn, pressed && styles.resendBtnPressed]}
-          accessibilityRole="button"
-          accessibilityLabel="Revise and send a new quotation"
-        >
-          <Ionicons name="refresh-outline" size={16} color={RavenLight.accent} />
-          <Text style={styles.resendBtnText}>Revise & resend</Text>
-        </Pressable>
-      ) : null}
       {showInvoiceStrip ? (
         <Pressable
           onPress={openLinkedInvoice}
@@ -517,7 +473,7 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
   );
 
   return (
-    <View>
+    <View style={styles.root}>
       {cardBlock}
 
       <SupplierQuotationPaymentModal
@@ -533,9 +489,15 @@ export const RavenLinkedSupplierQuotationMessage: React.FC<Props> = ({
 };
 
 const styles = StyleSheet.create({
+  root: {
+    width: '100%',
+    maxWidth: '100%',
+    alignSelf: 'flex-start',
+  },
   loading: {
     minHeight: 80,
-    alignSelf: 'stretch',
+    width: '100%',
+    maxWidth: '100%',
     paddingVertical: 14,
     alignItems: 'center',
     justifyContent: 'center',
@@ -584,23 +546,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   payMeta: { flex: 1, fontSize: 12, fontWeight: '600', color: RavenLight.textMuted },
-  resendBtn: {
-    marginTop: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: RavenLight.radiusMd,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: RavenLight.accent,
-    backgroundColor: RavenLight.accentSoft,
-  },
-  resendBtnPressed: { opacity: 0.85 },
-  resendBtnText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: RavenLight.accent,
-  },
 });

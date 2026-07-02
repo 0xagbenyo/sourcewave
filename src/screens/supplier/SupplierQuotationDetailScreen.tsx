@@ -1,11 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
-import { Ionicons } from '@expo/vector-icons';
 import { getERPNextClient } from '../../services/erpnext';
 import { useUserSession } from '../../context/UserContext';
-import { useSessionCustomerId } from '../../hooks/useSessionCustomerId';
 import { useSupplierQuotationBuyerReview } from '../../hooks/useSupplierQuotationBuyerReview';
 import { navigateToSalesInvoiceDetail } from '../../utils/erpDocumentNavigation';
 import {
@@ -14,14 +11,15 @@ import {
   type SupplierQuotationUiStatusKind,
 } from '../../utils/chatQuotationDraftMessage';
 import { Colors } from '../../constants/colors';
-import { Spacing } from '../../constants/spacing';
 import { pickLineDisplayImageUri } from '../../utils/erpLineItemImages';
 import { erpLineItemTitle } from '../../utils/erpLineItemDisplay';
+import { formatErpLineWeight, readErpLineWeightFromRow } from '../../utils/erpLineWeight';
 import { QuotationBuyerActionBar } from '../../components/QuotationBuyerActionBar';
 import {
   ErpDocumentPreviewLayout,
   ErpDocSheet,
   ErpDocHero,
+  ErpDocHeroActionButton,
   ErpDocSection,
   ErpDocLineItem,
   ErpDocItemsList,
@@ -55,12 +53,8 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
   const route = useRoute();
   const { t } = useTranslation();
   const { user } = useUserSession();
-  const { name, customerId: routeCustomerId } = route.params as { name: string; customerId?: string };
-  const { customerId: sessionCustomerId } = useSessionCustomerId();
+  const { name } = route.params as { name: string; customerId?: string };
   const isSupplierPortal = user?.appMode === 'supplier' || !!user?.supplierId?.trim();
-  const customerScope = isSupplierPortal
-    ? undefined
-    : String(routeCustomerId || sessionCustomerId || '').trim() || undefined;
 
   const [doc, setDoc] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -103,7 +97,6 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
       setLinksLoading(true);
       try {
         const rows = await getERPNextClient().listSalesInvoicesByCustomQuotation(name, {
-          customerId: customerScope,
           limit: 10,
         });
         const nonCancelled = (Array.isArray(rows) ? rows : []).filter((r) => Number(r?.docstatus) !== 2);
@@ -117,7 +110,7 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [name, customerScope]);
+  }, [name]);
 
   const items = useMemo(
     () => (Array.isArray(doc?.items) ? (doc!.items as Record<string, unknown>[]) : []),
@@ -176,11 +169,14 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
   const supplierLabel = String(doc?.supplier_name || doc?.supplier || '—');
 
   const facts = useMemo(() => {
-    const rows: { label: string; value: string }[] = [{ label: 'Supplier', value: supplierLabel }];
+    const rows: { label: string; value: string }[] = [];
+    if (!isSupplierPortal) {
+      rows.push({ label: 'Supplier', value: supplierLabel });
+    }
     const valid = formatErpDocDate(doc?.valid_till);
-    if (valid) rows.push({ label: 'Valid till', value: valid });
+    if (valid) rows.push({ label: t('quotationDetails.validTo'), value: valid });
     return rows;
-  }, [doc?.valid_till, supplierLabel]);
+  }, [doc?.valid_till, isSupplierPortal, supplierLabel, t]);
 
   const primaryInvoice = linkedInvoices[0];
   const primaryInvoiceName = String(primaryInvoice?.name || '').trim();
@@ -200,6 +196,14 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
     });
   };
 
+  const onShareQuotation = () => {
+    (navigation as { navigate: (n: string, p?: object) => void }).navigate('SupplierQuotationShare', {
+      quotationName: name,
+    });
+  };
+
+  const canShare = isSupplierPortal && Number(doc?.docstatus) !== 2;
+
   return (
     <ErpDocumentPreviewLayout
       screenTitle="Quotation"
@@ -208,6 +212,8 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
       loading={loading}
       errorMessage={!loading && !doc ? 'This quotation could not be found or you may not have access.' : null}
       onBack={() => navigation.goBack()}
+      onShare={canShare ? onShareQuotation : undefined}
+      shareAccessibilityLabel="Share quotation in chat"
     >
       {doc ? (
         <ErpDocSheet>
@@ -229,77 +235,63 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
                   onAccept={() => void buyerReview.accept()}
                   onReject={() => void buyerReview.reject()}
                 />
+              ) : canEdit ? (
+                <ErpDocHeroActionButton label="Edit" onPress={onEditQuotation} variant="outline" />
+              ) : canResend ? (
+                <ErpDocHeroActionButton
+                  label="Revise & resend"
+                  onPress={onResendQuotation}
+                  variant="outline"
+                  accessibilityLabel="Revise and send a new quotation"
+                />
               ) : undefined
             }
           />
 
-          {!isSupplierPortal ? (
-            <ErpDocLinkedSection
-              title={t('quotationDetails.linkedInvoice')}
-              loading={linksLoading}
-              emptyTitle={t('quotationDetails.noLinkedInvoice')}
-            >
-              {primaryInvoiceName ? (
+          <ErpDocLinkedSection
+            title={t('quotationDetails.linkedInvoice')}
+            loading={linksLoading}
+            emptyTitle={t('quotationDetails.noLinkedInvoice')}
+          >
+            {primaryInvoiceName ? (
+              <ErpDocLinkButton
+                label={t('quotationDetails.viewInvoice', { name: primaryInvoiceName })}
+                subtitle={[
+                  String(primaryInvoice?.status || '').trim(),
+                  formatErpDocMoney(primaryInvoice?.grand_total, String(primaryInvoice?.currency || currency)),
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+                icon="receipt-outline"
+                onPress={() =>
+                  navigateToSalesInvoiceDetail(
+                    navigation as { navigate: (n: string, p?: object) => void },
+                    primaryInvoiceName,
+                    isSupplierPortal
+                  )
+                }
+              />
+            ) : null}
+            {linkedInvoices.slice(1).map((inv) => {
+              const invName = String(inv.name || '').trim();
+              if (!invName) return null;
+              return (
                 <ErpDocLinkButton
-                  label={t('quotationDetails.viewInvoice', { name: primaryInvoiceName })}
-                  subtitle={[
-                    String(primaryInvoice?.status || '').trim(),
-                    formatErpDocMoney(primaryInvoice?.grand_total, String(primaryInvoice?.currency || currency)),
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
+                  key={invName}
+                  label={t('quotationDetails.viewInvoice', { name: invName })}
+                  subtitle={formatErpDocMoney(inv.grand_total, String(inv.currency || currency))}
                   icon="receipt-outline"
                   onPress={() =>
                     navigateToSalesInvoiceDetail(
                       navigation as { navigate: (n: string, p?: object) => void },
-                      primaryInvoiceName,
-                      false
+                      invName,
+                      isSupplierPortal
                     )
                   }
                 />
-              ) : null}
-              {linkedInvoices.slice(1).map((inv) => {
-                const invName = String(inv.name || '').trim();
-                if (!invName) return null;
-                return (
-                  <ErpDocLinkButton
-                    key={invName}
-                    label={t('quotationDetails.viewInvoice', { name: invName })}
-                    subtitle={formatErpDocMoney(inv.grand_total, String(inv.currency || currency))}
-                    icon="receipt-outline"
-                    onPress={() =>
-                      navigateToSalesInvoiceDetail(
-                        navigation as { navigate: (n: string, p?: object) => void },
-                        invName,
-                        false
-                      )
-                    }
-                  />
-                );
-              })}
-            </ErpDocLinkedSection>
-          ) : null}
-
-          {canEdit || canResend ? (
-            <View style={styles.actionRow}>
-              {canEdit ? (
-                <TouchableOpacity style={styles.actionBtn} onPress={onEditQuotation} activeOpacity={0.85}>
-                  <Ionicons name="create-outline" size={20} color={Colors.WHITE} />
-                  <Text style={styles.actionBtnText}>Edit quotation</Text>
-                </TouchableOpacity>
-              ) : null}
-              {canResend ? (
-                <TouchableOpacity
-                  style={[styles.actionBtn, styles.actionBtnSecondary]}
-                  onPress={onResendQuotation}
-                  activeOpacity={0.85}
-                >
-                  <Ionicons name="refresh-outline" size={20} color={Colors.WINE} />
-                  <Text style={[styles.actionBtnText, styles.actionBtnTextSecondary]}>Revise & resend</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          ) : null}
+              );
+            })}
+          </ErpDocLinkedSection>
 
           <ErpDocSection title={`Items · ${items.length}`}>
             {items.length === 0 ? (
@@ -308,6 +300,11 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
               <ErpDocItemsList>
                 {items.map((line, idx) => {
                   const code = String(line.item_code || '').trim();
+                  const weights = readErpLineWeightFromRow(line as Record<string, unknown>);
+                  const weightDetail =
+                    weights.total_weight != null || weights.weight_per_unit != null
+                      ? `${formatErpLineWeight(weights.total_weight ?? 0)} kg total · ${formatErpLineWeight(weights.weight_per_unit ?? 0)} kg/unit`
+                      : undefined;
                   return (
                   <ErpDocLineItem
                     key={String(line.name || idx)}
@@ -315,6 +312,7 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
                       description: line.description,
                       itemCode: line.item_code,
                     })}
+                    detail={weightDetail}
                     qty={line.qty}
                     rate={line.rate}
                     amount={line.amount}
@@ -331,37 +329,3 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
     </ErpDocumentPreviewLayout>
   );
 };
-
-const styles = StyleSheet.create({
-  actionRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    marginBottom: Spacing.MD,
-  },
-  actionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    flexGrow: 1,
-    flexBasis: '45%',
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-    backgroundColor: Colors.WINE,
-  },
-  actionBtnSecondary: {
-    backgroundColor: Colors.WHITE,
-    borderWidth: 1,
-    borderColor: Colors.WINE,
-  },
-  actionBtnText: {
-    color: Colors.WHITE,
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  actionBtnTextSecondary: {
-    color: Colors.WINE,
-  },
-});

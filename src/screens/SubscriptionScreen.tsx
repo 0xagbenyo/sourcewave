@@ -100,7 +100,7 @@ export const SubscriptionScreen: React.FC = () => {
   } | null>(null);
   const [cardCheckoutLoading, setCardCheckoutLoading] = useState(false);
   const [cardCheckoutError, setCardCheckoutError] = useState<string | null>(null);
-  const [cardInitKey, setCardInitKey] = useState(0);
+  const [cardPaymentStarted, setCardPaymentStarted] = useState(false);
   const [paymentOtp, setPaymentOtp] = useState('');
   const [submittingOtp, setSubmittingOtp] = useState(false);
   const pendingPromoRef = useRef<string | null>(null);
@@ -249,53 +249,35 @@ export const SubscriptionScreen: React.FC = () => {
     return promise;
   }, [user?.email, selectedPlan.id, selectedPlanId, checkoutPriceGhs, appliedPromo?.code]);
 
-  useEffect(() => {
-    if (isActive || isLoading || !user?.email) return;
-    void loadCardCheckout();
-  }, [isActive, isLoading, user?.email, selectedPlanId, checkoutPriceGhs, loadCardCheckout]);
-
-  useEffect(() => {
-    if (selectedPayment !== 'card') {
-      setCardCheckoutError(null);
-      if (!cardCheckoutLoading) {
-        setCardCheckoutLoading(false);
-      }
-      return;
-    }
-    if (!user?.email) return;
-
-    let cancelled = false;
-    const sessionKey = `${selectedPlanId}-${checkoutPriceGhs}`;
-    const cached = cardSessionCacheRef.current;
-
-    if (cached?.key === sessionKey) {
-      setCardCheckout(cached.session);
-      setCardCheckoutLoading(false);
-      setCardCheckoutError(null);
-      cardPromoRef.current = cached.promoCode;
+  const startCardCheckout = useCallback(async () => {
+    if (!user?.email) {
+      Alert.alert(t('subscriptionPage.signInRequired'), t('subscriptionPage.signInBody'));
       return;
     }
 
+    setCardPaymentStarted(true);
     setCardCheckoutLoading(true);
     setCardCheckoutError(null);
 
-    void (async () => {
-      const session = await loadCardCheckout();
-      if (cancelled) return;
-      if (!session) {
-        setCardCheckout(null);
-        setCardCheckoutError(t('subscriptionPage.cardLoadFailed'));
-      } else {
-        setCardCheckout(session);
-        setCardCheckoutError(null);
-      }
-      setCardCheckoutLoading(false);
-    })();
+    const session = await loadCardCheckout();
+    if (!session) {
+      setCardCheckout(null);
+      setCardCheckoutError(t('subscriptionPage.cardLoadFailed'));
+    } else {
+      setCardCheckout(session);
+      setCardCheckoutError(null);
+    }
+    setCardCheckoutLoading(false);
+  }, [loadCardCheckout, t, user?.email]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedPayment, user?.email, selectedPlanId, checkoutPriceGhs, cardInitKey, loadCardCheckout, t]);
+  useEffect(() => {
+    setCardPaymentStarted(false);
+    cardSessionCacheRef.current = null;
+    cardInitPromiseRef.current = null;
+    setCardCheckout(null);
+    setCardCheckoutError(null);
+    setCardCheckoutLoading(false);
+  }, [selectedPlanId, checkoutPriceGhs, selectedPayment]);
 
   const processPaystackChargeResponse = async (
     paystackResponse: PaystackChargeResponse,
@@ -572,6 +554,13 @@ export const SubscriptionScreen: React.FC = () => {
 
   const showPurchaseFooter =
     !isLoading && !isActive && !pendingPayment && selectedPayment !== 'card';
+  const showCardPayCta =
+    !isLoading &&
+    !isActive &&
+    !pendingPayment &&
+    selectedPayment === 'card' &&
+    !cardPaymentStarted &&
+    !!user?.email;
   const showActiveFooter = !isLoading && isActive && !!subscription;
 
   return (
@@ -877,6 +866,10 @@ export const SubscriptionScreen: React.FC = () => {
                       <View style={styles.fieldPad}>
                         <Text style={styles.fieldHint}>{t('subscriptionPage.signInBody')}</Text>
                       </View>
+                    ) : !cardPaymentStarted ? (
+                      <View style={styles.fieldPad}>
+                        <Text style={styles.fieldHint}>{t('subscriptionPage.cardHint')}</Text>
+                      </View>
                     ) : (
                       <SubscriptionPaystackCardCheckout
                         authorizationUrl={cardCheckout?.authorizationUrl}
@@ -888,7 +881,7 @@ export const SubscriptionScreen: React.FC = () => {
                             ? () => {
                                 cardSessionCacheRef.current = null;
                                 cardInitPromiseRef.current = null;
-                                setCardInitKey((key) => key + 1);
+                                void startCardCheckout();
                               }
                             : undefined
                         }
@@ -948,6 +941,31 @@ export const SubscriptionScreen: React.FC = () => {
               activeOpacity={0.85}
             >
               {paying ? (
+                <ActivityIndicator color={Colors.WHITE} />
+              ) : (
+                <>
+                  <Ionicons name="lock-closed-outline" size={20} color={Colors.WHITE} />
+                  <Text style={styles.payBtnText}>
+                    {t('subscriptionPage.payCtaShort', { amount: formatGhanaCedis(checkoutPriceGhs) })}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+            <Text style={styles.footerHint}>
+              {selectedPlan.durationLabel} · {formatGhanaCedis(checkoutPriceGhs)}
+            </Text>
+          </View>
+        ) : null}
+
+        {showCardPayCta ? (
+          <View style={styles.footer}>
+            <TouchableOpacity
+              style={[styles.payBtn, (cardCheckoutLoading || promoValidating) && styles.payBtnDisabled]}
+              onPress={() => void startCardCheckout()}
+              disabled={cardCheckoutLoading || promoValidating}
+              activeOpacity={0.85}
+            >
+              {cardCheckoutLoading ? (
                 <ActivityIndicator color={Colors.WHITE} />
               ) : (
                 <>

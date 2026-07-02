@@ -3,10 +3,14 @@ import { createStackNavigator } from '@react-navigation/stack';
 import { SupplierTabNavigator } from './SupplierTabNavigator';
 import { SupplierOrdersInvoicesScreen } from '../screens/supplier/SupplierOrdersInvoicesScreen';
 import { SupplierSalesInvoiceDetailScreen } from '../screens/supplier/SupplierSalesInvoiceDetailScreen';
+import { DeliveryNoteDetailScreen } from '../screens/DeliveryNoteDetailScreen';
 import { SupplierPaymentEntryDetailScreen } from '../screens/supplier/SupplierPaymentEntryDetailScreen';
 import { SupplierQuotationListScreen } from '../screens/supplier/SupplierQuotationListScreen';
 import { SupplierQuotationDetailScreen } from '../screens/supplier/SupplierQuotationDetailScreen';
 import { SupplierQuotationComposeScreen } from '../screens/supplier/SupplierQuotationComposeScreen';
+import { SupplierQuotationShareScreen, SupplierInvoiceShareScreen } from '../screens/supplier/SupplierQuotationShareScreen';
+import { RavenWorkspaceSupplierProfileScreen } from '../screens/RavenWorkspaceSupplierProfileScreen';
+import { SupplierBusinessProfileEditScreen } from '../screens/supplier/SupplierBusinessProfileEditScreen';
 import type { SupplierStackParamList } from '../types';
 
 const Stack = createStackNavigator<SupplierStackParamList>();
@@ -27,6 +31,11 @@ export const SupplierRootNavigator: React.FC = () => {
         options={{ presentation: 'card', gestureEnabled: true }}
       />
       <Stack.Screen
+        name="SupplierDeliveryNoteDetail"
+        component={DeliveryNoteDetailScreen}
+        options={{ presentation: 'card', gestureEnabled: true }}
+      />
+      <Stack.Screen
         name="SupplierPaymentEntryDetail"
         component={SupplierPaymentEntryDetailScreen}
         options={{ presentation: 'card', gestureEnabled: true }}
@@ -44,6 +53,26 @@ export const SupplierRootNavigator: React.FC = () => {
       <Stack.Screen
         name="SupplierQuotationCompose"
         component={SupplierQuotationComposeScreen}
+        options={{ presentation: 'card', gestureEnabled: true }}
+      />
+      <Stack.Screen
+        name="SupplierQuotationShare"
+        component={SupplierQuotationShareScreen}
+        options={{ presentation: 'card', gestureEnabled: true }}
+      />
+      <Stack.Screen
+        name="SupplierInvoiceShare"
+        component={SupplierInvoiceShareScreen}
+        options={{ presentation: 'card', gestureEnabled: true }}
+      />
+      <Stack.Screen
+        name="SupplierBusinessProfile"
+        component={RavenWorkspaceSupplierProfileScreen}
+        options={{ presentation: 'card', gestureEnabled: true }}
+      />
+      <Stack.Screen
+        name="SupplierBusinessProfileEdit"
+        component={SupplierBusinessProfileEditScreen}
         options={{ presentation: 'card', gestureEnabled: true }}
       />
     </Stack.Navigator>

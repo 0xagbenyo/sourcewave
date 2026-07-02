@@ -8,11 +8,14 @@ import { useUserSession } from '../context/UserContext';
 import { userFacingError } from '../utils/userFacingError';
 import type { RootStackParamList } from '../types';
 import { appAlert as Alert } from '../services/appAlert';
+import { ravenChatDocCardColors, ravenChatDocCardStyle, ravenChatDocSharedLabelStyle } from '../utils/ravenChatDocCard';
 
 type Props = {
   orderName: string;
   /** When opened from chat, pre-select this channel on send. */
   ravenChannelId?: string;
+  /** Outgoing share — blue card styling. */
+  mine?: boolean;
 };
 
 function formatMoney(amount: number, currency: string): string {
@@ -36,7 +39,7 @@ function statusLabel(docstatus: unknown, status: unknown): string {
 /**
  * In-chat card for a linked **Sales Order** (buyer sourcing request shared with a supplier).
  */
-export const RavenLinkedSalesOrderMessage: React.FC<Props> = ({ orderName, ravenChannelId }) => {
+export const RavenLinkedSalesOrderMessage: React.FC<Props> = ({ orderName, ravenChannelId, mine }) => {
   const navigation = useNavigation();
   const { user } = useUserSession();
   const name = orderName.trim();
@@ -114,26 +117,29 @@ export const RavenLinkedSalesOrderMessage: React.FC<Props> = ({ orderName, raven
     }
   }, [navigation, name, channelId]);
 
+  const colors = ravenChatDocCardColors(mine);
+
   return (
-    <View style={styles.card}>
+    <View style={ravenChatDocCardStyle(mine)}>
+      {mine ? <Text style={ravenChatDocSharedLabelStyle(mine)}>You shared</Text> : null}
       <View style={styles.head}>
-        <Ionicons name="cart-outline" size={22} color={RavenLight.accent} style={{ marginRight: 8 }} />
-        <Text style={styles.headTitle} numberOfLines={1}>
+        <Ionicons name="cart-outline" size={22} color={colors.icon} style={{ marginRight: 8 }} />
+        <Text style={[styles.headTitle, { color: colors.title }]} numberOfLines={1}>
           Sourcing request
         </Text>
       </View>
       {loading ? (
-        <ActivityIndicator size="small" color={RavenLight.accent} style={{ marginTop: 10 }} />
+        <ActivityIndicator size="small" color={colors.icon} style={{ marginTop: 10 }} />
       ) : error ? (
-        <Text style={styles.docId}>{name}</Text>
+        <Text style={[styles.docId, { color: colors.body }]}>{name}</Text>
       ) : (
         <>
-          <Text style={styles.docId} numberOfLines={2}>
+          <Text style={[styles.docId, { color: colors.body }]} numberOfLines={2}>
             {title}
           </Text>
-          {meta ? <Text style={styles.meta}>{meta}</Text> : null}
+          {meta ? <Text style={[styles.meta, { color: colors.meta }]}>{meta}</Text> : null}
           {itemCount > 0 ? (
-            <Text style={styles.metaSub}>
+            <Text style={[styles.metaSub, { color: colors.meta }]}>
               {itemCount} line{itemCount === 1 ? '' : 's'} in this request
             </Text>
           ) : null}
@@ -144,14 +150,14 @@ export const RavenLinkedSalesOrderMessage: React.FC<Props> = ({ orderName, raven
         <View style={styles.actions}>
           {!orderSubmitted ? (
             <TouchableOpacity
-              style={styles.primaryBtn}
+              style={[styles.primaryBtn, { backgroundColor: colors.primaryBtnBg }]}
               onPress={openQuotationCompose}
               activeOpacity={0.85}
               accessibilityRole="button"
               accessibilityLabel="Create quotation from this order"
             >
               <Ionicons name="pricetag-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
-              <Text style={styles.primaryBtnText}>Create quotation</Text>
+              <Text style={[styles.primaryBtnText, { color: colors.primaryBtnText }]}>Create quotation</Text>
             </TouchableOpacity>
           ) : null}
           <TouchableOpacity
@@ -161,14 +167,14 @@ export const RavenLinkedSalesOrderMessage: React.FC<Props> = ({ orderName, raven
             accessibilityRole="button"
             accessibilityLabel="View order details"
           >
-            <Text style={styles.secondaryBtnText}>View order</Text>
-            <Ionicons name="chevron-forward" size={16} color={RavenLight.accent} />
+            <Text style={[styles.secondaryBtnText, { color: colors.secondaryBtnText }]}>View order</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.icon} />
           </TouchableOpacity>
         </View>
       ) : (
         <TouchableOpacity style={styles.row} onPress={openDetails} activeOpacity={0.85}>
-          <Text style={styles.hint}>View order</Text>
-          <Ionicons name="chevron-forward" size={18} color={RavenLight.accent} />
+          <Text style={[styles.hint, { color: colors.hint }]}>View order</Text>
+          <Ionicons name="chevron-forward" size={18} color={colors.icon} />
         </TouchableOpacity>
       )}
     </View>
@@ -176,27 +182,18 @@ export const RavenLinkedSalesOrderMessage: React.FC<Props> = ({ orderName, raven
 };
 
 const styles = StyleSheet.create({
-  card: {
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: RavenLight.border,
-    backgroundColor: RavenLight.panel,
-    padding: 10,
-    maxWidth: '100%',
-    alignSelf: 'stretch',
-  },
   head: { flexDirection: 'row', alignItems: 'center' },
-  headTitle: { flex: 1, fontSize: 15, fontWeight: '700', color: RavenLight.text },
-  docId: { marginTop: 6, fontSize: 15, fontWeight: '600', color: RavenLight.accent },
-  meta: { marginTop: 6, fontSize: 13, color: RavenLight.textMuted },
-  metaSub: { marginTop: 4, fontSize: 12, color: RavenLight.textSubtle },
+  headTitle: { flex: 1, fontSize: 15, fontWeight: '700' },
+  docId: { marginTop: 6, fontSize: 15, fontWeight: '600' },
+  meta: { marginTop: 6, fontSize: 13 },
+  metaSub: { marginTop: 4, fontSize: 12 },
   row: {
     marginTop: 10,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  hint: { fontSize: 12, color: RavenLight.textSubtle },
+  hint: { fontSize: 12 },
   actions: { marginTop: 12, gap: 8 },
   primaryBtn: {
     flexDirection: 'row',
@@ -207,7 +204,7 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     paddingHorizontal: 14,
   },
-  primaryBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  primaryBtnText: { fontSize: 14, fontWeight: '700' },
   secondaryBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -215,5 +212,5 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 2,
   },
-  secondaryBtnText: { fontSize: 13, fontWeight: '600', color: RavenLight.accent },
+  secondaryBtnText: { fontSize: 13, fontWeight: '600' },
 });

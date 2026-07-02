@@ -1,10 +1,12 @@
+import { setPendingSuppliersChatOpen } from './ravenPendingSuppliersChatOpen';
+
 /**
  * When the user opens a DM from `RavenWorkspaceSupplierProfile`, we dismiss that stack
  * screen with `goBack()` so the Suppliers chat stays visible underneath — no nested
  * `navigate('Main')` (avoids tab / stack transitions that feel unrelated to chat).
  */
 export type RavenOpenChatFromProfilePayload = {
-  workspaceId: string;
+  workspaceId?: string;
   channelId: string;
   peerUserId?: string;
 };
@@ -19,5 +21,9 @@ export function setRavenOpenChatFromProfileSubscriber(fn: Subscriber | null): vo
 }
 
 export function emitRavenOpenChatFromProfile(p: RavenOpenChatFromProfilePayload): void {
-  subscriber?.(p);
+  if (subscriber) {
+    subscriber(p);
+    return;
+  }
+  setPendingSuppliersChatOpen(p);
 }

@@ -5,10 +5,14 @@
  */
 
 import { getERPNextAuthorizationHeader, getERPNextBaseUrl } from '../services/erpnext';
+import { isLocalMediaUri } from './localMediaUri';
+
+export { isLocalMediaUri } from './localMediaUri';
 
 export function encodeErpFileUrl(raw: string | undefined | null): string {
 	if (raw == null || String(raw).trim() === '') return '';
 	const s = String(raw).trim();
+	if (isLocalMediaUri(s)) return s;
 
 	if (/^https?:\/\//i.test(s)) {
 		try {

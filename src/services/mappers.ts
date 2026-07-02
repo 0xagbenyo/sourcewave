@@ -10,6 +10,7 @@ import {
   readSalesOrderLineBudget,
   readSalesOrderLineRequestedQty,
 } from '../utils/erpSalesOrderLineFields';
+import { readSalesOrderSupplier } from '../utils/erpSalesOrderSupplier';
 
 import {
   User,
@@ -600,12 +601,15 @@ export const mapERPSalesOrderToOrder = (erpOrder: any): Order => {
   };
 
   const status = mapERPOrderStatusFromDocstatus(erpOrder.docstatus, erpOrder.status);
+  const supplierId = readSalesOrderSupplier(erpOrder as Record<string, unknown>);
 
   return {
     id: erpOrder.name,
     userId: erpOrder.custom_customer_id || '',
     orderNumber: erpOrder.name,
     status: status,
+    supplierId: supplierId || undefined,
+    supplierDisplayName: supplierId || undefined,
     items: (erpOrder.items || []).map((item: any) => 
       mapERPSalesOrderItemToOrderItem(item)
     ),
@@ -952,11 +956,17 @@ export const mapERPSalesInvoiceToSalesInvoice = (erpInvoice: any): SalesInvoice 
  * Map ERPNext Sales Invoice Item to SalesInvoiceItem type
  */
 const mapERPSalesInvoiceItemToSalesInvoiceItem = (erpItem: any): SalesInvoiceItem => {
+  const weightPerUnit = Number(erpItem.weight_per_unit);
+  const totalWeight = Number(erpItem.total_weight);
+  const lineImage = readErpDocLineImage(erpItem as Record<string, unknown>);
   return {
     itemCode: erpItem.item_code || '',
     itemName: erpItem.item_name || undefined,
     quantity: erpItem.qty || erpItem.quantity || 0,
     rate: erpItem.rate || 0,
     amount: erpItem.amount || 0,
+    weightPerUnit: Number.isFinite(weightPerUnit) ? weightPerUnit : undefined,
+    totalWeight: Number.isFinite(totalWeight) ? totalWeight : undefined,
+    lineImage: lineImage || undefined,
   };
 };

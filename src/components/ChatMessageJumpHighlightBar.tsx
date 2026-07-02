@@ -6,16 +6,26 @@ type Props = {
   active: boolean;
   children: React.ReactNode;
   style?: StyleProp<ViewStyle>;
+  /** Align message content to the leading edge (incoming bubbles). */
+  alignStart?: boolean;
   /** Align message content to the trailing edge (outgoing bubbles). */
   alignEnd?: boolean;
 };
 
 /** Brief blue left bar when scrolling to a quoted/replied message. */
-export function ChatMessageJumpHighlightBar({ active, children, style, alignEnd }: Props) {
+export function ChatMessageJumpHighlightBar({ active, children, style, alignStart, alignEnd }: Props) {
   return (
     <View style={[styles.row, active && styles.rowActive, style]}>
       {active ? <View style={styles.bar} /> : null}
-      <View style={[styles.body, alignEnd && styles.bodyAlignEnd]}>{children}</View>
+      <View
+        style={[
+          styles.body,
+          alignStart && styles.bodyAlignStart,
+          alignEnd && styles.bodyAlignEnd,
+        ]}
+      >
+        {children}
+      </View>
     </View>
   );
 }
@@ -44,6 +54,9 @@ const styles = StyleSheet.create({
   body: {
     flex: 1,
     minWidth: 0,
+  },
+  bodyAlignStart: {
+    alignItems: 'flex-start',
   },
   bodyAlignEnd: {
     alignItems: 'flex-end',

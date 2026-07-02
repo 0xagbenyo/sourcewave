@@ -17,15 +17,17 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { RavenLight } from '../constants/ravenLightTheme';
+import { isLogisticsRavenWorkspace } from '../constants/logisticsRavenWorkspace';
 import { Spacing } from '../constants/spacing';
 import {
-  fetchErpSupplierProfile,
   createDirectMessageChannel,
+  fetchErpSupplierProfile,
   type ErpSupplierProfile,
   type ErpSupplierFileAttachment,
 } from '../services/ravenNativeApi';
 import { useUserSession } from '../context/UserContext';
 import { useSubscription } from '../context/SubscriptionContext';
+import { useSupplierDocumentId } from '../hooks/useSupplierDocumentId';
 import type { RootStackParamList } from '../types';
 import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 import { ErpAuthenticatedPdfWebView } from '../components/ErpAuthenticatedPdfWebView';
@@ -34,14 +36,22 @@ import { encodeErpFileUrl } from '../utils/erpImageUrl';
 import { initialsFromUserId } from '../utils/ravenChatUi';
 import { emitRavenOpenChatFromProfile } from '../utils/ravenOpenChatFromProfileBridge';
 import { userFacingError } from '../utils/userFacingError';
+import {
+  shareDeliveryNoteToLogisticsPeer,
+} from '../utils/shareDeliveryNoteInChat';
 import { useAutoNavigateToSubscriptionWhenInactive } from '../hooks/useAutoNavigateToSubscriptionWhenInactive';
 import { resetToAuthScreen } from '../navigation/rootNavigation';
 import { useTranslation } from 'react-i18next';
+import { shareSalesOrderToSupplierPeer } from '../utils/shareSalesOrderInChat';
 import { getSalesOrderShareUiState } from '../utils/salesOrderShareState';
 
 type IoniconsName = React.ComponentProps<typeof Ionicons>['name'];
 
 type RouteProps = RouteProp<RootStackParamList, 'RavenWorkspaceSupplierProfile'>;
+
+type ProfileRouteParams = RootStackParamList['RavenWorkspaceSupplierProfile'] & {
+  supplierDocName?: string;
+};
 
 const MEDIA_COLS = 2;
 const MEDIA_GAP = 6;
@@ -93,9 +103,20 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
   const { t } = useTranslation();
   const navigation = useNavigation();
   const route = useRoute<RouteProps>();
+  const isSelfEdit = route.name === 'SupplierBusinessProfile';
+  const { supplierDocId } = useSupplierDocumentId();
+  const params = (route.params ?? {}) as ProfileRouteParams;
+  const supplierDocName = (
+    params.supplierDocName ||
+    (isSelfEdit ? supplierDocId : '') ||
+    ''
+  ).trim();
+  const { workspaceAdminUser, ravenWorkspaceId, ravenWorkspaceName, shareSalesOrderName, shareDeliveryNoteName } =
+    params;
   const { user } = useUserSession();
   const { isActive: subscriptionActive, isLoading: subscriptionLoading, refresh: refreshSubscription } =
     useSubscription();
+  const skipSubscriptionGate = isSelfEdit;
   useAutoNavigateToSubscriptionWhenInactive(navigation as { navigate: (name: string) => void }, {
     email: user?.email,
     isLoading: subscriptionLoading,
@@ -103,9 +124,8 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
   });
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
-  const { supplierDocName, workspaceAdminUser, ravenWorkspaceId, ravenWorkspaceName, shareSalesOrderName } =
-    route.params;
   const shareOrderNameParam = (shareSalesOrderName || '').trim();
+  const shareDeliveryNoteNameParam = (shareDeliveryNoteName || '').trim();
   const [shareOrderStillPending, setShareOrderStillPending] = useState(!!shareOrderNameParam);
   const shareOrderName = shareOrderStillPending ? shareOrderNameParam : '';
 
@@ -140,6 +160,8 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
   /** Any Supplier attachment (PDF, Office, etc.) — same authenticated WebView as PDFs so private `/private/files/` URLs work in-app. */
   const [fileWebPreview, setFileWebPreview] = useState<{ uri: string; title: string } | null>(null);
   const [openingChat, setOpeningChat] = useState(false);
+  const [sharingDeliveryNote, setSharingDeliveryNote] = useState(false);
+  const [sharingOrder, setSharingOrder] = useState(false);
 
   const sectionPad = Spacing.MD;
 
@@ -179,17 +201,27 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
       setProfile(null);
       return;
     }
-    if (subscriptionLoading) {
-      return;
-    }
-    if (!subscriptionActive) {
-      setLoading(false);
-      setProfile(null);
-      return;
+    if (!skipSubscriptionGate) {
+      if (subscriptionLoading) {
+        return;
+      }
+      if (!subscriptionActive) {
+        setLoading(false);
+        setProfile(null);
+        return;
+      }
     }
     setLoading(true);
     void load();
-  }, [load, user?.email, subscriptionLoading, subscriptionActive]);
+  }, [load, user?.email, subscriptionLoading, subscriptionActive, skipSubscriptionGate]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (isSelfEdit && user?.email && supplierDocName) {
+        void load();
+      }
+    }, [isSelfEdit, load, user?.email, supplierDocName])
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -234,6 +266,7 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
   const adminId = (workspaceAdminUser || '').trim();
   const adminIdLower = adminId.toLowerCase();
   const wsId = (ravenWorkspaceId || '').trim();
+  const isLogisticsWorkspace = isLogisticsRavenWorkspace(ravenWorkspaceName);
   const canMessageAdmin = !!adminId && !!wsId && adminIdLower !== viewerId;
 
   const onMessageSupplier = useCallback(async () => {
@@ -305,7 +338,74 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
     t,
   ]);
 
-  const onShareExistingOrder = useCallback(() => {
+  const onShareExistingDeliveryNote = useCallback(async () => {
+    if (!adminId) {
+      Alert.alert(t('deliveryNoteShare.title'), 'No representative user is linked to this profile.');
+      return;
+    }
+    if (adminIdLower === viewerId) {
+      Alert.alert(t('deliveryNoteShare.title'), 'You cannot send a delivery note to yourself.');
+      return;
+    }
+    if (!shareDeliveryNoteNameParam || !wsId) return;
+    if (sharingDeliveryNote) return;
+
+    setSharingDeliveryNote(true);
+    try {
+      const { channelId } = await shareDeliveryNoteToLogisticsPeer({
+        deliveryNoteName: shareDeliveryNoteNameParam,
+        peerUserId: adminId,
+        workspaceId: wsId,
+        sessionEmail: user?.email,
+      });
+      emitRavenOpenChatFromProfile({
+        workspaceId: wsId,
+        channelId,
+        peerUserId: adminId,
+      });
+      navigation.goBack();
+      Alert.success(t('deliveryNoteShare.sharedTitle'), t('deliveryNoteShare.sharedBody'), [
+        { text: t('contactUs.ok') },
+      ]);
+    } catch (e: unknown) {
+      Alert.error(
+        t('deliveryNoteShare.title'),
+        userFacingError(e, t('deliveryNoteShare.shareFailed'))
+      );
+    } finally {
+      setSharingDeliveryNote(false);
+    }
+  }, [
+    adminId,
+    adminIdLower,
+    viewerId,
+    shareDeliveryNoteNameParam,
+    wsId,
+    navigation,
+    sharingDeliveryNote,
+    user?.email,
+    t,
+  ]);
+
+  const onPickDeliveryNoteForLogistics = useCallback(() => {
+    if (!adminId || !wsId) {
+      Alert.alert(t('deliveryNoteShare.title'), 'No representative user is linked to this profile.');
+      return;
+    }
+    if (adminIdLower === viewerId) {
+      Alert.alert(t('deliveryNoteShare.title'), 'You cannot send a delivery note to yourself.');
+      return;
+    }
+    (navigation as { navigate: (name: string, params: object) => void }).navigate('CustomerDeliveryNotes', {
+      pickForLogisticsShare: {
+        peerUserId: adminId,
+        ravenWorkspaceId: wsId,
+        supplierLabel: profile?.supplier_name || profile?.name || '',
+      },
+    });
+  }, [adminId, adminIdLower, viewerId, wsId, navigation, profile?.supplier_name, profile?.name, t]);
+
+  const onShareExistingOrder = useCallback(async () => {
     if (!adminId) {
       Alert.alert(t('salesOrderShare.title'), 'No representative user is linked to this profile.');
       return;
@@ -314,14 +414,90 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
       Alert.alert(t('salesOrderShare.title'), 'You cannot send a request to yourself.');
       return;
     }
-    if (!shareOrderName) return;
-    (navigation as { navigate: (name: string, params: object) => void }).navigate('BuyerSalesOrderShareCompose', {
-      peerUserId: adminId,
-      salesOrderName: shareOrderName,
-      supplierLabel: profile?.supplier_name || profile?.name || '',
-      ravenWorkspaceId: wsId,
+    if (!shareOrderName || !wsId) return;
+    if (sharingOrder) return;
+
+    setSharingOrder(true);
+    try {
+      const { channelId } = await shareSalesOrderToSupplierPeer({
+        salesOrderName: shareOrderName,
+        peerUserId: adminId,
+        workspaceId: wsId,
+        sessionEmail: user?.email,
+        t,
+        navigation: navigation as { navigate: (name: string, params?: object) => void },
+      });
+      emitRavenOpenChatFromProfile({
+        workspaceId: wsId,
+        channelId,
+        peerUserId: adminId,
+      });
+      navigation.goBack();
+      Alert.success(t('salesOrderShare.sharedTitle'), t('salesOrderShare.sharedBody'), [
+        { text: t('contactUs.ok') },
+      ]);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e ?? '');
+      if (msg !== 'SALES_ORDER_NOT_SHAREABLE') {
+        Alert.error(
+          t('salesOrderShare.title'),
+          userFacingError(e, t('salesOrderShare.shareFailed'))
+        );
+      }
+    } finally {
+      setSharingOrder(false);
+    }
+  }, [
+    adminId,
+    adminIdLower,
+    viewerId,
+    shareOrderName,
+    wsId,
+    navigation,
+    sharingOrder,
+    user?.email,
+    t,
+  ]);
+
+  const primaryActionLabel = useMemo(() => {
+    if (isLogisticsWorkspace && (shareDeliveryNoteNameParam || !shareOrderName)) {
+      return t('supplierProfile.attachDeliveryNote');
+    }
+    if (shareDeliveryNoteNameParam) return t('supplierProfile.sendThisDeliveryNote');
+    if (shareOrderName) return t('supplierProfile.sendThisOrder');
+    return t('supplierProfile.sendRequest');
+  }, [isLogisticsWorkspace, shareDeliveryNoteNameParam, shareOrderName, t]);
+
+  const onPrimaryAction = useCallback(() => {
+    if (shareDeliveryNoteNameParam) {
+      void onShareExistingDeliveryNote();
+      return;
+    }
+    if (shareOrderName) {
+      void onShareExistingOrder();
+      return;
+    }
+    if (isLogisticsWorkspace) {
+      onPickDeliveryNoteForLogistics();
+      return;
+    }
+    onSendSalesOrder();
+  }, [
+    shareDeliveryNoteNameParam,
+    shareOrderName,
+    isLogisticsWorkspace,
+    onShareExistingDeliveryNote,
+    onShareExistingOrder,
+    onPickDeliveryNoteForLogistics,
+    onSendSalesOrder,
+  ]);
+
+  const onEditSelfProfile = useCallback(() => {
+    if (!supplierDocName) return;
+    (navigation as { navigate: (n: string, p?: object) => void }).navigate('SupplierBusinessProfileEdit', {
+      supplierDocName,
     });
-  }, [adminId, adminIdLower, viewerId, shareOrderName, wsId, navigation, profile?.supplier_name, profile?.name, t]);
+  }, [navigation, supplierDocName]);
 
   const onOpenFile = (att: ErpSupplierFileAttachment) => {
     const t = att.file_url.trim();
@@ -383,13 +559,24 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
           </TouchableOpacity>
           <View style={styles.navCenter}>
             <Text style={styles.navKicker} numberOfLines={1}>
-              {kicker || t('supplierProfile.kicker')}
+              {kicker || (isSelfEdit ? t('supplierProfile.selfKicker') : t('supplierProfile.kicker'))}
             </Text>
             <Text style={styles.navTitle} numberOfLines={1}>
               {title}
             </Text>
           </View>
-          <View style={styles.navSpacer} />
+          {isSelfEdit ? (
+            <TouchableOpacity
+              onPress={onEditSelfProfile}
+              style={styles.navBack}
+              hitSlop={14}
+              accessibilityLabel={t('supplierProfile.editTitle')}
+            >
+              <Ionicons name="create-outline" size={22} color={RavenLight.text} />
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.navSpacer} />
+          )}
         </View>
       </View>
     </>
@@ -423,7 +610,7 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
     );
   }
 
-  if (subscriptionLoading) {
+  if (!skipSubscriptionGate && subscriptionLoading) {
     return (
       <View style={styles.root}>
         {renderNav(t('supplierProfile.title'))}
@@ -434,7 +621,7 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
     );
   }
 
-  if (!subscriptionActive) {
+  if (!skipSubscriptionGate && !subscriptionActive) {
     return (
       <View style={styles.root}>
         {renderNav(t('supplierProfile.title'))}
@@ -528,9 +715,23 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
                     </View>
                   )}
 
-                  {user?.appMode !== 'supplier' ? (
+                  {user?.appMode !== 'supplier' && !isSelfEdit ? (
                     <>
-                      {shareOrderName ? (
+                      {shareDeliveryNoteNameParam ? (
+                        <View style={styles.shareOrderBanner}>
+                          <Ionicons name="cube-outline" size={18} color={RavenLight.accent} />
+                          <View style={styles.shareOrderBannerText}>
+                            <Text style={styles.shareOrderBannerTitle}>
+                              {isLogisticsWorkspace
+                                ? t('supplierProfile.sharingDeliveryNoteAttachTitle')
+                                : t('supplierProfile.sharingDeliveryNoteTitle')}
+                            </Text>
+                            <Text style={styles.shareOrderBannerSub} numberOfLines={1}>
+                              {shareDeliveryNoteNameParam}
+                            </Text>
+                          </View>
+                        </View>
+                      ) : shareOrderName ? (
                         <View style={styles.shareOrderBanner}>
                           <Ionicons name="document-text-outline" size={18} color={RavenLight.accent} />
                           <View style={styles.shareOrderBannerText}>
@@ -564,25 +765,37 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
                         </TouchableOpacity>
 
                         <TouchableOpacity
-                          style={[styles.actionBtn, styles.actionBtnPrimary, !adminId && styles.actionBtnDisabled]}
-                          onPress={shareOrderName ? onShareExistingOrder : onSendSalesOrder}
-                          disabled={!adminId}
+                          style={[
+                            styles.actionBtn,
+                            styles.actionBtnPrimary,
+                            (!adminId || sharingDeliveryNote || sharingOrder) && styles.actionBtnDisabled,
+                          ]}
+                          onPress={onPrimaryAction}
+                          disabled={!adminId || sharingDeliveryNote || sharingOrder}
                           activeOpacity={0.85}
-                          accessibilityLabel={
-                            shareOrderName ? t('supplierProfile.sendThisOrder') : t('supplierProfile.sendRequest')
-                          }
+                          accessibilityLabel={primaryActionLabel}
                         >
-                          <Ionicons
-                            name={shareOrderName ? 'paper-plane-outline' : 'cart-outline'}
-                            size={20}
-                            color={RavenLight.panel}
-                          />
+                          {sharingDeliveryNote && shareDeliveryNoteNameParam ? (
+                            <ActivityIndicator size="small" color={RavenLight.panel} />
+                          ) : sharingOrder && shareOrderName ? (
+                            <ActivityIndicator size="small" color={RavenLight.panel} />
+                          ) : (
+                            <Ionicons
+                              name={
+                                shareDeliveryNoteNameParam || shareOrderName || isLogisticsWorkspace
+                                  ? 'paper-plane-outline'
+                                  : 'cart-outline'
+                              }
+                              size={20}
+                              color={RavenLight.panel}
+                            />
+                          )}
                           <Text style={styles.actionBtnPrimaryText} numberOfLines={1}>
-                            {shareOrderName ? t('supplierProfile.sendThisOrder') : t('supplierProfile.sendRequest')}
+                            {primaryActionLabel}
                           </Text>
                         </TouchableOpacity>
                       </View>
-                      {shareOrderName ? (
+                      {shareOrderName && !shareDeliveryNoteNameParam ? (
                         <TouchableOpacity
                           style={[styles.secondaryLinkBtn, !adminId && styles.actionBtnDisabled]}
                           onPress={onSendSalesOrder}
@@ -593,7 +806,7 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
                         </TouchableOpacity>
                       ) : null}
                     </>
-                  ) : (
+                  ) : !isSelfEdit ? (
                     <TouchableOpacity
                       style={[
                         styles.actionBtn,
@@ -613,7 +826,19 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
                       )}
                       <Text style={styles.actionBtnOutlineText}>{t('supplierProfile.chat')}</Text>
                     </TouchableOpacity>
-                  )}
+                  ) : null}
+
+                  {isSelfEdit ? (
+                    <TouchableOpacity
+                      style={[styles.actionBtn, styles.actionBtnPrimary, styles.actionBtnSolo]}
+                      onPress={onEditSelfProfile}
+                      activeOpacity={0.85}
+                      accessibilityLabel={t('supplierProfile.editTitle')}
+                    >
+                      <Ionicons name="create-outline" size={20} color={RavenLight.panel} />
+                      <Text style={styles.actionBtnPrimaryText}>{t('supplierProfile.editTitle')}</Text>
+                    </TouchableOpacity>
+                  ) : null}
                 </>
               ) : null}
             </View>

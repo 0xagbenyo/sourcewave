@@ -20,7 +20,8 @@ import {
   type NativeScrollEvent,
 } from 'react-native';
 import { appAlert as Alert } from '../services/appAlert';
-import { pickChatDocuments, pickChatMediaFromLibrary } from '../utils/ravenChatAttachPickers';
+import { pickChatDocuments, pickChatMediaWithSource } from '../utils/ravenChatAttachPickers';
+import { imagePickLabelsFromT } from '../utils/formImagePicker';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useChatComposerInsets } from '../hooks/useChatComposerInsets';
 import { useChatMessageJumpHighlight } from '../hooks/useChatMessageJumpHighlight';
@@ -44,19 +45,23 @@ import { RavenComposerEmojiSheet } from './RavenComposerEmojiSheet';
 import { RavenChatAttachTrigger } from './RavenChatAttachTrigger';
 import { useRavenMessageActions } from '../hooks/useRavenMessageActions';
 import { useSqPaymentActionRegistry } from '../hooks/useSqPaymentActionRegistry';
+import { RavenForwardedLabel } from './RavenForwardedLabel';
+import { primaryChannelIdAfterShare } from '../utils/openRavenChatAfterShare';
 import { ravenMessageIsForwarded } from '../utils/ravenMessageReactions';
 import { ravenMessageHasVisualMedia, ravenSameMessageOwner } from '../utils/ravenAttachment';
 import {
   formatChatDateSeparator,
   formatMessageBubbleTime,
+  isRavenMessageContinuation,
   isDmChannel,
   initialsFromUserId,
   pastelAvatarBg,
   shouldShowChatDateSeparator,
-  shouldShowChatMessageSenderHeader,
   shouldShowChatMessageTextBubble,
   isChatMessageGroupedWithNewer,
+  ravenMessageCreatedAt,
 } from '../utils/ravenChatUi';
+import { useChatLaneLayout } from '../hooks/useChatLaneLayout';
 import { chatMessageBubbleBodyText } from '../utils/chatPlainText';
 import { resolveRavenUserDisplayName } from '../utils/ravenSearchPreview';
 import { ravenMessageShortPreview } from '../utils/ravenMessageShortPreview';
@@ -69,6 +74,7 @@ import {
 import { collectChatImageGalleryItems } from '../utils/ravenChatImageGallery';
 import {
   listChannelsForWorkspace,
+  listRavenChannelsForSessionUser,
   resolveRavenWorkspaceId,
   sendRavenChannelMessage,
   uploadRavenFileWithMessage,
@@ -86,6 +92,7 @@ import {
   ravenMergeMessageRowFromSendResponse,
   ravenRowIsSupplierQuotationDocLink,
   ravenRowIsSalesOrderDocLink,
+  ravenRowIsDeliveryNoteDocLink,
   ravenRowIsSalesInvoiceDocLink,
   ravenMessageOwnerMatchesSession,
 } from '../services/ravenNativeApi';
@@ -115,6 +122,7 @@ import type { ErpDocChatContext } from '../utils/erpDocChatStatusReply';
 import { RavenQuotationDraftCard } from './RavenQuotationDraftCard';
 import { RavenLinkedSupplierQuotationMessage } from './RavenLinkedSupplierQuotationMessage';
 import { RavenLinkedSalesOrderMessage } from './RavenLinkedSalesOrderMessage';
+import { RavenLinkedDeliveryNoteMessage } from './RavenLinkedDeliveryNoteMessage';
 import { RavenLinkedSalesInvoiceMessage } from './RavenLinkedSalesInvoiceMessage';
 import { RavenLinkedGenericDocMessage } from './RavenLinkedGenericDocMessage';
 import { getERPNextClient } from '../services/erpnext';
@@ -286,6 +294,11 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   const loadingOlderRef = useRef(false);
   const allowOlderEndReachedRef = useRef(false);
   const screenFocusedRef = useRef(false);
+
+  const { metrics: chatLane, onListLayout: onChatListLayout } = useChatLaneLayout({
+    paddingLeft: Spacing.MD,
+    paddingRight: Spacing.MD,
+  });
 
   const loadMessages = useCallback(async (channelId: string, opts?: { silent?: boolean; force?: boolean }) => {
     const silent = opts?.silent === true;
@@ -637,19 +650,34 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
     setPickerOpen(true);
   }, []);
 
+  const openChannelAfterShare = useCallback(
+    async (channelId: string) => {
+      const id = channelId.trim();
+      if (!id) return;
+      let hit = channels.find((c) => String(c.name || '').trim() === id) ?? null;
+      if (!hit) {
+        const rows = await listRavenChannelsForSessionUser(user?.email ?? null);
+        hit = rows.find((c) => String(c.name || '').trim() === id) ?? null;
+      }
+      if (hit) setChannel(hit);
+      void loadMessages(id, { force: true });
+    },
+    [channels, loadMessages, user?.email]
+  );
+
   const pickMedia = useCallback(async () => {
     if (!channel?.name) return;
     try {
-      const result = await pickChatMediaFromLibrary();
+      const result = await pickChatMediaWithSource(imagePickLabelsFromT(t));
       if (!result.ok) {
         if (!result.canceled) Alert.alert('Media', result.message);
         return;
       }
       setPendingAttachments((prev) => [...prev, ...result.data]);
     } catch (e: unknown) {
-      Alert.error('Media', userFacingError(e, 'Could not open photo library.'));
+      Alert.error('Media', userFacingError(e, 'Could not attach media.'));
     }
-  }, [channel?.name]);
+  }, [channel?.name, t]);
 
   const handleAcceptQuotationDraft = useCallback(
     async (sqName: string, chat?: ErpDocChatContext) => {
@@ -862,14 +890,16 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       const sqLink = isSupplierQuotationLink ? linkDnRaw : null;
       const isSalesOrderLink = !hasAttach && ravenRowIsSalesOrderDocLink(linkDtRaw, linkDnRaw);
       const soLink = isSalesOrderLink ? linkDnRaw : null;
+      const isDeliveryNoteLink = !hasAttach && ravenRowIsDeliveryNoteDocLink(linkDtRaw, linkDnRaw);
+      const dnLink = isDeliveryNoteLink ? linkDnRaw : null;
       const isSalesInvoiceLink = !hasAttach && ravenRowIsSalesInvoiceDocLink(linkDtRaw, linkDnRaw);
       const siLink = isSalesInvoiceLink ? linkDnRaw : null;
       const genericDocLink =
-        !hasAttach && !!linkDtRaw && !!linkDnRaw && !isSupplierQuotationLink && !isSalesOrderLink && !isSalesInvoiceLink
+        !hasAttach && !!linkDtRaw && !!linkDnRaw && !isSupplierQuotationLink && !isSalesOrderLink && !isDeliveryNoteLink && !isSalesInvoiceLink
           ? { doctype: linkDtRaw, document: linkDnRaw }
           : null;
       const qDraft =
-        !hasAttach && !sqLink && !soLink && !siLink && !genericDocLink ? tryParseQuotationDraftFromMessage(item.text) : null;
+        !hasAttach && !sqLink && !soLink && !dnLink && !siLink && !genericDocLink ? tryParseQuotationDraftFromMessage(item.text) : null;
       const isSupplierPortalUser = user?.appMode === 'supplier' || !!user?.supplierId?.trim();
       const isSupplierLike = user?.appMode === 'supplier' || !!user?.supplierId?.trim();
       const showBuyerQuotationActions = (!!qDraft || !!sqLink) && !mine && !isSupplierPortalUser;
@@ -887,16 +917,18 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
             ravenMessageHasVisualMedia(newer)));
 
       const showReplyQuote = ravenMessageShowsReplyQuoteRow(item);
-      const tLine = formatMessageBubbleTime(item.creation || item.modified);
+      const createdAt = ravenMessageCreatedAt(item);
+      const isContinuation = isRavenMessageContinuation(index, messages);
+      const tLine = formatMessageBubbleTime(createdAt, { compact: isContinuation });
       const showDateSep = shouldShowChatDateSeparator(index, messages);
-      const dateSepLabel = formatChatDateSeparator(item.creation || item.modified);
+      const dateSepLabel = formatChatDateSeparator(createdAt);
       const groupedWithNewer = isChatMessageGroupedWithNewer(index, messages, ravenSameMessageOwner);
       const rowGap = groupedWithNewer ? 2 : 10;
-      const showSenderHeader = shouldShowChatMessageSenderHeader(index, messages, ravenSameMessageOwner);
+      const showSenderHeader = !isContinuation;
       const showPlainTextBubble = shouldShowChatMessageTextBubble(
         item,
         hasAttach,
-        !!(qDraft || sqLink || soLink || siLink || genericDocLink)
+        !!(qDraft || sqLink || soLink || dnLink || siLink || genericDocLink)
       );
 
       const quotationPayKey = sqLink ?? (qDraft?.name?.trim() || null);
@@ -943,6 +975,8 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
           />
         ) : soLink != null ? (
           <RavenLinkedSalesOrderMessage orderName={soLink} ravenChannelId={channel?.name} />
+        ) : dnLink != null ? (
+          <RavenLinkedDeliveryNoteMessage deliveryNoteName={dnLink} />
         ) : siLink != null ? (
           <RavenLinkedSalesInvoiceMessage invoiceName={siLink} />
         ) : genericDocLink != null ? (
@@ -993,7 +1027,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
             <Text style={[styles.replyBadge, mine && styles.replyBadgeMine]}>Reply</Text>
           ) : null}
           {ravenMessageIsForwarded(item) ? (
-            <Text style={[styles.forwardedBadge, mine && styles.forwardedBadgeMine]}>Forwarded</Text>
+            <RavenForwardedLabel mine={mine} onColoredBubble={mine} variant="wine" />
           ) : null}
           {hasAttach ? (
             <RavenMessageAttachmentBody
@@ -1030,21 +1064,29 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
         </>
       );
 
+      const hasDocCard = !!(qDraft || sqLink || soLink || siLink || genericDocLink);
+      const mineLaneStyle = hasDocCard ? chatLane.outgoingDocLane : chatLane.outgoingLane;
+      const theirsLaneStyle = hasDocCard ? chatLane.incomingDocRow : chatLane.incomingLane;
+
       return (
         <View>
           {showDateSep && dateSepLabel ? (
             <View style={styles.chatDateSepRow}>
-              <View style={styles.chatDateSepPill}>
-                <Text style={styles.chatDateSepText}>{dateSepLabel}</Text>
-              </View>
+              <View style={styles.chatDateSepLine} />
+              <Text style={styles.chatDateSepText}>{dateSepLabel}</Text>
+              <View style={styles.chatDateSepLine} />
             </View>
           ) : null}
-          <ChatMessageJumpHighlightBar active={isHighlighted} alignEnd={mine}>
+          <ChatMessageJumpHighlightBar
+            active={isHighlighted}
+            alignStart={!mine}
+            alignEnd={mine}
+            style={{ marginBottom: rowGap }}
+          >
             <Pressable
               style={[
                 styles.bubbleWrap,
-                mine ? styles.bubbleWrapMine : styles.bubbleWrapTheirs,
-                { marginBottom: rowGap },
+                mine ? [styles.bubbleWrapMine, mineLaneStyle] : [styles.bubbleWrapTheirs, theirsLaneStyle],
               ]}
               onLongPress={openThisMessageActions}
               delayLongPress={380}
@@ -1080,6 +1122,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       viewerFrappeName,
       registerSqPaymentAction,
       t,
+      chatLane,
     ]
   );
 
@@ -1130,7 +1173,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
           <ActivityIndicator color={Colors.WINE} />
         </View>
       ) : (
-        <View style={styles.messagesListShell}>
+        <View style={styles.messagesListShell} onLayout={onChatListLayout}>
           <FlatList
             ref={messagesListRef}
             style={styles.messagesListFlex}
@@ -1351,8 +1394,11 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
         channels={channels}
         currentUserEmail={user?.email}
         userProfiles={ravenUserProfilesById}
-        variant="wine"
         onClose={() => setForwardMessage(null)}
+        onSent={(ids) => {
+          const id = primaryChannelIdAfterShare(ids);
+          if (id) void openChannelAfterShare(id);
+        }}
       />
       <RavenComposerEmojiSheet
         visible={composerEmojiOpen}
@@ -1438,7 +1484,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   listContent: { paddingHorizontal: Spacing.MD, paddingVertical: 10, paddingBottom: 16 },
-  bubbleWrap: { maxWidth: '88%' },
+  bubbleWrap: {},
   bubbleWrapMine: { alignSelf: 'flex-end' },
   bubbleWrapTheirs: { alignSelf: 'flex-start' },
   bubble: { borderRadius: 16, paddingHorizontal: 13, paddingVertical: 9 },
@@ -1479,27 +1525,26 @@ const styles = StyleSheet.create({
   editedBadgeMine: { color: 'rgba(255,255,255,0.75)' },
   bubbleTimeMine: { color: 'rgba(255,255,255,0.85)' },
   chatDateSepRow: {
+    flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 14,
-  },
-  chatDateSepPill: {
-    paddingHorizontal: 14,
-    paddingVertical: 5,
-    borderRadius: 999,
-    backgroundColor: Colors.WHITE,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#E8E8E8',
+    paddingHorizontal: 12,
+    gap: 12,
   },
   chatDateSepLine: {
     flex: 1,
     height: StyleSheet.hairlineWidth,
     backgroundColor: '#E8E8E8',
   },
-  chatDateSepText: { fontSize: 12, fontWeight: '600', color: Colors.TEXT_SECONDARY },
+  chatDateSepText: {
+    fontSize: 12,
+    fontWeight: '400',
+    color: Colors.TEXT_SECONDARY,
+    flexShrink: 0,
+    textAlign: 'center',
+  },
   replyBadge: { fontSize: 11, fontWeight: '700', color: Colors.WINE, marginBottom: 4 },
   replyBadgeMine: { color: 'rgba(255,255,255,0.9)' },
-  forwardedBadge: { fontSize: 10, fontWeight: '700', color: Colors.TEXT_SECONDARY, marginBottom: 4, textTransform: 'uppercase' },
-  forwardedBadgeMine: { color: 'rgba(255,255,255,0.75)' },
   replyStrip: {
     flexDirection: 'row',
     alignItems: 'center',

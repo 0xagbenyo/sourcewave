@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Colors } from '../constants/colors';
+import { ERP_DOC_FLAT } from '../constants/erpDocFlatUi';
 
 type Props = {
   busy?: boolean;
@@ -15,7 +16,7 @@ export const QuotationBuyerActionBar: React.FC<Props> = ({ busy, compact, onAcce
       style={[styles.btn, compact && styles.btnCompact, styles.rejectBtn]}
       onPress={onReject}
       disabled={busy}
-      activeOpacity={0.85}
+      activeOpacity={0.82}
       accessibilityLabel="Reject quotation"
     >
       <Text style={[styles.rejectText, compact && styles.btnTextCompact]}>Reject</Text>
@@ -24,7 +25,7 @@ export const QuotationBuyerActionBar: React.FC<Props> = ({ busy, compact, onAcce
       style={[styles.btn, compact && styles.btnCompact, styles.acceptBtn]}
       onPress={onAccept}
       disabled={busy}
-      activeOpacity={0.85}
+      activeOpacity={0.82}
       accessibilityLabel="Accept quotation"
     >
       {busy ? (
@@ -36,39 +37,41 @@ export const QuotationBuyerActionBar: React.FC<Props> = ({ busy, compact, onAcce
   </View>
 );
 
+const hairline = ERP_DOC_FLAT.hairline;
+
 const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
-    gap: 10,
+    width: '100%',
+    minWidth: 0,
     marginBottom: 16,
   },
   rowCompact: {
     marginBottom: 0,
-    gap: 6,
-    justifyContent: 'flex-end',
   },
   btn: {
     flex: 1,
-    paddingVertical: 14,
-    borderRadius: 12,
+    minWidth: 0,
+    paddingVertical: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 48,
+    minHeight: 44,
+    marginHorizontal: 4,
   },
   btnCompact: {
-    flex: 0,
-    minHeight: 32,
-    paddingVertical: 6,
+    flex: 1,
+    minHeight: 36,
+    paddingVertical: 8,
     paddingHorizontal: 10,
-    borderRadius: 8,
+    marginHorizontal: 3,
   },
   rejectBtn: {
-    backgroundColor: Colors.WHITE,
-    borderWidth: 1.5,
-    borderColor: Colors.ERROR,
+    backgroundColor: ERP_DOC_FLAT.surface,
+    borderWidth: hairline,
+    borderColor: ERP_DOC_FLAT.border,
   },
-  rejectText: { fontSize: 15, fontWeight: '700', color: Colors.ERROR },
-  acceptBtn: { backgroundColor: Colors.SUCCESS },
-  acceptText: { fontSize: 15, fontWeight: '800', color: Colors.WHITE },
-  btnTextCompact: { fontSize: 12, fontWeight: '700' },
+  rejectText: { fontSize: 15, fontWeight: '600', color: ERP_DOC_FLAT.ink },
+  acceptBtn: { backgroundColor: ERP_DOC_FLAT.accent },
+  acceptText: { fontSize: 15, fontWeight: '600', color: Colors.WHITE },
+  btnTextCompact: { fontSize: 14, fontWeight: '600' },
 });

@@ -23,6 +23,7 @@ import {
 import { SupplierQuotationPdfModal } from '../../components/SupplierQuotationPdfModal';
 import { SupplierQuotationComposeScreen } from './SupplierQuotationComposeScreen';
 import { SupplierComposeLeaveContext } from '../../context/SupplierComposeLeaveContext';
+import { SupplierComposeChromeContext } from '../../context/SupplierComposeChromeContext';
 import type { SupplierStackParamList } from '../../types';
 
 type R = RouteProp<SupplierStackParamList, 'SupplierQuotationList'>;
@@ -79,6 +80,7 @@ export const SupplierQuotationListScreen: React.FC = () => {
     route.params?.initialTab === 'new' ? 'new' : 'list'
   );
   const [composeKey, setComposeKey] = useState(0);
+  const [composeShareActive, setComposeShareActive] = useState(false);
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -151,9 +153,21 @@ export const SupplierQuotationListScreen: React.FC = () => {
   }, [load, sidLoading]);
 
   const leaveComposeAndRefresh = useCallback(() => {
+    setComposeShareActive(false);
     setTab('list');
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (tab !== 'new') setComposeShareActive(false);
+  }, [tab]);
+
+  const composeChrome = useMemo(
+    () => ({
+      setShareActive: setComposeShareActive,
+    }),
+    []
+  );
 
   const cycleSort = useCallback(() => {
     setSortMode((m) => (m === 'recent' ? 'status_az' : m === 'status_az' ? 'status_za' : 'recent'));
@@ -276,36 +290,57 @@ export const SupplierQuotationListScreen: React.FC = () => {
                   const { label, kind } = workflowListLabelAndKind(item);
                   const chip = chipColors(kind);
                   const accent = accentForKind(kind);
+                  const shareable = Number(item.docstatus) !== 2;
                   return (
-                    <TouchableOpacity
-                      style={[styles.rowTouchable, active && styles.rowTouchableActive]}
-                      onPress={() => {
-                        setActiveRowName(name);
-                        (navigation as { navigate: (n: string, p?: object) => void }).navigate(
-                          'SupplierQuotationDetail',
-                          { name }
-                        );
-                      }}
-                      activeOpacity={0.72}
-                    >
-                      <View style={[styles.rowAccent, { backgroundColor: accent }]} />
-                      <View style={styles.rowContent}>
-                        <View style={styles.rowTop}>
-                          <Text style={styles.rowDocName} numberOfLines={1}>
-                            {name}
-                          </Text>
-                          <Text style={styles.rowAmount}>{money(item.currency, item.grand_total)}</Text>
-                        </View>
-                        <View style={styles.rowBottom}>
-                          <View style={[styles.statusPill, { backgroundColor: chip.bg, borderColor: chip.bd }]}>
-                            <Text style={[styles.statusPillText, { color: chip.fg }]} numberOfLines={1}>
-                              {label}
+                    <View style={[styles.rowTouchable, active && styles.rowTouchableActive]}>
+                      <TouchableOpacity
+                        style={styles.rowMainPress}
+                        onPress={() => {
+                          setActiveRowName(name);
+                          (navigation as { navigate: (n: string, p?: object) => void }).navigate(
+                            'SupplierQuotationDetail',
+                            { name }
+                          );
+                        }}
+                        activeOpacity={0.72}
+                      >
+                        <View style={[styles.rowAccent, { backgroundColor: accent }]} />
+                        <View style={styles.rowContent}>
+                          <View style={styles.rowTop}>
+                            <Text style={styles.rowDocName} numberOfLines={1}>
+                              {name}
                             </Text>
+                            <Text style={styles.rowAmount}>{money(item.currency, item.grand_total)}</Text>
                           </View>
-                          <Text style={styles.rowDate}>{item.transaction_date || '—'}</Text>
+                          <View style={styles.rowBottom}>
+                            <View style={[styles.statusPill, { backgroundColor: chip.bg, borderColor: chip.bd }]}>
+                              <Text style={[styles.statusPillText, { color: chip.fg }]} numberOfLines={1}>
+                                {label}
+                              </Text>
+                            </View>
+                            <Text style={styles.rowDate}>{item.transaction_date || '—'}</Text>
+                          </View>
                         </View>
-                      </View>
-                    </TouchableOpacity>
+                      </TouchableOpacity>
+                      {shareable ? (
+                        <TouchableOpacity
+                          style={styles.rowShareBtn}
+                          onPress={() =>
+                            (navigation as { navigate: (n: string, p?: object) => void }).navigate(
+                              'SupplierQuotationShare',
+                              { documentName: name }
+                            )
+                          }
+                          hitSlop={8}
+                          accessibilityLabel={`Share quotation ${name}`}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="paper-plane-outline" size={18} color={Colors.WINE} />
+                        </TouchableOpacity>
+                      ) : (
+                        <View style={styles.rowShareBtnSpacer} />
+                      )}
+                    </View>
                   );
                 }}
               />
@@ -318,44 +353,50 @@ export const SupplierQuotationListScreen: React.FC = () => {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={12} style={styles.backWrap}>
-          <Ionicons name="arrow-back" size={24} color="#1a1a1a" />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle} numberOfLines={1}>
-            Quotations
-          </Text>
-        </View>
+      {!composeShareActive ? (
+        <>
+          <View style={styles.header}>
+            <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={12} style={styles.backWrap}>
+              <Ionicons name="arrow-back" size={24} color="#1a1a1a" />
+            </TouchableOpacity>
+            <View style={styles.headerCenter}>
+              <Text style={styles.headerTitle} numberOfLines={1}>
+                Quotations
+              </Text>
+            </View>
         <View style={{ width: 40 }} />
       </View>
 
       <View style={styles.tabBar}>
-        <TouchableOpacity
-          style={[styles.tab, tab === 'list' && styles.tabOn]}
-          onPress={() => setTab('list')}
-          activeOpacity={0.85}
-        >
-          <Ionicons name="list-outline" size={17} color={tab === 'list' ? Colors.WINE : '#78909C'} />
-          <Text style={[styles.tabText, tab === 'list' && styles.tabTextOn]}>List</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, tab === 'new' && styles.tabOn]}
-          onPress={() => setTab('new')}
-          activeOpacity={0.85}
-        >
-          <Ionicons name="create-outline" size={17} color={tab === 'new' ? Colors.WINE : '#78909C'} />
-          <Text style={[styles.tabText, tab === 'new' && styles.tabTextOn]}>New</Text>
-        </TouchableOpacity>
-      </View>
+            <TouchableOpacity
+              style={[styles.tab, tab === 'list' && styles.tabOn]}
+              onPress={() => setTab('list')}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="list-outline" size={17} color={tab === 'list' ? Colors.WINE : '#78909C'} />
+              <Text style={[styles.tabText, tab === 'list' && styles.tabTextOn]}>List</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tab, tab === 'new' && styles.tabOn]}
+              onPress={() => setTab('new')}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="create-outline" size={17} color={tab === 'new' ? Colors.WINE : '#78909C'} />
+              <Text style={[styles.tabText, tab === 'new' && styles.tabTextOn]}>New</Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      ) : null}
 
       {tab === 'list' ? (
         renderListTab()
       ) : (
         <SupplierComposeLeaveContext.Provider value={leaveComposeAndRefresh}>
-          <View style={styles.composeWrap}>
-            <SupplierQuotationComposeScreen key={composeKey} />
-          </View>
+          <SupplierComposeChromeContext.Provider value={composeChrome}>
+            <View style={styles.composeWrap}>
+              <SupplierQuotationComposeScreen key={composeKey} />
+            </View>
+          </SupplierComposeChromeContext.Provider>
         </SupplierComposeLeaveContext.Provider>
       )}
 
@@ -459,8 +500,17 @@ const styles = StyleSheet.create({
   listPad: { paddingBottom: 20 },
   emptyList: { flexGrow: 1, minHeight: 220 },
   rowSep: { height: StyleSheet.hairlineWidth, backgroundColor: '#ECEFF1', marginLeft: 12 },
-  rowTouchable: { flexDirection: 'row', backgroundColor: '#FFFFFF' },
+  rowTouchable: { flexDirection: 'row', backgroundColor: '#FFFFFF', alignItems: 'stretch' },
   rowTouchableActive: { backgroundColor: '#FAF7F8' },
+  rowMainPress: { flex: 1, flexDirection: 'row', minWidth: 0 },
+  rowShareBtn: {
+    width: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: '#ECEFF1',
+  },
+  rowShareBtnSpacer: { width: 44 },
   rowAccent: { width: 3 },
   rowContent: { flex: 1, paddingVertical: 10, paddingRight: 12, paddingLeft: 10 },
   rowTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 8 },

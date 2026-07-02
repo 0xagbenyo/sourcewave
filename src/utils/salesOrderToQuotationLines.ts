@@ -1,5 +1,7 @@
 import { readSalesOrderLineRequestedQty } from './erpSalesOrderLineFields';
 import { readErpDocLineImage } from './erpDocLineImageField';
+import { formatErpLineWeight, parseErpWeightInput } from './erpLineWeight';
+import { defaultQuotationValidTillIso, readErpDateField } from './erpDateInput';
 export type SalesOrderQuotationLineSeed = {
   key: string;
   item_code: string;
@@ -13,6 +15,8 @@ export type SalesOrderQuotationLineSeed = {
   item_image?: string;
   /** Supplier-attached image URL (persisted). */
   supplier_image?: string;
+  weight_per_unit?: string;
+  total_weight?: string;
 };
 
 export function quotationLinesFromSalesOrder(raw: Record<string, unknown> | null | undefined): {
@@ -42,6 +46,8 @@ export function quotationLinesFromSalesOrder(raw: Record<string, unknown> | null
       rate: String(rate),
       buyer_budget: String(rate),
       item_image: readErpDocLineImage(it) || undefined,
+      weight_per_unit: '0.000',
+      total_weight: '0',
     });
   }
 
@@ -60,6 +66,8 @@ export function quotationLinesFromSupplierQuotation(
   referenceTitle: string;
   currency: string;
   salesOrderName: string;
+  validTill: string;
+  transactionDate: string;
 } {
   const items = Array.isArray(raw?.items) ? (raw!.items as Record<string, unknown>[]) : [];
   const currency = String(raw?.currency || 'GHS').trim() || 'GHS';
@@ -78,6 +86,8 @@ export function quotationLinesFromSupplierQuotation(
     const rateN = Number(it.rate);
     const qty = Number.isFinite(qtyN) && qtyN > 0 ? qtyN : 1;
     const rate = Number.isFinite(rateN) && rateN >= 0 ? rateN : 0;
+    const wpu = parseErpWeightInput(it.weight_per_unit);
+    const tw = parseErpWeightInput(it.total_weight);
     lines.push({
       key: `sq-${sqName || 'q'}-${i}`,
       item_code: code,
@@ -86,14 +96,20 @@ export function quotationLinesFromSupplierQuotation(
       qty: String(qty),
       rate: String(rate),
       supplier_image: readErpDocLineImage(it) || undefined,
+      weight_per_unit: wpu != null ? formatErpLineWeight(wpu) : '0.000',
+      total_weight: tw != null ? formatErpLineWeight(tw) : '0',
     });
   }
 
   const title = String(raw?.title || '').trim();
+  const transactionDate = readErpDateField(raw?.transaction_date);
+  const validTill = readErpDateField(raw?.valid_till) || defaultQuotationValidTillIso();
   return {
     lines,
     referenceTitle: title || (salesOrderName ? `Quote for ${salesOrderName}` : ''),
     currency,
     salesOrderName,
+    validTill,
+    transactionDate,
   };
 }

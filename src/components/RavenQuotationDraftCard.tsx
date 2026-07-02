@@ -11,10 +11,13 @@ import {
   supplierQuotationWorkflowStateIsRejectedLike,
 } from '../utils/chatQuotationDraftMessage';
 import { navigateToSupplierQuotationDetail } from '../utils/erpDocumentNavigation';
+import { ravenChatDocCardColors, ravenChatDocCardStyle, ravenChatDocSharedLabelStyle } from '../utils/ravenChatDocCard';
 import { QuotationBuyerActionBar } from './QuotationBuyerActionBar';
 
 type Props = {
   payload: SourcewaveQuotationDraftPayload;
+  /** Outgoing share — blue card styling. */
+  mine?: boolean;
   /** Buyer can accept / reject. */
   showBuyerActions: boolean;
   /** Buyer outcome in chat, or `submitted` when the doc is already submitted in ERPNext without using Accept here. */
@@ -87,6 +90,7 @@ function chipColors(kind: StatusKind): { bg: string; fg: string; border: string 
 
 export const RavenQuotationDraftCard: React.FC<Props> = ({
   payload,
+  mine,
   showBuyerActions,
   handled,
   busy,
@@ -98,6 +102,7 @@ export const RavenQuotationDraftCard: React.FC<Props> = ({
   const uiStatus = useMemo(() => deriveQuotationUiStatus(payload, handled), [payload, handled]);
   const chip = chipColors(uiStatus.kind);
   const dateLine = formatQuotationDate(payload.transactionDate);
+  const colors = ravenChatDocCardColors(mine);
 
   const openPreview = () => {
     navigateToSupplierQuotationDetail(
@@ -107,7 +112,8 @@ export const RavenQuotationDraftCard: React.FC<Props> = ({
   };
 
   return (
-    <View style={styles.card}>
+    <View style={[ravenChatDocCardStyle(mine), styles.cardRoot]}>
+      {mine ? <Text style={ravenChatDocSharedLabelStyle(mine)}>You shared</Text> : null}
       <Pressable
         onPress={openPreview}
         {...(onCardLongPress
@@ -118,16 +124,16 @@ export const RavenQuotationDraftCard: React.FC<Props> = ({
         accessibilityLabel="View quotation details"
       >
         <View style={styles.cardHead}>
-          <Ionicons name="document-text-outline" size={20} color={RavenLight.accent} />
-          <Text style={styles.cardTitle} numberOfLines={1}>
+          <Ionicons name="document-text-outline" size={20} color={colors.icon} />
+          <Text style={[styles.cardTitle, { color: colors.title }]} numberOfLines={1}>
             Supplier quotation
           </Text>
-          <Ionicons name="chevron-forward" size={18} color={RavenLight.textMuted} />
+          <Ionicons name="chevron-forward" size={18} color={colors.meta} />
         </View>
-        <Text style={styles.docId} numberOfLines={1}>
+        <Text style={[styles.docId, { color: colors.body }]} numberOfLines={1}>
           {payload.name}
         </Text>
-        <Text style={styles.metaLine} numberOfLines={1}>
+        <Text style={[styles.metaLine, { color: colors.meta }]} numberOfLines={1}>
           {dateLine}
         </Text>
         <View style={[styles.chip, { backgroundColor: chip.bg, borderColor: chip.border }]}>
@@ -150,14 +156,9 @@ export const RavenQuotationDraftCard: React.FC<Props> = ({
 };
 
 const styles = StyleSheet.create({
-  card: {
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: RavenLight.border,
-    backgroundColor: RavenLight.panel,
-    padding: 9,
+  cardRoot: {
+    width: '100%',
     maxWidth: '100%',
-    alignSelf: 'stretch',
   },
   tapArea: {
     borderRadius: 8,
@@ -171,9 +172,9 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 6,
   },
-  cardTitle: { flex: 1, fontSize: 14, fontWeight: '800', color: RavenLight.text },
-  docId: { fontSize: 15, fontWeight: '700', color: RavenLight.accent, marginBottom: 4 },
-  metaLine: { fontSize: 13, fontWeight: '600', color: RavenLight.textMuted, marginBottom: 8 },
+  cardTitle: { flex: 1, fontSize: 14, fontWeight: '800' },
+  docId: { fontSize: 15, fontWeight: '700', marginBottom: 4 },
+  metaLine: { fontSize: 13, fontWeight: '600', marginBottom: 8 },
   chip: {
     alignSelf: 'flex-start',
     paddingVertical: 5,

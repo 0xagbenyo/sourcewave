@@ -1,25 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { getERPNextClient } from '../services/erpnext';
 import {
   ErpDocSection,
-  ErpDocItemsList,
   ErpDocEmptyState,
-  erpDocPaymentStatusLabel,
-  formatErpDocDate,
-  formatErpDocMoney,
-  erpDocStatusAccent,
 } from './ErpDocumentPreviewLayout';
+import {
+  ErpDocPaymentEntryList,
+  ErpDocPaymentProgressSummary,
+} from './ErpDocPaymentsUi';
 
 type Props = {
   invoiceName: string;
@@ -28,14 +21,11 @@ type Props = {
   variant?: 'buyer' | 'supplier';
   /** When set, only Payment Entries for this Customer are shown. */
   customerId?: string;
+  /** Invoice grand total (optional — fetched when omitted). */
+  totalDue?: number | null;
+  /** Current outstanding balance (optional — fetched when omitted). */
+  outstanding?: number | null;
 };
-
-function paymentAmount(row: Record<string, unknown>, currency: string): string {
-  const received = row.received_amount;
-  const paid = row.paid_amount;
-  const raw = received != null && Number(received) !== 0 ? received : paid;
-  return formatErpDocMoney(raw, currency);
-}
 
 export const ErpInvoicePaymentsPanel: React.FC<Props> = ({
   invoiceName,
@@ -43,42 +33,78 @@ export const ErpInvoicePaymentsPanel: React.FC<Props> = ({
   active,
   variant = 'buyer',
   customerId,
+  totalDue: totalDueProp,
+  outstanding: outstandingProp,
 }) => {
+  const { t } = useTranslation();
   const navigation = useNavigation();
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [totalDue, setTotalDue] = useState<number | null>(totalDueProp ?? null);
+  const [outstanding, setOutstanding] = useState<number | null>(outstandingProp ?? null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const invoiceId = invoiceName.trim();
 
   useEffect(() => {
+    if (totalDueProp != null) setTotalDue(totalDueProp);
+  }, [totalDueProp]);
+
+  useEffect(() => {
+    if (outstandingProp != null) setOutstanding(outstandingProp);
+  }, [outstandingProp]);
+
+  useEffect(() => {
     if (!active || !invoiceId) {
       setRows([]);
       setLoading(false);
       setError(null);
+      if (totalDueProp == null) setTotalDue(null);
+      if (outstandingProp == null) setOutstanding(null);
       return;
     }
     let cancelled = false;
     setLoading(true);
     setError(null);
-    void getERPNextClient()
-      .listPaymentEntriesForSalesInvoice(invoiceId, { limit: 50, customerId: customerId?.trim() || undefined })
-      .then((list) => {
-        if (!cancelled) setRows(Array.isArray(list) ? list : []);
-      })
-      .catch(() => {
+
+    const load = async () => {
+      try {
+        const client = getERPNextClient();
+        const [list, raw] = await Promise.all([
+          client.listPaymentEntriesForSalesInvoice(invoiceId, {
+            limit: 50,
+            customerId: customerId?.trim() || undefined,
+          }),
+          totalDueProp == null || outstandingProp == null
+            ? client.getSalesInvoiceRaw(invoiceId)
+            : Promise.resolve(null),
+        ]);
+        if (cancelled) return;
+        setRows(Array.isArray(list) ? list : []);
+        if (raw) {
+          const gt = Number(raw.grand_total);
+          if (totalDueProp == null) {
+            setTotalDue(Number.isFinite(gt) && gt > 0 ? gt : 0);
+          }
+          if (outstandingProp == null) {
+            setOutstanding(client.effectiveSalesInvoiceOutstanding(raw as Record<string, unknown>));
+          }
+        }
+      } catch {
         if (!cancelled) {
           setRows([]);
-          setError('Could not load payments for this invoice.');
+          setError(t('erpPayments.loadFailed'));
         }
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    };
+
+    void load();
     return () => {
       cancelled = true;
     };
-  }, [active, invoiceId, customerId]);
+  }, [active, invoiceId, customerId, totalDueProp, outstandingProp, t]);
 
   const openPayment = (name: string) => {
     const id = name.trim();
@@ -104,49 +130,33 @@ export const ErpInvoicePaymentsPanel: React.FC<Props> = ({
     return <ErpDocEmptyState icon="alert-circle-outline" title={error} />;
   }
 
-  if (rows.length === 0) {
-    return (
-      <ErpDocEmptyState
-        icon="wallet-outline"
-        title="No payments yet"
-        subtitle="Payments linked to this invoice will show here."
-      />
-    );
-  }
+  const due = totalDue ?? 0;
+  const out = outstanding ?? 0;
+  const showSummary = due > 0.009 || out > 0.009 || rows.length > 0;
 
   return (
-    <ErpDocSection title={`Payments · ${rows.length}`}>
-      <ErpDocItemsList>
-        {rows.map((row, idx) => {
-          const name = String(row.name || '').trim();
-          const status = erpDocPaymentStatusLabel(row);
-          const statusColor = erpDocStatusAccent(status, row.docstatus != null ? Number(row.docstatus) : undefined);
-          const date = formatErpDocDate(row.posting_date);
-          return (
-            <TouchableOpacity
-              key={name || idx}
-              style={[styles.row, idx < rows.length - 1 && styles.rowBorder]}
-              onPress={() => openPayment(name)}
-              activeOpacity={0.7}
-              disabled={!name}
-            >
-              <View style={styles.rowLeft}>
-                <Text style={styles.rowAmount}>{paymentAmount(row, currency)}</Text>
-                <View style={styles.rowMeta}>
-                  <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-                  <Text style={[styles.statusText, { color: statusColor }]}>{status}</Text>
-                  {date ? <Text style={styles.rowDate}> · {date}</Text> : null}
-                </View>
-                <Text style={styles.rowId} numberOfLines={1}>
-                  {name}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={Colors.TEXT_SECONDARY} />
-            </TouchableOpacity>
-          );
-        })}
-      </ErpDocItemsList>
-    </ErpDocSection>
+    <View>
+      {showSummary ? (
+        <ErpDocPaymentProgressSummary
+          totalDue={due}
+          outstanding={out}
+          currency={currency}
+          totalLabel={t('erpPayments.invoiceTotal')}
+        />
+      ) : null}
+
+      {rows.length === 0 ? (
+        <ErpDocEmptyState
+          icon="wallet-outline"
+          title={t('erpPayments.emptyTitle')}
+          subtitle={t('erpPayments.invoiceEmptySub')}
+        />
+      ) : (
+        <ErpDocSection title={t('erpPayments.historyCount', { count: rows.length })}>
+          <ErpDocPaymentEntryList rows={rows} currency={currency} onOpen={openPayment} />
+        </ErpDocSection>
+      )}
+    </View>
   );
 };
 
@@ -156,36 +166,4 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: Spacing.XL,
   },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    gap: 8,
-  },
-  rowBorder: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(0,0,0,0.06)',
-  },
-  rowLeft: { flex: 1, minWidth: 0 },
-  rowAmount: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: Colors.BLACK,
-    fontVariant: ['tabular-nums'],
-  },
-  rowMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 4,
-    flexWrap: 'wrap',
-  },
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    marginRight: 6,
-  },
-  statusText: { fontSize: 12, fontWeight: '600' },
-  rowDate: { fontSize: 12, color: Colors.TEXT_SECONDARY },
-  rowId: { fontSize: 11, color: Colors.TEXT_SECONDARY, marginTop: 4 },
 });

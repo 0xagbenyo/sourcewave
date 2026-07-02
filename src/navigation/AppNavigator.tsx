@@ -18,8 +18,10 @@ import { SearchScreen } from '../screens/SearchScreen';
 import { OrderHistoryScreen } from '../screens/OrderHistoryScreen';
 import { OrderDetailsScreen } from '../screens/OrderDetailsScreen';
 import { InvoiceDetailsScreen } from '../screens/InvoiceDetailsScreen';
+import { DeliveryNoteDetailScreen } from '../screens/DeliveryNoteDetailScreen';
 import { InvoicesPaymentsScreen } from '../screens/InvoicesPaymentsScreen';
 import { CustomerInvoicesScreen } from '../screens/CustomerInvoicesScreen';
+import { CustomerDeliveryNotesScreen } from '../screens/CustomerDeliveryNotesScreen';
 import { CustomerPaymentsScreen } from '../screens/CustomerPaymentsScreen';
 import { PaymentEntryDetailScreen } from '../screens/PaymentEntryDetailScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
@@ -39,6 +41,7 @@ import { RavenWorkspaceSupplierProfileScreen } from '../screens/RavenWorkspaceSu
 import { SupplierQuotationComposeScreen } from '../screens/supplier/SupplierQuotationComposeScreen';
 import { SupplierQuotationDetailScreen } from '../screens/supplier/SupplierQuotationDetailScreen';
 import { BuyerSalesOrderShareComposeScreen } from '../screens/BuyerSalesOrderShareComposeScreen';
+import { BuyerDeliveryNoteShareComposeScreen } from '../screens/BuyerDeliveryNoteShareComposeScreen';
 
 // Types
 import { RootStackParamList, AuthStackParamList } from '../types';
@@ -147,9 +150,11 @@ export const AppNavigator = () => {
         <Stack.Screen name="OrderHistory" component={OrderHistoryScreen} options={{ presentation: 'card' }} />
         <Stack.Screen name="InvoicesPayments" component={InvoicesPaymentsScreen} options={{ presentation: 'card' }} />
         <Stack.Screen name="CustomerInvoices" component={CustomerInvoicesScreen} options={{ presentation: 'card' }} />
+        <Stack.Screen name="CustomerDeliveryNotes" component={CustomerDeliveryNotesScreen} options={{ presentation: 'card' }} />
         <Stack.Screen name="CustomerPayments" component={CustomerPaymentsScreen} options={{ presentation: 'card' }} />
         <Stack.Screen name="OrderDetails" component={OrderDetailsScreen} options={{ presentation: 'card' }} />
         <Stack.Screen name="InvoiceDetails" component={InvoiceDetailsScreen} options={{ presentation: 'card' }} />
+        <Stack.Screen name="DeliveryNoteDetail" component={DeliveryNoteDetailScreen} options={{ presentation: 'card' }} />
         <Stack.Screen name="PaymentEntryDetail" component={PaymentEntryDetailScreen} options={{ presentation: 'card' }} />
         <Stack.Screen name="EditProfile" component={EditProfileScreen} options={{ presentation: 'card' }} />
         <Stack.Screen name="Settings" component={SettingsScreen} options={{ presentation: 'card' }} />
@@ -172,6 +177,11 @@ export const AppNavigator = () => {
         <Stack.Screen
           name="BuyerSalesOrderShareCompose"
           component={BuyerSalesOrderShareComposeScreen}
+          options={{ presentation: 'card', gestureEnabled: true }}
+        />
+        <Stack.Screen
+          name="BuyerDeliveryNoteShareCompose"
+          component={BuyerDeliveryNoteShareComposeScreen}
           options={{ presentation: 'card', gestureEnabled: true }}
         />
         <Stack.Screen name="RavenUIMessages" component={RavenUIMessagesScreen} options={{ presentation: 'card' }} />

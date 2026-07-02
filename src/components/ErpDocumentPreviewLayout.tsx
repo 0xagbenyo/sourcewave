@@ -14,10 +14,15 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
+import { ERP_DOC_FLAT } from '../constants/erpDocFlatUi';
 import { DocumentPrintButton } from './DocumentPrintButton';
 import { ErpAuthenticatedImage } from './ErpAuthenticatedImage';
 
-const hairline = StyleSheet.hairlineWidth;
+const hairline = ERP_DOC_FLAT.hairline;
+const flatBorder = ERP_DOC_FLAT.border;
+const flatMuted = ERP_DOC_FLAT.muted;
+const flatInk = ERP_DOC_FLAT.ink;
+const flatAccent = ERP_DOC_FLAT.accent;
 
 type LayoutProps = {
   screenTitle: string;
@@ -124,9 +129,10 @@ export const ErpDocumentPreviewLayout: React.FC<LayoutProps> = ({
       style={styles.scroll}
       contentContainerStyle={styles.scrollInner}
       showsVerticalScrollIndicator={false}
+      showsHorizontalScrollIndicator={false}
       refreshControl={refreshControl}
     >
-      {children}
+      <View style={styles.scrollContent}>{children}</View>
       <View style={{ height: Spacing.XXL }} />
     </ScrollView>
   );
@@ -135,7 +141,7 @@ export const ErpDocumentPreviewLayout: React.FC<LayoutProps> = ({
     <SafeAreaView style={styles.screen} edges={['top']}>
       <View style={styles.topBar}>
         <TouchableOpacity onPress={onBack} hitSlop={12} style={styles.backHit} accessibilityRole="button">
-          <Ionicons name="chevron-back" size={26} color={Colors.BLACK} />
+          <Ionicons name="chevron-back" size={26} color={flatInk} />
         </TouchableOpacity>
         <Text style={styles.topTitle} numberOfLines={1}>
           {screenTitle}
@@ -198,6 +204,9 @@ type HeroProps = {
   subtitle?: string;
   amount?: string;
   amountLabel?: string;
+  /** Smaller amount on the right (e.g. invoice goods total beside delivery fee). */
+  secondaryAmount?: string;
+  secondaryAmountLabel?: string;
   facts?: { label: string; value: string }[];
   /** Renders on the right of the status badge (e.g. Accept/Reject, Pay). */
   statusTrailing?: React.ReactNode;
@@ -210,30 +219,59 @@ export const ErpDocHero: React.FC<HeroProps> = ({
   subtitle,
   amount,
   amountLabel = 'Total',
+  secondaryAmount,
+  secondaryAmountLabel,
   facts,
   statusTrailing,
 }) => (
   <View style={styles.hero}>
-    <View style={[styles.heroStatusRow, !statusTrailing && styles.heroStatusRowSolo]}>
+    <View style={styles.heroBadgeRow}>
       <ErpDocStatusBadge label={statusLabel} color={statusColor} />
-      {statusTrailing ? <View style={styles.heroStatusTrailing}>{statusTrailing}</View> : null}
     </View>
-    <Text style={styles.docId} numberOfLines={2}>
+    {statusTrailing ? <View style={styles.heroTrailingRow}>{statusTrailing}</View> : null}
+    <Text style={styles.docId} numberOfLines={1} ellipsizeMode="middle">
       {docId}
     </Text>
     {amount ? (
-      <View style={styles.amountBlock}>
-        <Text style={styles.amountLabel}>{amountLabel}</Text>
-        <Text style={styles.amountValue}>{amount}</Text>
+      <View style={styles.amountRow}>
+        <View style={styles.amountPrimary}>
+          <Text style={styles.amountLabel} numberOfLines={1}>
+            {amountLabel}
+          </Text>
+          <Text
+            style={styles.amountValue}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.7}
+          >
+            {amount}
+          </Text>
+        </View>
+        {secondaryAmount ? (
+          <View style={styles.amountSecondary}>
+            <Text style={styles.amountSecondaryLabel} numberOfLines={1}>
+              {secondaryAmountLabel || 'Invoice'}
+            </Text>
+            <Text style={styles.amountSecondaryValue} numberOfLines={1}>
+              {secondaryAmount}
+            </Text>
+          </View>
+        ) : null}
       </View>
     ) : null}
-    {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+    {subtitle ? (
+      <Text style={styles.subtitle} numberOfLines={1}>
+        {subtitle}
+      </Text>
+    ) : null}
     {facts?.length ? (
       <View style={styles.factsWrap}>
         {facts.map((f) => (
           <View key={f.label} style={styles.factChip}>
-            <Text style={styles.factChipLabel}>{f.label}</Text>
-            <Text style={styles.factChipValue} numberOfLines={1}>
+            <Text style={styles.factChipLabel} numberOfLines={1}>
+              {f.label}
+            </Text>
+            <Text style={styles.factChipValue} numberOfLines={2}>
               {f.value || '—'}
             </Text>
           </View>
@@ -241,6 +279,33 @@ export const ErpDocHero: React.FC<HeroProps> = ({
       </View>
     ) : null}
   </View>
+);
+
+type HeroActionButtonProps = {
+  label: string;
+  onPress: () => void;
+  variant?: 'primary' | 'outline';
+  accessibilityLabel?: string;
+};
+
+/** Compact action beside the status badge (Edit, Pay, etc.). */
+export const ErpDocHeroActionButton: React.FC<HeroActionButtonProps> = ({
+  label,
+  onPress,
+  variant = 'primary',
+  accessibilityLabel,
+}) => (
+  <TouchableOpacity
+    style={[styles.heroActionBtn, variant === 'outline' && styles.heroActionBtnOutline]}
+    onPress={onPress}
+    activeOpacity={0.85}
+    accessibilityRole="button"
+    accessibilityLabel={accessibilityLabel || label}
+  >
+    <Text style={[styles.heroActionBtnText, variant === 'outline' && styles.heroActionBtnTextOutline]}>
+      {label}
+    </Text>
+  </TouchableOpacity>
 );
 
 export const ErpDocRule: React.FC = () => <View style={styles.rule} />;
@@ -262,6 +327,14 @@ export const ErpDocMetaRow: React.FC<MetaProps> = ({ label, value }) => (
     <Text style={styles.metaValue} numberOfLines={2}>
       {value || '—'}
     </Text>
+  </View>
+);
+
+type NoticeProps = { children: string };
+
+export const ErpDocNotice: React.FC<NoticeProps> = ({ children }) => (
+  <View style={styles.notice}>
+    <Text style={styles.noticeText}>{children}</Text>
   </View>
 );
 
@@ -379,22 +452,36 @@ type RefProps = {
   doctype: string;
   name: string;
   amount?: string;
+  onPress?: () => void;
 };
 
-export const ErpDocReferenceRow: React.FC<RefProps> = ({ doctype, name, amount }) => (
-  <View style={styles.refRow}>
-    <View style={styles.refIconWrap}>
-      <Ionicons name="link-outline" size={16} color={Colors.WINE} />
-    </View>
-    <View style={styles.refMain}>
-      <Text style={styles.refDoctype}>{doctype}</Text>
-      <Text style={styles.refName} numberOfLines={1}>
-        {name}
-      </Text>
-    </View>
-    {amount ? <Text style={styles.refAmount}>{amount}</Text> : null}
-  </View>
-);
+export const ErpDocReferenceRow: React.FC<RefProps> = ({ doctype, name, amount, onPress }) => {
+  const content = (
+    <>
+      <View style={styles.refIconWrap}>
+        <Ionicons name="link-outline" size={16} color={Colors.WINE} />
+      </View>
+      <View style={styles.refMain}>
+        <Text style={styles.refDoctype}>{doctype}</Text>
+        <Text style={styles.refName} numberOfLines={1}>
+          {name}
+        </Text>
+      </View>
+      {amount ? <Text style={styles.refAmount}>{amount}</Text> : null}
+      {onPress ? <Ionicons name="chevron-forward" size={18} color={Colors.TEXT_SECONDARY} /> : null}
+    </>
+  );
+
+  if (onPress) {
+    return (
+      <TouchableOpacity style={styles.refRow} onPress={onPress} activeOpacity={0.7}>
+        {content}
+      </TouchableOpacity>
+    );
+  }
+
+  return <View style={styles.refRow}>{content}</View>;
+};
 
 export type ErpDocPreviewTab = { id: string; label: string };
 
@@ -411,13 +498,14 @@ export const ErpDocTabBar: React.FC<TabBarProps> = ({ tabs, activeId, onChange }
       return (
         <TouchableOpacity
           key={tab.id}
-          style={[styles.tabBtn, selected && styles.tabBtnOn]}
+          style={styles.tabBtn}
           onPress={() => onChange(tab.id)}
           activeOpacity={0.75}
           accessibilityRole="tab"
           accessibilityState={{ selected }}
         >
           <Text style={[styles.tabBtnText, selected && styles.tabBtnTextOn]}>{tab.label}</Text>
+          {selected ? <View style={styles.tabIndicator} /> : null}
         </TouchableOpacity>
       );
     })}
@@ -454,7 +542,7 @@ export const ErpDocLinkButton: React.FC<LinkButtonProps> = ({
     ) : (
       <>
         <View style={styles.linkBtnIconWrap}>
-          <Ionicons name={icon} size={22} color={Colors.WINE} />
+          <Ionicons name={icon} size={20} color={flatMuted} />
         </View>
         <View style={styles.linkBtnTextCol}>
           <Text style={styles.linkBtnLabel}>{label}</Text>
@@ -464,7 +552,7 @@ export const ErpDocLinkButton: React.FC<LinkButtonProps> = ({
             </Text>
           ) : null}
         </View>
-        <Ionicons name="chevron-forward" size={20} color={Colors.TEXT_SECONDARY} />
+        <Ionicons name="chevron-forward" size={15} color={Colors.MEDIUM_GRAY} />
       </>
     )}
   </TouchableOpacity>
@@ -510,13 +598,13 @@ export const ErpDocEmptyState: React.FC<{ icon?: keyof typeof Ionicons.glyphMap;
 );
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#ECEFF1' },
+  screen: { flex: 1, backgroundColor: ERP_DOC_FLAT.pageBg },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: Spacing.SM,
     paddingVertical: Spacing.SM,
-    backgroundColor: '#ECEFF1',
+    backgroundColor: ERP_DOC_FLAT.pageBg,
   },
   backHit: { paddingVertical: 4, paddingRight: 8, minWidth: 36 },
   topTitle: {
@@ -524,7 +612,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontSize: 17,
     fontWeight: '600',
-    color: Colors.BLACK,
+    color: flatInk,
     letterSpacing: -0.2,
   },
   topSpacer: { width: 36 },
@@ -536,8 +624,9 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   headerIconHit: { padding: 6 },
-  scroll: { flex: 1 },
-  scrollInner: { paddingHorizontal: Spacing.MD, paddingTop: 4, paddingBottom: Spacing.XL },
+  scroll: { flex: 1, width: '100%' },
+  scrollInner: { paddingTop: 0, paddingBottom: Spacing.XL },
+  scrollContent: { width: '100%', minWidth: 0, maxWidth: '100%', alignSelf: 'stretch' },
   center: {
     flex: 1,
     justifyContent: 'center',
@@ -553,49 +642,69 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  errorTitle: { fontSize: 17, fontWeight: '600', color: Colors.BLACK, marginTop: 4 },
-  errorSub: { fontSize: 14, color: Colors.TEXT_SECONDARY, textAlign: 'center', lineHeight: 20 },
+  errorTitle: { fontSize: 17, fontWeight: '600', color: flatInk, marginTop: 4 },
+  errorSub: { fontSize: 14, color: flatMuted, textAlign: 'center', lineHeight: 20 },
   sheet: {
-    backgroundColor: Colors.WHITE,
-    borderRadius: 16,
-    padding: Spacing.LG,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
+    backgroundColor: ERP_DOC_FLAT.surface,
+    paddingHorizontal: Spacing.MD,
+    paddingTop: Spacing.MD,
+    paddingBottom: Spacing.LG,
+    borderBottomWidth: hairline,
+    borderBottomColor: flatBorder,
+    width: '100%',
+    minWidth: 0,
   },
   card: {
-    backgroundColor: Colors.WHITE,
-    borderRadius: 16,
-    padding: Spacing.LG,
+    backgroundColor: ERP_DOC_FLAT.surface,
+    paddingHorizontal: Spacing.MD,
+    paddingVertical: Spacing.LG,
     marginTop: Spacing.MD,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-    elevation: 1,
-  },
-  hero: { gap: 10 },
-  heroStatusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
+    borderTopWidth: hairline,
+    borderBottomWidth: hairline,
+    borderColor: flatBorder,
     width: '100%',
+    minWidth: 0,
   },
-  heroStatusRowSolo: {
-    justifyContent: 'flex-start',
+  hero: { gap: 8, width: '100%', minWidth: 0, alignSelf: 'stretch' },
+  heroBadgeRow: {
+    width: '100%',
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    alignSelf: 'flex-start',
   },
-  heroStatusTrailing: {
+  heroTrailingRow: {
+    width: '100%',
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    flexShrink: 0,
+    flexWrap: 'wrap',
     gap: 8,
-    marginLeft: 'auto',
+  },
+  heroActionBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: flatAccent,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    minHeight: 36,
+  },
+  heroActionBtnOutline: {
+    backgroundColor: ERP_DOC_FLAT.surface,
+    borderWidth: hairline,
+    borderColor: flatBorder,
+  },
+  heroActionBtnText: {
+    color: Colors.WHITE,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  heroActionBtnTextOutline: {
+    color: flatInk,
   },
   statusBadge: {
-    flexShrink: 0,
+    flexShrink: 1,
+    maxWidth: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -604,112 +713,177 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
   },
-  statusBadgeDot: { width: 6, height: 6, borderRadius: 3 },
-  statusBadgeText: { fontSize: 12, fontWeight: '700' },
+  statusBadgeDot: { width: 6, height: 6, borderRadius: 3, flexShrink: 0 },
+  statusBadgeText: { fontSize: 12, fontWeight: '700', flexShrink: 1 },
   docId: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: Colors.TEXT_SECONDARY,
-    letterSpacing: -0.1,
+    fontSize: 14,
+    fontWeight: '500',
+    color: flatMuted,
+    letterSpacing: 0,
+    minWidth: 0,
+    width: '100%',
   },
-  amountBlock: { marginTop: 2 },
+  amountBlock: { marginTop: 2, width: '100%', minWidth: 0 },
+  amountRow: {
+    marginTop: 2,
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 16,
+  },
+  amountPrimary: { flex: 1, minWidth: 0 },
+  amountSecondary: { alignItems: 'flex-end', flexShrink: 0, maxWidth: '42%' },
   amountLabel: {
     fontSize: 11,
     fontWeight: '600',
-    color: Colors.TEXT_SECONDARY,
+    color: flatMuted,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.3,
   },
   amountValue: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: '700',
-    color: Colors.BLACK,
-    letterSpacing: -0.8,
+    color: flatInk,
+    letterSpacing: 0,
     marginTop: 2,
     fontVariant: ['tabular-nums'],
+    width: '100%',
+    minWidth: 0,
   },
-  subtitle: { fontSize: 14, color: Colors.TEXT_SECONDARY, lineHeight: 20 },
-  factsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
-  factChip: {
-    backgroundColor: Colors.LIGHT_GRAY,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    minWidth: '46%',
-    flexGrow: 1,
-  },
-  factChipLabel: {
+  amountSecondaryLabel: {
     fontSize: 10,
     fontWeight: '600',
-    color: Colors.TEXT_SECONDARY,
+    color: flatMuted,
     textTransform: 'uppercase',
-    letterSpacing: 0.4,
+    letterSpacing: 0.25,
+    textAlign: 'right',
+  },
+  amountSecondaryValue: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: flatMuted,
+    marginTop: 2,
+    fontVariant: ['tabular-nums'],
+    textAlign: 'right',
+  },
+  subtitle: {
+    fontSize: 14,
+    color: flatMuted,
+    lineHeight: 20,
+    width: '100%',
+    minWidth: 0,
+  },
+  factsWrap: {
+    flexDirection: 'column',
+    gap: 10,
+    marginTop: 4,
+    paddingTop: 10,
+    borderTopWidth: hairline,
+    borderTopColor: flatBorder,
+    width: '100%',
+    minWidth: 0,
+  },
+  factChip: {
+    width: '100%',
+    minWidth: 0,
+    maxWidth: '100%',
+    overflow: 'hidden',
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+    backgroundColor: 'transparent',
+  },
+  factChipLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: flatMuted,
+    letterSpacing: 0.2,
     marginBottom: 2,
   },
-  factChipValue: { fontSize: 13, fontWeight: '600', color: Colors.BLACK },
+  factChipValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: flatInk,
+    minWidth: 0,
+  },
   rule: {
     height: hairline,
-    backgroundColor: Colors.MEDIUM_GRAY,
+    backgroundColor: flatBorder,
     marginVertical: Spacing.MD,
-    opacity: 0.35,
   },
   sectionBlock: { marginTop: Spacing.LG },
   sectionHeading: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: Colors.TEXT_SECONDARY,
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-    marginBottom: 10,
+    fontSize: 13,
+    fontWeight: '600',
+    color: flatMuted,
+    letterSpacing: -0.1,
+    marginBottom: 8,
   },
   metaRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: 12,
-    paddingVertical: 8,
+    paddingVertical: 10,
+    borderBottomWidth: hairline,
+    borderBottomColor: flatBorder,
   },
-  metaLabel: { fontSize: 14, color: Colors.TEXT_SECONDARY },
+  metaLabel: { fontSize: 15, color: flatInk, letterSpacing: -0.2 },
   metaValue: {
     flex: 1,
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '600',
-    color: Colors.BLACK,
+    color: flatMuted,
     textAlign: 'right',
+    letterSpacing: -0.2,
+  },
+  notice: {
+    marginTop: Spacing.MD,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: '#F5F6F8',
+    borderWidth: hairline,
+    borderColor: flatBorder,
+  },
+  noticeText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: flatMuted,
+    letterSpacing: -0.1,
   },
   itemsList: {
-    backgroundColor: '#F7F8FA',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 4,
+    backgroundColor: ERP_DOC_FLAT.surface,
+    borderWidth: hairline,
+    borderColor: flatBorder,
+    width: '100%',
+    minWidth: 0,
   },
   lineItem: {
     paddingVertical: 10,
+    paddingHorizontal: 12,
     borderBottomWidth: hairline,
-    borderBottomColor: 'rgba(0,0,0,0.06)',
+    borderBottomColor: flatBorder,
   },
   lineTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   lineThumb: {
     width: 52,
     height: 52,
-    borderRadius: 8,
-    backgroundColor: Colors.LIGHT_GRAY,
+    backgroundColor: ERP_DOC_FLAT.surfaceMuted,
   },
   lineThumbPlaceholder: {
     width: 52,
     height: 52,
-    borderRadius: 8,
-    backgroundColor: Colors.LIGHT_GRAY,
+    backgroundColor: ERP_DOC_FLAT.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
   },
   lineTextCol: { flex: 1, minWidth: 0 },
-  lineTitle: { fontSize: 15, fontWeight: '600', color: Colors.BLACK, lineHeight: 20 },
-  lineDetail: { fontSize: 12, color: Colors.TEXT_SECONDARY, marginTop: 2 },
+  lineTitle: { fontSize: 15, fontWeight: '600', color: flatInk, lineHeight: 20 },
+  lineDetail: { fontSize: 13, color: flatMuted, marginTop: 2 },
   lineAmount: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: Colors.BLACK,
+    fontSize: 14,
+    fontWeight: '600',
+    color: flatInk,
     fontVariant: ['tabular-nums'],
   },
   lineImageModalRoot: {
@@ -752,20 +926,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 6,
   },
-  kvKey: { fontSize: 14, color: Colors.TEXT_SECONDARY },
-  kvVal: { fontSize: 14, fontWeight: '600', color: Colors.BLACK, fontVariant: ['tabular-nums'] },
+  kvKey: { fontSize: 14, color: flatMuted },
+  kvVal: { fontSize: 14, fontWeight: '600', color: flatInk, fontVariant: ['tabular-nums'] },
   kvTotal: {
     marginTop: Spacing.SM,
     paddingTop: Spacing.MD,
     borderTopWidth: hairline,
-    borderTopColor: 'rgba(0,0,0,0.08)',
+    borderTopColor: flatBorder,
   },
-  totalKey: { fontSize: 15, fontWeight: '600', color: Colors.BLACK },
+  totalKey: { fontSize: 15, fontWeight: '600', color: flatInk },
   totalVal: {
     fontSize: 18,
     fontWeight: '700',
-    color: Colors.BLACK,
-    letterSpacing: -0.3,
+    color: flatInk,
+    letterSpacing: 0,
     fontVariant: ['tabular-nums'],
   },
   refRow: {
@@ -773,78 +947,75 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     paddingVertical: 10,
+    paddingHorizontal: 12,
     borderBottomWidth: hairline,
-    borderBottomColor: 'rgba(0,0,0,0.06)',
+    borderBottomColor: flatBorder,
   },
   refIconWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: Colors.BRAND_SOFT,
+    width: 28,
+    height: 28,
     alignItems: 'center',
     justifyContent: 'center',
   },
   refMain: { flex: 1, minWidth: 0 },
-  refDoctype: { fontSize: 10, fontWeight: '700', color: Colors.TEXT_SECONDARY, letterSpacing: 0.4 },
-  refName: { fontSize: 14, fontWeight: '600', color: Colors.BLACK, marginTop: 1 },
-  refAmount: { fontSize: 14, fontWeight: '700', color: Colors.BLACK, fontVariant: ['tabular-nums'] },
+  refDoctype: { fontSize: 11, fontWeight: '600', color: flatMuted, letterSpacing: 0.2 },
+  refName: { fontSize: 14, fontWeight: '600', color: flatInk, marginTop: 1 },
+  refAmount: { fontSize: 14, fontWeight: '600', color: flatInk, fontVariant: ['tabular-nums'] },
   linkedSection: { marginTop: Spacing.LG },
   linkedLoading: { alignItems: 'center', paddingVertical: 16 },
-  linkedEmpty: { fontSize: 14, color: Colors.TEXT_SECONDARY, lineHeight: 20 },
+  linkedEmpty: { fontSize: 14, color: flatMuted, lineHeight: 20 },
   linkBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
     paddingVertical: 14,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    backgroundColor: '#F7F8FA',
-    borderWidth: hairline,
-    borderColor: 'rgba(0,0,0,0.06)',
-    marginBottom: 8,
+    borderBottomWidth: hairline,
+    borderBottomColor: flatBorder,
+    width: '100%',
+    minWidth: 0,
   },
   linkBtnDisabled: { opacity: 0.55 },
   linkBtnLoader: { alignSelf: 'center', flex: 1 },
   linkBtnIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
-    backgroundColor: Colors.BRAND_SOFT,
+    width: 28,
+    height: 28,
     alignItems: 'center',
     justifyContent: 'center',
   },
   linkBtnTextCol: { flex: 1, minWidth: 0 },
-  linkBtnLabel: { fontSize: 15, fontWeight: '700', color: Colors.BLACK },
-  linkBtnSub: { marginTop: 3, fontSize: 13, color: Colors.TEXT_SECONDARY, lineHeight: 18 },
+  linkBtnLabel: { fontSize: 15, fontWeight: '600', color: flatInk },
+  linkBtnSub: { marginTop: 3, fontSize: 13, color: flatMuted, lineHeight: 18 },
   tabBar: {
     flexDirection: 'row',
     marginTop: Spacing.LG,
-    borderRadius: 12,
-    backgroundColor: '#F0F2F5',
-    padding: 4,
+    borderBottomWidth: hairline,
+    borderBottomColor: flatBorder,
+    width: '100%',
+    minWidth: 0,
   },
   tabBtn: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 9,
-    borderRadius: 9,
+    paddingVertical: 12,
+    position: 'relative',
+    minWidth: 0,
   },
-  tabBtnOn: {
-    backgroundColor: Colors.WHITE,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 3,
-    elevation: 1,
+  tabIndicator: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 2,
+    backgroundColor: flatAccent,
   },
-  tabBtnText: { fontSize: 13, fontWeight: '600', color: Colors.TEXT_SECONDARY },
-  tabBtnTextOn: { color: Colors.BLACK, fontWeight: '700' },
+  tabBtnText: { fontSize: 15, fontWeight: '500', color: flatMuted },
+  tabBtnTextOn: { color: flatAccent, fontWeight: '600' },
   emptyState: {
     alignItems: 'center',
     paddingVertical: Spacing.XL,
     paddingHorizontal: Spacing.MD,
     gap: 8,
   },
-  emptyTitle: { fontSize: 15, fontWeight: '600', color: Colors.BLACK, marginTop: 4 },
-  emptySub: { fontSize: 13, color: Colors.TEXT_SECONDARY, textAlign: 'center', lineHeight: 18 },
+  emptyTitle: { fontSize: 15, fontWeight: '600', color: flatInk, marginTop: 4 },
+  emptySub: { fontSize: 13, color: flatMuted, textAlign: 'center', lineHeight: 18 },
 });

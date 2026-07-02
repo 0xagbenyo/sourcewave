@@ -1,4 +1,6 @@
 /** Raven `message_reactions` JSON — matches Raven web {@link ReactionObject}. */
+import { ravenIsForwardedMessage } from '../services/ravenNativeApi';
+
 export type RavenReactionObject = {
   reaction: string;
   users: string[];
@@ -105,6 +107,5 @@ export function applyOptimisticRavenReaction(
 }
 
 export function ravenMessageIsForwarded(row: { is_forwarded?: number | boolean | null }): boolean {
-  const v = row.is_forwarded;
-  return v === 1 || v === true || String(v) === '1';
+  return ravenIsForwardedMessage(row?.is_forwarded);
 }

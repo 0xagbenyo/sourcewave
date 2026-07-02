@@ -16,12 +16,12 @@ import { appAlert as Alert } from '../services/appAlert';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
-import * as ImagePicker from 'expo-image-picker';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { Header } from '../components/Header';
 import { useUserSession } from '../context/UserContext';
 import { useTranslation } from 'react-i18next';
+import { imagePickLabelsFromT, pickSingleFormImage } from '../utils/formImagePicker';
 import { getERPNextClient } from '../services/erpnext';
 import { buildSourcingCategoryOptions, isTopLevelItemGroupParent } from '../utils/itemGroup';
 import type { RootStackParamList, ErpCustomerAddressRow } from '../types';
@@ -394,19 +394,13 @@ export const SourcingRequestMultiScreen: React.FC = () => {
   };
 
   const pickImageFor = async (formId: string) => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert('Permission Required', 'Please allow media library access to select an image.');
+    const result = await pickSingleFormImage(imagePickLabelsFromT(t));
+    if (result.ok) {
+      updateForm(formId, { referenceImageUri: result.uri });
       return;
     }
-    // Android crop UI (allowsEditing) often has no visible confirm; pick full image on Android.
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: Platform.OS === 'ios',
-      quality: 0.8,
-    });
-    if (!result.canceled && result.assets?.length) {
-      updateForm(formId, { referenceImageUri: result.assets[0].uri });
+    if (!result.canceled) {
+      Alert.alert('Image', result.message);
     }
   };
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -18,12 +18,31 @@ import type { MainTabParamList } from '../types';
 
 const MainTab = createBottomTabNavigator<MainTabParamList>();
 
-export const MainTabNavigator: React.FC = () => {
+type MainTabNavigatorProps = {
+  /** Deep link from root `Main` route (`{ screen, params }`). */
+  mainDeepLink?: { screen?: keyof MainTabParamList; params?: object };
+};
+
+export const MainTabNavigator: React.FC<MainTabNavigatorProps> = ({ mainDeepLink }) => {
   const insets = useSafeAreaInsets();
   const { t } = useTranslation();
   const navigation = useNavigation();
   const { user } = useUserSession();
   const { isActive: subscriptionActive, isLoading: subscriptionLoading } = useSubscription();
+
+  useEffect(() => {
+    const screen = mainDeepLink?.screen;
+    if (!screen) return;
+    const params = mainDeepLink?.params;
+    try {
+      (navigation as { navigate: (name: string, p?: object) => void }).navigate(
+        String(screen),
+        params && typeof params === 'object' ? params : undefined
+      );
+    } catch {
+      /* noop */
+    }
+  }, [mainDeepLink, navigation]);
 
   const suppliersTabListeners = useCallback(
     ({ navigation: tabNav }: { navigation: { navigate: (name: string, params?: object) => void } }) => ({

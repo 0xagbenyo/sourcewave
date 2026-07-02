@@ -104,3 +104,53 @@ export function matchesInvoiceStatusFilter(row: any, filter: InvoiceStatusFilter
   if (filter === 'partial') return kind === 'partial';
   return true;
 }
+
+export type DeliveryNoteStatusFilter = 'all' | 'draft' | 'submitted';
+
+export type DeliveryNoteUiKind = 'draft' | 'submitted' | 'neutral';
+
+export function deliveryNoteUiKind(row: any): DeliveryNoteUiKind {
+  const docstatus = Number(row?.docstatus);
+  if (docstatus === 0) return 'draft';
+  if (docstatus === 1) return 'submitted';
+  return 'neutral';
+}
+
+export function deliveryNoteStatusLabel(row: any): string {
+  const raw = String(row?.status ?? '').trim();
+  if (raw) return raw;
+  const kind = deliveryNoteUiKind(row);
+  if (kind === 'draft') return 'Draft';
+  if (kind === 'submitted') return 'Submitted';
+  return '—';
+}
+
+export function accentForDeliveryNoteKind(kind: DeliveryNoteUiKind): string {
+  switch (kind) {
+    case 'draft':
+      return '#EF6C00';
+    case 'submitted':
+      return '#1976D2';
+    default:
+      return '#78909C';
+  }
+}
+
+export function chipColorsForDeliveryNote(kind: DeliveryNoteUiKind): { bg: string; fg: string; bd: string } {
+  switch (kind) {
+    case 'draft':
+      return { bg: '#FFF3E0', fg: '#E65100', bd: '#FFE0B2' };
+    case 'submitted':
+      return { bg: 'rgba(0, 122, 255, 0.08)', fg: '#1976D2', bd: 'rgba(0, 122, 255, 0.22)' };
+    default:
+      return { bg: '#ECEFF1', fg: '#455A64', bd: '#CFD8DC' };
+  }
+}
+
+export function matchesDeliveryNoteStatusFilter(row: any, filter: DeliveryNoteStatusFilter): boolean {
+  if (filter === 'all') return true;
+  const kind = deliveryNoteUiKind(row);
+  if (filter === 'draft') return kind === 'draft';
+  if (filter === 'submitted') return kind === 'submitted';
+  return true;
+}

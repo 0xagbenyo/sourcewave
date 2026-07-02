@@ -1,4 +1,4 @@
-/** Attach Image field on Sales Order Item / Supplier Quotation Item child rows. */
+/** Attach Image field on Sales Order / Supplier Quotation / Sales Invoice item rows. */
 export const ERP_DOC_LINE_IMAGE_FIELD = 'custom_new_image';
 
 export function readErpDocLineImage(row: Record<string, unknown> | null | undefined): string {

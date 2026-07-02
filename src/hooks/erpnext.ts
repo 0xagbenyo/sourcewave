@@ -17,6 +17,7 @@ import {
 } from '../services/mappers';
 import { Product, Order, Category, User, WishlistItem, ProductReview, SalesInvoice } from '../types';
 import { getProductDiscount } from '../utils/pricingRules';
+import { enrichOrdersWithSupplierNames } from '../utils/erpSalesOrderSupplier';
 
 // Types
 interface UseAsyncState<T> {
@@ -543,7 +544,10 @@ export const useOrders = (customerId: string, company?: string, pageSize: number
         setError(null);
         const client = getERPNextClient();
         const erpOrders = await client.getSalesOrders(customerId, company, pageSize, 0);
-        const mappedOrders = erpOrders.map((order) => mapERPSalesOrderToOrder(order));
+        let mappedOrders = erpOrders.map((order) => mapERPSalesOrderToOrder(order));
+        mappedOrders = await enrichOrdersWithSupplierNames(mappedOrders, (ids) =>
+          client.listSupplierNamesByIds(ids)
+        );
         
         setOrders(mappedOrders);
         setOffset(mappedOrders.length);
@@ -572,7 +576,10 @@ export const useOrders = (customerId: string, company?: string, pageSize: number
     try {
       const client = getERPNextClient();
       const erpOrders = await client.getSalesOrders(customerId, company, pageSize, offset);
-      const mappedOrders = erpOrders.map((order) => mapERPSalesOrderToOrder(order));
+      let mappedOrders = erpOrders.map((order) => mapERPSalesOrderToOrder(order));
+      mappedOrders = await enrichOrdersWithSupplierNames(mappedOrders, (ids) =>
+        client.listSupplierNamesByIds(ids)
+      );
       
       setOrders((prev) => [...prev, ...mappedOrders]);
       setOffset((prev) => prev + mappedOrders.length);
@@ -720,7 +727,8 @@ export const useOrder = (orderId: string) => {
       }
       const client = getERPNextClient();
       const erpOrder = await client.getSalesOrder(orderId);
-      const order = mapERPSalesOrderToOrder(erpOrder);
+      let order = mapERPSalesOrderToOrder(erpOrder);
+      [order] = await enrichOrdersWithSupplierNames([order], (ids) => client.listSupplierNamesByIds(ids));
       setState({ data: order, loading: false, error: null });
     } catch (error) {
       const err = error instanceof Error ? error : new Error('Unknown error');

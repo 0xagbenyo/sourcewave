@@ -8,9 +8,11 @@ import { useUserSession } from '../context/UserContext';
 import { userFacingError } from '../utils/userFacingError';
 import { navigateToSalesInvoiceDetail } from '../utils/erpDocumentNavigation';
 import { appAlert as Alert } from '../services/appAlert';
+import { ravenChatDocCardColors, ravenChatDocCardStyle, ravenChatDocSharedLabelStyle } from '../utils/ravenChatDocCard';
 
 type Props = {
   invoiceName: string;
+  mine?: boolean;
 };
 
 function formatMoney(amount: number, currency: string): string {
@@ -32,7 +34,7 @@ function statusLabel(docstatus: unknown, status: unknown): string {
 }
 
 /** In-chat card for a linked **Sales Invoice**. */
-export const RavenLinkedSalesInvoiceMessage: React.FC<Props> = ({ invoiceName }) => {
+export const RavenLinkedSalesInvoiceMessage: React.FC<Props> = ({ invoiceName, mine }) => {
   const navigation = useNavigation();
   const { user } = useUserSession();
   const name = invoiceName.trim();
@@ -87,30 +89,37 @@ export const RavenLinkedSalesInvoiceMessage: React.FC<Props> = ({ invoiceName })
     }
   }, [navigation, name, isSupplier]);
 
+  const colors = ravenChatDocCardColors(mine);
+
   return (
-    <View style={styles.card}>
+    <View style={ravenChatDocCardStyle(mine)}>
+      {mine ? <Text style={ravenChatDocSharedLabelStyle(mine)}>You shared</Text> : null}
       <View style={styles.head}>
-        <Ionicons name="receipt-outline" size={22} color={RavenLight.accent} style={{ marginRight: 8 }} />
-        <Text style={styles.headTitle} numberOfLines={1}>
+        <Ionicons name="receipt-outline" size={22} color={colors.icon} style={{ marginRight: 8 }} />
+        <Text style={[styles.headTitle, { color: colors.title }]} numberOfLines={1}>
           Sales invoice
         </Text>
       </View>
       {loading ? (
-        <ActivityIndicator size="small" color={RavenLight.accent} style={{ marginTop: 10 }} />
+        <ActivityIndicator size="small" color={colors.icon} style={{ marginTop: 10 }} />
       ) : error ? (
-        <Text style={styles.docId}>{name}</Text>
+        <Text style={[styles.docId, { color: colors.body }]}>{name}</Text>
       ) : (
         <>
-          <Text style={styles.docId} numberOfLines={2}>
+          <Text style={[styles.docId, { color: colors.body }]} numberOfLines={2}>
             {title}
           </Text>
-          {meta ? <Text style={styles.meta}>{meta}</Text> : null}
+          {meta ? <Text style={[styles.meta, { color: colors.meta }]}>{meta}</Text> : null}
         </>
       )}
       <View style={styles.actions}>
-        <TouchableOpacity style={styles.primaryBtn} onPress={openDetails} activeOpacity={0.85}>
-          <Ionicons name="eye-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
-          <Text style={styles.primaryBtnText}>View invoice</Text>
+        <TouchableOpacity
+          style={[styles.primaryBtn, { backgroundColor: colors.primaryBtnBg }]}
+          onPress={openDetails}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="eye-outline" size={18} color={colors.primaryBtnText} style={{ marginRight: 6 }} />
+          <Text style={[styles.primaryBtnText, { color: colors.primaryBtnText }]}>View invoice</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -118,19 +127,10 @@ export const RavenLinkedSalesInvoiceMessage: React.FC<Props> = ({ invoiceName })
 };
 
 const styles = StyleSheet.create({
-  card: {
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: RavenLight.border,
-    backgroundColor: RavenLight.panel,
-    padding: 10,
-    maxWidth: '100%',
-    alignSelf: 'stretch',
-  },
   head: { flexDirection: 'row', alignItems: 'center' },
-  headTitle: { flex: 1, fontSize: 15, fontWeight: '700', color: RavenLight.text },
-  docId: { marginTop: 6, fontSize: 15, fontWeight: '600', color: RavenLight.accent },
-  meta: { marginTop: 6, fontSize: 13, color: RavenLight.textMuted },
+  headTitle: { flex: 1, fontSize: 15, fontWeight: '700' },
+  docId: { marginTop: 6, fontSize: 15, fontWeight: '600' },
+  meta: { marginTop: 6, fontSize: 13 },
   actions: { marginTop: 12, gap: 8 },
   primaryBtn: {
     flexDirection: 'row',
@@ -141,5 +141,5 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     paddingHorizontal: 14,
   },
-  primaryBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  primaryBtnText: { fontSize: 14, fontWeight: '700' },
 });

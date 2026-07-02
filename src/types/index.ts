@@ -150,6 +150,10 @@ export interface Order {
   paymentMethod: PaymentMethod;
   trackingNumber?: string;
   estimatedDelivery?: string;
+  /** ERPNext Supplier document linked on the Sales Order (`custom_supplier`). */
+  supplierId?: string;
+  /** Resolved `Supplier.supplier_name` when available. */
+  supplierDisplayName?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -182,6 +186,10 @@ export interface SalesInvoiceItem {
   quantity: number;
   rate: number;
   amount: number;
+  weightPerUnit?: number;
+  totalWeight?: number;
+  /** Line attach image (`custom_new_image`) — read-only on invoice. */
+  lineImage?: string;
 }
 
 export type OrderStatus = 
@@ -240,6 +248,7 @@ export type SupplierStackParamList = {
   SupplierTabs: undefined;
   SupplierOrdersInvoices: undefined;
   SupplierSalesInvoiceDetail: { name: string };
+  SupplierDeliveryNoteDetail: { name: string };
   SupplierPaymentEntryDetail: { name: string };
   SupplierQuotationList: { initialTab?: 'list' | 'new' } | undefined;
   SupplierQuotationDetail: { name: string; customerId?: string };
@@ -253,11 +262,39 @@ export type SupplierStackParamList = {
         linkMessageId?: string;
       }
     | undefined;
+  SupplierQuotationShare:
+    | {
+        kind?: 'quotation' | 'invoice';
+        quotationName?: string;
+        documentName?: string;
+        documentNames?: string[];
+        ravenChannelId?: string;
+      }
+    | undefined;
+  SupplierInvoiceShare:
+    | {
+        kind?: 'quotation' | 'invoice';
+        quotationName?: string;
+        documentName?: string;
+        documentNames?: string[];
+        ravenChannelId?: string;
+      }
+    | undefined;
+  /** Supplier views/edits their own ERP Supplier catalog profile (buyer-facing). */
+  SupplierBusinessProfile: { supplierDocName?: string } | undefined;
+  SupplierBusinessProfileEdit: { supplierDocName?: string } | undefined;
 };
 
 export type SupplierTabParamList = {
   SupplierHome: undefined;
-  SupplierMessages: undefined;
+  SupplierMessages:
+    | {
+        openChannelId?: string;
+        openPeerUserId?: string;
+        openWorkspaceId?: string;
+        openChannelNonce?: number;
+      }
+    | undefined;
   SupplierProfile: undefined;
 };
 
@@ -276,6 +313,8 @@ export type MainTabParamList = {
         openRavenPeerUserId?: string;
         /** Buyer picked an order to share — browse groups and suppliers until one is chosen. */
         shareSalesOrderName?: string;
+        /** Buyer picked a delivery note to share with logistics — locked to Logistics workspace. */
+        shareDeliveryNoteName?: string;
       }
     | undefined;
   Profile: undefined;
@@ -313,9 +352,19 @@ export type RootStackParamList = {
   /** Buyer: sales invoices & payment entries for the logged-in customer. */
   InvoicesPayments: undefined;
   CustomerInvoices: undefined;
+  CustomerDeliveryNotes:
+    | {
+        pickForLogisticsShare?: {
+          peerUserId: string;
+          ravenWorkspaceId: string;
+          supplierLabel?: string;
+        };
+      }
+    | undefined;
   CustomerPayments: { salesInvoiceName?: string } | undefined;
   OrderDetails: { orderId: string; ravenChannelId?: string };
   InvoiceDetails: { invoiceId: string };
+  DeliveryNoteDetail: { deliveryNoteId: string };
   /** In-app preview for Supplier Quotation (from chat or lists). */
   SupplierQuotationDetail: { name: string; customerId?: string };
   PaymentEntryDetail: { name: string };
@@ -351,6 +400,16 @@ export type RootStackParamList = {
         ravenWorkspaceId?: string;
       }
     | undefined;
+  /** Buyer: share a Delivery Note with a logistics company in chat. */
+  BuyerDeliveryNoteShareCompose:
+    | {
+        ravenChannelId?: string;
+        peerUserId?: string;
+        deliveryNoteName?: string;
+        supplierLabel?: string;
+        ravenWorkspaceId?: string;
+      }
+    | undefined;
   /** Native Raven-style chat (light UI); not a WebView. */
   RavenUIMessages: undefined;
   /** Header chat icon: your channels & people you message (not the Suppliers tab). */
@@ -372,6 +431,8 @@ export type RootStackParamList = {
     ravenWorkspaceName?: string;
     /** When set, profile offers to share this Sales Order in chat with the supplier. */
     shareSalesOrderName?: string;
+    /** When set, profile offers to share this Delivery Note in chat with logistics. */
+    shareDeliveryNoteName?: string;
   };
   Subscription: undefined;
   /** Contact form → ERPNext Issue (Support). */

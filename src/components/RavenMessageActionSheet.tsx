@@ -6,6 +6,7 @@ import { RavenBottomSheetShell } from './RavenBottomSheetShell';
 import { RavenEmojiPickerPanel } from './RavenEmojiPickerPanel';
 import { RAVEN_QUICK_EMOJIS } from '../utils/ravenMessageReactions';
 import { RavenLight } from '../constants/ravenLightTheme';
+import { Colors } from '../constants/colors';
 import {
   ravenMessageCanDelete,
   ravenMessageCanEdit,
@@ -37,6 +38,7 @@ type ActionItem = {
   icon: React.ComponentProps<typeof Ionicons>['name'];
   onPress: () => void;
   accent?: boolean;
+  wine?: boolean;
 };
 
 /**
@@ -93,6 +95,7 @@ export const RavenMessageActionSheet: React.FC<Props> = ({
         label: t('ravenMessage.forward'),
         icon: 'arrow-redo-outline',
         onPress: onForward,
+        wine: true,
       });
     }
     if (payFn) {
@@ -165,14 +168,14 @@ export const RavenMessageActionSheet: React.FC<Props> = ({
               accessibilityRole="button"
               accessibilityLabel={opt.label}
             >
-              <View style={[styles.actionIcon, opt.accent && styles.actionIconAccent]}>
+              <View style={[styles.actionIcon, opt.accent && styles.actionIconAccent, opt.wine && styles.actionIconWine]}>
                 <Ionicons
                   name={opt.icon}
                   size={18}
-                  color={opt.accent ? RavenLight.accent : RavenLight.textMuted}
+                  color={opt.accent || opt.wine ? Colors.WINE : RavenLight.textMuted}
                 />
               </View>
-              <Text style={[styles.actionLabel, opt.accent && styles.actionLabelAccent]}>{opt.label}</Text>
+              <Text style={[styles.actionLabel, (opt.accent || opt.wine) && styles.actionLabelAccent]}>{opt.label}</Text>
             </Pressable>
           ))}
         </>
@@ -261,13 +264,16 @@ const styles = StyleSheet.create({
   actionIconAccent: {
     backgroundColor: RavenLight.accentSoft,
   },
+  actionIconWine: {
+    backgroundColor: '#FDF2F4',
+  },
   actionLabel: {
     fontSize: 16,
     fontWeight: '600',
     color: RavenLight.text,
   },
   actionLabelAccent: {
-    color: RavenLight.accent,
+    color: Colors.WINE,
     fontWeight: '700',
   },
   cancelBtn: {

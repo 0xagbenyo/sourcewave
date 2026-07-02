@@ -43,6 +43,16 @@ export const SupplierProfileScreen: React.FC = () => {
     });
   };
 
+  const openBusinessProfile = () => {
+    if (!supplierDocId) {
+      Alert.alert(t('supplierProfile.catalogLink'), sidError || t('supplierProfile.editNoSupplier'));
+      return;
+    }
+    (navigation as { navigate: (n: string, p?: object) => void }).navigate('SupplierBusinessProfile', {
+      supplierDocName: supplierDocId,
+    });
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
       <ScrollView
@@ -81,6 +91,21 @@ export const SupplierProfileScreen: React.FC = () => {
             </View>
           </View>
         </View>
+
+        <Text style={styles.sectionLabel}>{t('supplierProfile.catalogSection')}</Text>
+        <TouchableOpacity
+          style={styles.catalogRow}
+          onPress={openBusinessProfile}
+          disabled={sidLoading || !supplierDocId}
+          activeOpacity={0.75}
+        >
+          <Ionicons name="storefront-outline" size={22} color={Colors.WINE} />
+          <View style={styles.faqTextWrap}>
+            <Text style={styles.faqTitle}>{t('supplierProfile.catalogLink')}</Text>
+            <Text style={styles.faqSub}>{t('supplierProfile.catalogLinkSub')}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={Colors.TEXT_SECONDARY} />
+        </TouchableOpacity>
 
         <Text style={styles.sectionLabel}>{t('supplierProfile.faqSection')}</Text>
         <TouchableOpacity
@@ -150,6 +175,17 @@ const styles = StyleSheet.create({
   faqTextWrap: { flex: 1, marginLeft: 12, minWidth: 0 },
   faqTitle: { fontSize: 16, fontWeight: '600', color: Colors.BLACK },
   faqSub: { fontSize: 13, color: Colors.TEXT_SECONDARY, marginTop: 3, fontWeight: '500' },
+  catalogRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: Spacing.SCREEN_PADDING,
+    marginHorizontal: Spacing.SCREEN_PADDING,
+    backgroundColor: Colors.WHITE,
+    borderTopWidth: hairline,
+    borderBottomWidth: hairline,
+    borderColor: Colors.BORDER,
+  },
   signOut: {
     marginHorizontal: Spacing.SCREEN_PADDING,
     marginTop: 28,

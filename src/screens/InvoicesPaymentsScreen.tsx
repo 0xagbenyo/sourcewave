@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
@@ -11,6 +12,7 @@ import { Spacing } from '../constants/spacing';
  */
 export const InvoicesPaymentsScreen: React.FC = () => {
   const navigation = useNavigation();
+  const { t } = useTranslation();
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -35,6 +37,21 @@ export const InvoicesPaymentsScreen: React.FC = () => {
         <View style={styles.cardBody}>
           <Text style={styles.cardTitle}>My invoices</Text>
           <Text style={styles.cardSub}>Sales invoices, status, and pay online</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={22} color={Colors.TEXT_SECONDARY} />
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.card}
+        onPress={() => (navigation as { navigate: (n: string) => void }).navigate('CustomerDeliveryNotes')}
+        activeOpacity={0.85}
+      >
+        <View style={[styles.cardIcon, { backgroundColor: 'rgba(25, 118, 210, 0.1)' }]}>
+          <Ionicons name="cube-outline" size={28} color="#1976D2" />
+        </View>
+        <View style={styles.cardBody}>
+          <Text style={styles.cardTitle}>{t('profile.myDeliveryNotes')}</Text>
+          <Text style={styles.cardSub}>{t('profile.myDeliveryNotesHint')}</Text>
         </View>
         <Ionicons name="chevron-forward" size={22} color={Colors.TEXT_SECONDARY} />
       </TouchableOpacity>

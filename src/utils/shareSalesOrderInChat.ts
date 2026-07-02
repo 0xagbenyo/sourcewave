@@ -7,6 +7,7 @@ import {
 } from '../services/ravenNativeApi';
 import { setPendingRavenDocLinkMessageMerge } from './ravenDocLinkMessageMergeBridge';
 import { confirmSalesOrderShareable } from './salesOrderShareGuard';
+import { markSalesOrderSharedLocally } from './salesOrderShareMarks';
 import type { TFunction } from 'i18next';
 import { getERPNextClient } from '../services/erpnext';
 
@@ -37,6 +38,55 @@ export async function resolveRavenChannelForSupplierShare(opts: {
 
   const created = await createDirectMessageChannel(peer);
   return String(created || '').trim();
+}
+
+/** Build a short caption for a sales order share message. */
+export function buildSalesOrderShareCaption(
+  doc: Record<string, unknown>,
+  fallbackName: string
+): string {
+  const name = String(doc?.name || fallbackName).trim();
+  const gt = Number(doc.grand_total) || 0;
+  const date = doc.transaction_date ? String(doc.transaction_date) : '';
+  const parts = [name];
+  if (gt > 0) parts.push(`GH₵${gt.toFixed(2)}`);
+  if (date) parts.push(date);
+  return parts.join(' · ');
+}
+
+/** Resolve or create a DM, then post the sales order link (for supplier profile share). */
+export async function shareSalesOrderToSupplierPeer(opts: {
+  salesOrderName: string;
+  peerUserId: string;
+  workspaceId?: string;
+  sessionEmail?: string | null;
+  t: TFunction;
+  navigation?: { navigate: (name: string, params?: object) => void };
+}): Promise<{ channelId: string; peerUserId: string; workspaceId: string }> {
+  const orderName = String(opts.salesOrderName || '').trim();
+  const peerUserId = String(opts.peerUserId || '').trim();
+  const workspaceId = String(opts.workspaceId || '').trim();
+  if (!orderName || !peerUserId) {
+    throw new Error('Sales order and supplier contact are required.');
+  }
+
+  const ok = await confirmSalesOrderShareable(orderName, opts.t, opts.navigation);
+  if (!ok) throw new Error('SALES_ORDER_NOT_SHAREABLE');
+
+  const raw = await getERPNextClient().getSalesOrder(orderName);
+  const caption = raw
+    ? buildSalesOrderShareCaption(raw as Record<string, unknown>, orderName)
+    : orderName;
+
+  const ch = await resolveRavenChannelForSupplierShare({
+    sessionEmail: opts.sessionEmail,
+    peerUserId,
+  });
+  if (!ch) throw new Error('Could not open chat with this supplier.');
+
+  await shareSalesOrderInRavenChat(ch, orderName, caption);
+  await markSalesOrderSharedLocally(orderName);
+  return { channelId: ch, peerUserId, workspaceId };
 }
 
 /** Post a Sales Order doc-link message in a Raven channel. */

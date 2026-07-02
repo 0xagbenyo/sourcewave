@@ -118,9 +118,7 @@ export const LoginScreen: React.FC = () => {
     <AuthScreenShell
       centered
       heroLogo={require('../assets/images/sourcewave logo.png')}
-      showBrandAboveHeroLogo
-      heroTitle={t('login.welcomeTitle')}
-      heroSubtitle={t('login.welcomeSubtitle')}
+      showBrandBelowHeroLogo
       footer={legalFooter}
     >
       <View style={styles.trustRow}>
@@ -172,6 +170,7 @@ export const LoginScreen: React.FC = () => {
       <AuthInlineSwitch
         prefix={t('login.noAccount')}
         action={t('login.signUp')}
+        actionColor={Colors.SHEIN_RED}
         onPress={() => navigation.navigate('RegisterConsent' as never)}
       />
 
