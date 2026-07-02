@@ -4,6 +4,8 @@ import {
   Text,
   StyleSheet,
   ScrollView,
+  KeyboardAvoidingView,
+  Platform,
   TouchableOpacity,
   TextInput,
   ActivityIndicator,
@@ -78,93 +80,100 @@ export const HowDidYouHearScreen: React.FC = () => {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <View style={styles.progressTrack}>
-        <View style={styles.progressFill} />
-      </View>
-
-      <View style={styles.topBar}>
-        <TouchableOpacity
-          style={styles.backBtn}
-          onPress={() => navigation.goBack()}
-          accessibilityRole="button"
-          accessibilityLabel={t('legal.back')}
-        >
-          <Ionicons name="chevron-back" size={24} color={Colors.BLACK} />
-        </TouchableOpacity>
-      </View>
-
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
       >
-        <Text style={styles.title}>{t('howDidYouHear.title')}</Text>
-        <Text style={styles.subtitle}>{t('howDidYouHear.subtitle')}</Text>
+        <View style={styles.progressTrack}>
+          <View style={styles.progressFill} />
+        </View>
 
-        {loading ? (
-          <View style={styles.loadingWrap}>
-            <ActivityIndicator color={Colors.WINE} />
-          </View>
-        ) : (
-          <View style={styles.optionsWrap}>
-            {sources.map((src) => {
-              const active = selected === src;
-              return (
-                <TouchableOpacity
-                  key={src}
-                  style={[styles.option, active && styles.optionActive]}
-                  onPress={() => setSelected(src)}
-                  activeOpacity={0.8}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: active }}
-                >
-                  <Text style={[styles.optionText, active && styles.optionTextActive]}>
-                    {src}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+        <View style={styles.topBar}>
+          <TouchableOpacity
+            style={styles.backBtn}
+            onPress={() => navigation.goBack()}
+            accessibilityRole="button"
+            accessibilityLabel={t('legal.back')}
+          >
+            <Ionicons name="chevron-back" size={24} color={Colors.BLACK} />
+          </TouchableOpacity>
+        </View>
 
-            <TouchableOpacity
-              style={[styles.option, isOther && styles.optionActive]}
-              onPress={() => setSelected(OTHER_ID)}
-              activeOpacity={0.8}
-              accessibilityRole="button"
-              accessibilityState={{ selected: isOther }}
-            >
-              <Text style={[styles.optionText, isOther && styles.optionTextActive]}>
-                {t('howDidYouHear.other')}
-              </Text>
-            </TouchableOpacity>
-
-            {isOther ? (
-              <TextInput
-                style={styles.otherInput}
-                value={otherText}
-                onChangeText={setOtherText}
-                placeholder={t('howDidYouHear.otherPlaceholder')}
-                placeholderTextColor={Colors.TEXT_DISABLED}
-                autoFocus
-              />
-            ) : null}
-          </View>
-        )}
-      </ScrollView>
-
-      <View style={styles.footer}>
-        <TouchableOpacity
-          style={[styles.continueBtn, !canContinue && styles.continueBtnDisabled]}
-          disabled={!canContinue}
-          onPress={handleContinue}
-          accessibilityRole="button"
-          accessibilityState={{ disabled: !canContinue }}
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
         >
-          <Text style={[styles.continueText, !canContinue && styles.continueTextDisabled]}>
-            {t('howDidYouHear.continue')}
-          </Text>
-        </TouchableOpacity>
-      </View>
+          <Text style={styles.title}>{t('howDidYouHear.title')}</Text>
+          <Text style={styles.subtitle}>{t('howDidYouHear.subtitle')}</Text>
+
+          {loading ? (
+            <View style={styles.loadingWrap}>
+              <ActivityIndicator color={Colors.WINE} />
+            </View>
+          ) : (
+            <View style={styles.optionsWrap}>
+              {sources.map((src) => {
+                const active = selected === src;
+                return (
+                  <TouchableOpacity
+                    key={src}
+                    style={[styles.option, active && styles.optionActive]}
+                    onPress={() => setSelected(src)}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                  >
+                    <Text style={[styles.optionText, active && styles.optionTextActive]}>
+                      {src}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+
+              <TouchableOpacity
+                style={[styles.option, isOther && styles.optionActive]}
+                onPress={() => setSelected(OTHER_ID)}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityState={{ selected: isOther }}
+              >
+                <Text style={[styles.optionText, isOther && styles.optionTextActive]}>
+                  {t('howDidYouHear.other')}
+                </Text>
+              </TouchableOpacity>
+
+              {isOther ? (
+                <TextInput
+                  style={styles.otherInput}
+                  value={otherText}
+                  onChangeText={setOtherText}
+                  placeholder={t('howDidYouHear.otherPlaceholder')}
+                  placeholderTextColor={Colors.TEXT_DISABLED}
+                  autoFocus
+                />
+              ) : null}
+            </View>
+          )}
+        </ScrollView>
+
+        <View style={styles.footer}>
+          <TouchableOpacity
+            style={[styles.continueBtn, !canContinue && styles.continueBtnDisabled]}
+            disabled={!canContinue}
+            onPress={handleContinue}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !canContinue }}
+          >
+            <Text style={[styles.continueText, !canContinue && styles.continueTextDisabled]}>
+              {t('howDidYouHear.continue')}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
@@ -173,6 +182,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.BACKGROUND,
+  },
+  flex: {
+    flex: 1,
   },
   progressTrack: {
     height: 4,

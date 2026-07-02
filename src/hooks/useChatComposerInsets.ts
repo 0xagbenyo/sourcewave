@@ -2,7 +2,11 @@ import { useMemo } from 'react';
 import { Platform } from 'react-native';
 import { useKeyboardInsets } from './useKeyboardOpen';
 
-const COMPOSER_BOTTOM_PAD = 8;
+const COMPOSER_BOTTOM_PAD = Platform.select({
+  android: 32,
+  ios: 21,
+  default: 8,
+});
 /** Space between the composer input and the soft keyboard when open. */
 const KEYBOARD_GAP = 5;
 

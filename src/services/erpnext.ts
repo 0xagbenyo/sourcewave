@@ -1891,6 +1891,8 @@ class ERPNextClient {
     email?: string;
     mobile_no?: string;
     source: string;
+    utm_source?: string;
+    utm_content?: string;
   }): Promise<any> {
     const first = String(args.first_name || '').trim();
     const last = String(args.last_name || '').trim();
@@ -1912,6 +1914,13 @@ class ERPNextClient {
 
     const source = String(args.source || '').trim();
     if (source) payload.source = source;
+
+    // Optional UTM fields: favor explicit utm_source and utm_content when provided
+    const utmSource = String(args.utm_source || '').trim();
+    if (utmSource) payload.utm_source = utmSource;
+
+    const utmContent = String(args.utm_content || '').trim();
+    if (utmContent) payload.utm_content = utmContent;
 
     return this.createResourceDoc('Lead', payload);
   }

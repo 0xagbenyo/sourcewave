@@ -81,8 +81,11 @@ export const SubscriptionScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const { user } = useUserSession();
   const { subscription, isActive, isLoading, refresh } = useSubscription();
+  const visibleSubscriptionPlans = SOURCEWAVE_SUBSCRIPTION_PLANS.filter((plan) => !plan.isTestPlan);
 
-  const [selectedPlanId, setSelectedPlanId] = useState<SubscriptionPlanId>(DEFAULT_SUBSCRIPTION_PLAN_ID);
+  const [selectedPlanId, setSelectedPlanId] = useState<SubscriptionPlanId>(() =>
+    visibleSubscriptionPlans[0]?.id ?? DEFAULT_SUBSCRIPTION_PLAN_ID
+  );
   const [selectedPayment, setSelectedPayment] = useState<'mtn' | 'telecel' | 'card' | null>(null);
   const [paymentNumber, setPaymentNumber] = useState('');
   const [paying, setPaying] = useState(false);
@@ -116,7 +119,17 @@ export const SubscriptionScreen: React.FC = () => {
     amountGhs: number;
   } | null> | null>(null);
 
-  const selectedPlan = SOURCEWAVE_SUBSCRIPTION_PLANS.find((p) => p.id === selectedPlanId)!;
+  const selectedPlan =
+    visibleSubscriptionPlans.find((p) => p.id === selectedPlanId) ??
+    visibleSubscriptionPlans[0] ??
+    SOURCEWAVE_SUBSCRIPTION_PLANS.find((p) => p.id === selectedPlanId)!;
+
+  useEffect(() => {
+    if (visibleSubscriptionPlans.some((plan) => plan.id === selectedPlanId)) return;
+    if (visibleSubscriptionPlans[0]) {
+      setSelectedPlanId(visibleSubscriptionPlans[0].id);
+    }
+  }, [selectedPlanId, visibleSubscriptionPlans]);
 
   const checkoutPriceGhs = appliedPromo?.finalPriceGhs ?? selectedPlan.priceGhs;
   const prevPlanIdRef = useRef(selectedPlanId);
@@ -648,10 +661,10 @@ export const SubscriptionScreen: React.FC = () => {
 
               <Text style={styles.sectionLabel}>{t('subscriptionPage.sectionPlan')}</Text>
               <View style={styles.group}>
-                {SOURCEWAVE_SUBSCRIPTION_PLANS.map((plan, index) => {
+                {visibleSubscriptionPlans.map((plan, index) => {
                   const selected = plan.id === selectedPlanId;
                   const totalSaved = getPlanTotalSavingsGhs(plan);
-                  const isLast = index === SOURCEWAVE_SUBSCRIPTION_PLANS.length - 1;
+                  const isLast = index === visibleSubscriptionPlans.length - 1;
                   return (
                     <TouchableOpacity
                       key={plan.id}
@@ -670,24 +683,17 @@ export const SubscriptionScreen: React.FC = () => {
                           <Text style={[styles.rowTitle, selected && styles.rowTitleSelected]}>
                             {plan.durationLabel}
                           </Text>
-                          {plan.isTestPlan ? (
-                            <View style={styles.tagPill}>
-                              <Text style={styles.tagPillText}>{t('subscriptionPage.testPlanBadge')}</Text>
-                            </View>
-                          ) : null}
                           {plan.isBestValue ? (
                             <View style={[styles.tagPill, styles.tagPillBest]}>
                               <Text style={styles.tagPillText}>{t('subscriptionPage.bestValue')}</Text>
                             </View>
                           ) : null}
                         </View>
-                        {!plan.isTestPlan ? (
-                          <Text style={styles.rowSubtitle}>
-                            {t('subscriptionPage.planPerMonth', {
-                              amount: formatSubscriptionMonthlyRate(plan.monthlyRateGhs),
-                            })}
-                          </Text>
-                        ) : null}
+                        <Text style={styles.rowSubtitle}>
+                          {t('subscriptionPage.planPerMonth', {
+                            amount: formatSubscriptionMonthlyRate(plan.monthlyRateGhs),
+                          })}
+                        </Text>
                         {plan.savingsPercent ? (
                           <Text style={styles.rowMeta}>
                             {t('subscriptionPage.planSave', { percent: plan.savingsPercent })}
@@ -695,7 +701,7 @@ export const SubscriptionScreen: React.FC = () => {
                               ? ` · ${t('subscriptionPage.planSaveAmount', { amount: formatGhanaCedis(totalSaved) })}`
                               : ''}
                           </Text>
-                        ) : plan.isTestPlan ? null : (
+                        ) : (
                           <Text style={styles.rowMeta}>{t('subscriptionPage.planBaseline')}</Text>
                         )}
                       </View>

@@ -106,7 +106,7 @@ export const RegisterScreen: React.FC = () => {
     ? t('howDidYouHear.other')
     : sourceValue || t('register.sourcePlaceholder');
 
-  // "Other" always maps to the fixed "Content" Lead Source (no new sources created).
+  // "Other" keeps the fixed "Content" Lead Source for Lead.source, but stores the free-text value in utm_content.
   const resolvedSource = isOtherSource ? OTHER_LEAD_SOURCE : sourceValue.trim();
 
   const createSignupLead = useCallback(
@@ -125,13 +125,17 @@ export const RegisterScreen: React.FC = () => {
           lead_name: fullName || firstNameVal || emailId,
           email: emailId,
           mobile_no: mobile,
-          source: resolvedSource,
+          // Keep existing Lead.source semantics: custom "Other" maps to a fixed Lead Source,
+          // but put non-custom (predefined) selections into utm_source for attribution.
+          source: isOtherSource ? OTHER_LEAD_SOURCE : resolvedSource,
+          utm_source: isOtherSource ? undefined : resolvedSource,
+          utm_content: isOtherSource ? otherSource.trim() : undefined,
         });
       } catch (leadError) {
         console.warn('Lead creation skipped or failed:', leadError);
       }
     },
-    [resolvedSource]
+    [isOtherSource, otherSource, resolvedSource]
   );
 
   const validateEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
