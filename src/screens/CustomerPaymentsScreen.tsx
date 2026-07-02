@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
@@ -30,6 +31,7 @@ import type { RootStackParamList } from '../types';
 
 export const CustomerPaymentsScreen: React.FC = () => {
   const navigation = useNavigation();
+  const { t } = useTranslation();
   const route = useRoute();
   const salesInvoiceName = String(
     (route.params as RootStackParamList['CustomerPayments'] | undefined)?.salesInvoiceName ?? ''
@@ -52,7 +54,7 @@ export const CustomerPaymentsScreen: React.FC = () => {
     const cid = customerId.trim();
     if (!cid && !salesInvoiceName) {
       setRows([]);
-      setError(cidLoading ? null : 'No customer linked to this account.');
+      setError(cidLoading ? null : t('customerPayments.noCustomer'));
       setLoading(false);
       setRefreshing(false);
       return;
@@ -71,13 +73,13 @@ export const CustomerPaymentsScreen: React.FC = () => {
         : await client.listPaymentEntriesForCustomer(cid, opts);
       setRows(data);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Could not load payments');
+      setError(e instanceof Error ? e.message : t('customerPayments.loadFailed'));
       setRows([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [customerId, cidLoading, appliedFrom, appliedTo, salesInvoiceName]);
+  }, [customerId, cidLoading, appliedFrom, appliedTo, salesInvoiceName, t]);
 
   useEffect(() => {
     if (cidLoading && !salesInvoiceName) {
@@ -156,9 +158,11 @@ export const CustomerPaymentsScreen: React.FC = () => {
           <Ionicons name="chevron-back" size={24} color={Colors.BLACK} />
         </TouchableOpacity>
         <View style={styles.headerText}>
-          <Text style={styles.title}>Payment history</Text>
+          <Text style={styles.title}>{t('customerPayments.title')}</Text>
           <Text style={styles.subtitle}>
-            {salesInvoiceName ? `Payments for ${salesInvoiceName}` : 'All payments on your account'}
+            {salesInvoiceName
+              ? t('customerPayments.forInvoice', { name: salesInvoiceName })
+              : t('customerPayments.allOnAccount')}
           </Text>
         </View>
       </View>
@@ -166,36 +170,38 @@ export const CustomerPaymentsScreen: React.FC = () => {
       {salesInvoiceName ? (
         <View style={styles.focusStrip}>
           <View style={styles.focusStripText}>
-            <Text style={styles.focusStripLabel}>Filtered by invoice</Text>
+            <Text style={styles.focusStripLabel}>{t('customerPayments.filteredByInvoice')}</Text>
             <Text style={styles.focusStripName} numberOfLines={1}>
               {salesInvoiceName}
             </Text>
           </View>
           <TouchableOpacity onPress={clearInvoiceFilter} hitSlop={12}>
-            <Text style={styles.focusStripClear}>Show all</Text>
+            <Text style={styles.focusStripClear}>{t('customerPayments.showAll')}</Text>
           </TouchableOpacity>
         </View>
       ) : null}
 
       <View style={styles.filterCard}>
         <TouchableOpacity style={styles.filterHead} onPress={() => setFiltersOpen((o) => !o)} activeOpacity={0.75}>
-          <Text style={styles.filterHeadTitle}>Date range</Text>
+          <Text style={styles.filterHeadTitle}>{t('customerPayments.dateRange')}</Text>
           <Ionicons name={filtersOpen ? 'chevron-up' : 'chevron-down'} size={20} color={Colors.TEXT_SECONDARY} />
         </TouchableOpacity>
         {!filtersOpen ? (
           <Text style={styles.filterSummary}>
-            {appliedFrom || appliedTo ? `${appliedFrom || 'Any'} → ${appliedTo || 'Any'}` : 'All dates'}
+            {appliedFrom || appliedTo
+              ? `${appliedFrom || t('customerPayments.any')} → ${appliedTo || t('customerPayments.any')}`
+              : t('customerPayments.allDates')}
           </Text>
         ) : (
           <View style={styles.filterBody}>
             <View style={styles.dateRow}>
               <TouchableOpacity style={styles.dateField} onPress={() => setFromPickerOpen(true)} activeOpacity={0.7}>
-                <Text style={styles.dateCap}>From</Text>
-                <Text style={styles.dateVal}>{fromDate ? toYmd(fromDate) : 'Any'}</Text>
+                <Text style={styles.dateCap}>{t('customerPayments.from')}</Text>
+                <Text style={styles.dateVal}>{fromDate ? toYmd(fromDate) : t('customerPayments.any')}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.dateField} onPress={() => setToPickerOpen(true)} activeOpacity={0.7}>
-                <Text style={styles.dateCap}>To</Text>
-                <Text style={styles.dateVal}>{toDate ? toYmd(toDate) : 'Any'}</Text>
+                <Text style={styles.dateCap}>{t('customerPayments.to')}</Text>
+                <Text style={styles.dateVal}>{toDate ? toYmd(toDate) : t('customerPayments.any')}</Text>
               </TouchableOpacity>
             </View>
             {fromPickerOpen ? (
@@ -234,11 +240,11 @@ export const CustomerPaymentsScreen: React.FC = () => {
                   setToPickerOpen(false);
                 }}
               >
-                <Text style={styles.iosDoneText}>Done</Text>
+                <Text style={styles.iosDoneText}>{t('customerPayments.done')}</Text>
               </TouchableOpacity>
             ) : null}
             <TouchableOpacity style={styles.applyBtn} onPress={applyFilters} activeOpacity={0.85}>
-              <Text style={styles.applyBtnText}>Apply</Text>
+              <Text style={styles.applyBtnText}>{t('customerPayments.apply')}</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -250,9 +256,7 @@ export const CustomerPaymentsScreen: React.FC = () => {
         </View>
       ) : null}
 
-      <Text style={styles.meta}>
-        {rows.length} payment{rows.length !== 1 ? 's' : ''}
-      </Text>
+      <Text style={styles.meta}>{t('customerPayments.count', { count: rows.length })}</Text>
 
       {loading && !refreshing ? (
         <View style={styles.center}>
@@ -269,11 +273,11 @@ export const CustomerPaymentsScreen: React.FC = () => {
             !loading ? (
               <View style={styles.emptyWrap}>
                 <Ionicons name="card-outline" size={40} color={Colors.TEXT_SECONDARY} />
-                <Text style={styles.emptyTitle}>No payments</Text>
+                <Text style={styles.emptyTitle}>{t('customerPayments.emptyTitle')}</Text>
                 <Text style={styles.emptySub}>
                   {salesInvoiceName
-                    ? 'No payments recorded for this invoice yet.'
-                    : 'Payments against your invoices will appear here.'}
+                    ? t('customerPayments.emptyInvoiceSub')
+                    : t('customerPayments.emptyAllSub')}
                 </Text>
               </View>
             ) : null

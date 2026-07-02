@@ -36,7 +36,7 @@ export const SupplierChatListScreen: React.FC = () => {
   if (!user?.email) {
     return (
       <View style={styles.root}>
-        <SourceWaveStackHeader title="Messages" subtitle="In-app" onBack={() => navigation.goBack()} />
+        <SourceWaveStackHeader title={t('common.messages')} subtitle={t('common.inApp')} onBack={() => navigation.goBack()} />
         <SafeAreaView style={styles.bodySafe} edges={['bottom']}>
           <View style={styles.emptyBlock}>
             <Ionicons name="chatbubbles-outline" size={48} color={Colors.TEXT_SECONDARY} />
@@ -55,7 +55,7 @@ export const SupplierChatListScreen: React.FC = () => {
     return (
       <View style={styles.root}>
         <SourceWaveStackHeader
-          title="Messages"
+          title={t('common.messages')}
           onBack={() => navigation.goBack()}
         />
         <SafeAreaView style={styles.bodySafe} edges={['bottom']}>
@@ -71,7 +71,7 @@ export const SupplierChatListScreen: React.FC = () => {
     return (
       <View style={styles.root}>
         <SourceWaveStackHeader
-          title="Messages"
+          title={t('common.messages')}
           onBack={() => navigation.goBack()}
         />
         <SafeAreaView style={styles.bodySafe} edges={['bottom']}>
@@ -85,7 +85,7 @@ export const SupplierChatListScreen: React.FC = () => {
 
   return (
     <View style={styles.root}>
-      <SourceWaveStackHeader title="Messages" subtitle="In-app" onBack={() => navigation.goBack()} />
+      <SourceWaveStackHeader title={t('common.messages')} subtitle={t('common.inApp')} onBack={() => navigation.goBack()} />
       <SafeAreaView style={styles.bodySafe} edges={['bottom']}>
         <NativeRavenChat />
       </SafeAreaView>

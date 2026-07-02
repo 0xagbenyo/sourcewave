@@ -11,6 +11,7 @@ import {
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { Colors } from '../constants/colors';
 
 type Props = {
@@ -31,6 +32,7 @@ export const SupplierQuotationPaymentModal: React.FC<Props> = ({
   onClose,
   onSubmit,
 }) => {
+  const { t } = useTranslation();
   const [text, setText] = useState('');
 
   useEffect(() => {
@@ -56,16 +58,21 @@ export const SupplierQuotationPaymentModal: React.FC<Props> = ({
         >
           <View style={styles.sheet}>
             <View style={styles.head}>
-              <Text style={styles.title}>Record payment</Text>
+              <Text style={styles.title}>{t('invoicePayment.recordTitle')}</Text>
               <TouchableOpacity onPress={onClose} hitSlop={12} disabled={loading}>
                 <Ionicons name="close" size={24} color="#1C1C1E" />
               </TouchableOpacity>
             </View>
             <Text style={styles.caption}>
-              Outstanding up to {currency}{' '}
-              {maxAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              {t('invoicePayment.recordOutstandingUpTo', {
+                currency,
+                amount: maxAmount.toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                }),
+              })}
             </Text>
-            <Text style={styles.label}>Amount paid</Text>
+            <Text style={styles.label}>{t('invoicePayment.recordAmountPaid')}</Text>
             <TextInput
               style={styles.input}
               value={text}
@@ -83,7 +90,7 @@ export const SupplierQuotationPaymentModal: React.FC<Props> = ({
               {loading ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
-                <Text style={styles.primaryText}>Submit payment</Text>
+                <Text style={styles.primaryText}>{t('invoicePayment.recordSubmit')}</Text>
               )}
             </TouchableOpacity>
           </View>

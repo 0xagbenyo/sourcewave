@@ -11,6 +11,7 @@ import { appAlert as Alert } from '../../services/appAlert';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { Colors } from '../../constants/colors';
 import { Spacing } from '../../constants/spacing';
 import { sharePickerFlatStyles as flat } from '../../constants/sharePickerFlatUi';
@@ -60,53 +61,6 @@ function resolvePreselectedNames(params: ShareRoute['params']): string[] {
   return single ? [single] : [];
 }
 
-const COPY: Record<
-  ErpDocShareKind,
-  {
-    title: string;
-    pickSubtitle: string;
-    entryLabel: string;
-    screenTitle: string;
-    heroTitle: string;
-    heroHint: string;
-    emptyList: string;
-    noSupplier: string;
-    docSingular: string;
-    docPlural: string;
-    pickFirst: string;
-    sharedBody: string;
-  }
-> = {
-  quotation: {
-    title: 'Share quotation',
-    pickSubtitle: 'Select one or more quotations to send in chat',
-    entryLabel: 'Share saved quotations in chat',
-    screenTitle: 'Send quotation',
-    heroTitle: 'Share quotation',
-    heroHint: 'Choose who should receive the links in chat.',
-    emptyList: 'No quotations to share yet. Create one from the New tab.',
-    noSupplier: 'Your account must be linked to a Supplier to share quotations.',
-    docSingular: 'quotation',
-    docPlural: 'quotations',
-    pickFirst: 'Select at least one quotation.',
-    sharedBody: 'Your quotation links were sent in that conversation.',
-  },
-  invoice: {
-    title: 'Share invoice',
-    pickSubtitle: 'Select one or more invoices to send in chat',
-    entryLabel: 'Share saved invoices in chat',
-    screenTitle: 'Send invoice',
-    heroTitle: 'Share invoice',
-    heroHint: 'Choose who should receive the links in chat.',
-    emptyList: 'No invoices to share yet. Invoices appear here once raised from your quotations.',
-    noSupplier: 'Your account must be linked to a Supplier to share invoices.',
-    docSingular: 'invoice',
-    docPlural: 'invoices',
-    pickFirst: 'Select at least one invoice.',
-    sharedBody: 'Your invoice links were sent in that conversation.',
-  },
-};
-
 function listCaption(kind: ErpDocShareKind, row: DocRow): string {
   const rec = row as Record<string, unknown>;
   return kind === 'invoice' ? salesInvoiceListCaption(rec) : supplierQuotationListCaption(rec);
@@ -115,12 +69,29 @@ function listCaption(kind: ErpDocShareKind, row: DocRow): string {
 export const SupplierErpDocShareScreen: React.FC = () => {
   const navigation = useNavigation();
   const route = useRoute<ShareRoute>();
+  const { t } = useTranslation();
   const { user } = useUserSession();
   const { supplierDocId, loading: sidLoading } = useSupplierDocumentId();
 
   const kind: ErpDocShareKind =
     route.params?.kind ?? (route.name === 'SupplierInvoiceShare' ? 'invoice' : 'quotation');
-  const copy = COPY[kind];
+  const copyNs = kind === 'invoice' ? 'supplierErpShare.invoice' : 'supplierErpShare.quotation';
+  const copy = useMemo(
+    () => ({
+      title: t(`${copyNs}.title`),
+      pickSubtitle: t(`${copyNs}.pickSubtitle`),
+      screenTitle: t(`${copyNs}.screenTitle`),
+      heroTitle: t(`${copyNs}.heroTitle`),
+      heroHint: t(`${copyNs}.heroHint`),
+      emptyList: t(`${copyNs}.emptyList`),
+      noSupplier: t(`${copyNs}.noSupplier`),
+      pickFirst: t(`${copyNs}.pickFirst`),
+      sharedBody: t(`${copyNs}.sharedBody`),
+      loadFailed: t(`${copyNs}.loadFailed`),
+      sendFailed: t(`${copyNs}.sendFailed`),
+    }),
+    [t, copyNs]
+  );
 
   const preselectedNames = useMemo(() => resolvePreselectedNames(route.params), [route.params]);
   const skipList = preselectedNames.length > 0;
@@ -181,12 +152,12 @@ export const SupplierErpDocShareScreen: React.FC = () => {
         );
       }
     } catch (e: unknown) {
-      Alert.error(copy.title, userFacingError(e, `Could not load ${copy.docPlural}.`));
+      Alert.error(copy.title, userFacingError(e, copy.loadFailed));
       setDocuments([]);
     } finally {
       setLoadingDocs(false);
     }
-  }, [supplierDocId, kind, copy.title, copy.docPlural]);
+  }, [supplierDocId, kind, copy.title, copy.loadFailed]);
 
   const loadChannels = useCallback(async () => {
     setChannelsLoading(true);
@@ -236,19 +207,19 @@ export const SupplierErpDocShareScreen: React.FC = () => {
       if (row) return listCaption(kind, row);
       return selectedNames[0]!;
     }
-    return `${selectedNames.length} ${selectedNames.length === 1 ? copy.docSingular : copy.docPlural}`;
-  }, [selectedNames, documents, kind, copy.docSingular, copy.docPlural]);
+    return t(`${copyNs}.heroCount`, { count: selectedNames.length });
+  }, [selectedNames, documents, kind, t, copyNs]);
 
   const shareDocuments = useCallback(async () => {
     if (shareSentRef.current || sharing) return;
     const names = selectedNames.map((n) => n.trim()).filter(Boolean);
     const chId = selectedChannelId.trim();
     if (!names.length) {
-      Alert.alert('Share', copy.pickFirst);
+      Alert.alert(t('supplierErpShare.share'), copy.pickFirst);
       return;
     }
     if (!chId) {
-      Alert.alert('Share', 'Select one person to send to.');
+      Alert.alert(t('supplierErpShare.share'), t('supplierErpShare.selectOnePerson'));
       return;
     }
     setSharing(true);
@@ -266,15 +237,15 @@ export const SupplierErpDocShareScreen: React.FC = () => {
         sessionEmail: user?.email,
         channelId: chId,
         channelRows: channels,
-        title: 'Shared',
+        title: t('supplierErpShare.sharedTitle'),
         body:
           names.length > 1
-            ? `${names.length} ${copy.docPlural} were sent in that conversation.`
+            ? t(`${copyNs}.sentMany`, { count: names.length })
             : copy.sharedBody,
       });
     } catch (e: unknown) {
       shareSentRef.current = false;
-      Alert.error('Share', userFacingError(e, `Could not send the ${copy.docSingular}.`));
+      Alert.error(t('supplierErpShare.share'), userFacingError(e, copy.sendFailed));
     } finally {
       setSharing(false);
     }
@@ -286,10 +257,11 @@ export const SupplierErpDocShareScreen: React.FC = () => {
     channels,
     navigation,
     kind,
+    t,
+    copyNs,
     copy.pickFirst,
     copy.sharedBody,
-    copy.docPlural,
-    copy.docSingular,
+    copy.sendFailed,
   ]);
 
   const leaveShareStep = () => {
@@ -302,14 +274,16 @@ export const SupplierErpDocShareScreen: React.FC = () => {
 
   const onContinueFromList = () => {
     if (selectedNames.length === 0) {
-      Alert.alert('Share', copy.pickFirst);
+      Alert.alert(t('supplierErpShare.share'), copy.pickFirst);
       return;
     }
     setShowShareStep(true);
   };
 
   const sendLabel =
-    selectedNames.length > 1 ? `Send (${selectedNames.length})` : 'Send';
+    selectedNames.length > 1
+      ? t('supplierErpShare.sendN', { count: selectedNames.length })
+      : t('supplierErpShare.send');
 
   if (showShareStep && selectedNames.length > 0) {
     return (
@@ -329,12 +303,12 @@ export const SupplierErpDocShareScreen: React.FC = () => {
         onSend={() => void shareDocuments()}
         sharing={sharing}
         userEmail={user?.email}
-        skipLabel="Cancel"
+        skipLabel={t('supplierErpShare.cancel')}
         sendLabel={sendLabel}
-        emptyText="No direct messages found. Start a one-to-one conversation in Messages first."
-        loadingText="Loading your conversations…"
-        searchPlaceholder="Search people"
-        filterEmptyText="No people match your search."
+        emptyText={t('supplierErpShare.emptyDm')}
+        loadingText={t('supplierErpShare.loadingConvos')}
+        searchPlaceholder={t('supplierErpShare.searchPeople')}
+        filterEmptyText={t('supplierErpShare.filterEmpty')}
       />
     );
   }
@@ -352,7 +326,7 @@ export const SupplierErpDocShareScreen: React.FC = () => {
       </View>
       <Text style={flat.topSubtitle}>{copy.pickSubtitle}</Text>
       {selectedNames.length > 0 ? (
-        <Text style={flat.pickListHint}>{selectedNames.length} selected</Text>
+        <Text style={flat.pickListHint}>{t('supplierErpShare.selectedCount', { count: selectedNames.length })}</Text>
       ) : null}
       {sidLoading || loadingDocs ? (
         <View style={flat.center}>
@@ -409,8 +383,8 @@ export const SupplierErpDocShareScreen: React.FC = () => {
         >
           <Text style={flat.pickListContinueText}>
             {selectedNames.length > 0
-              ? `Continue (${selectedNames.length})`
-              : 'Continue'}
+              ? t('supplierErpShare.continueN', { count: selectedNames.length })
+              : t('supplierErpShare.continue')}
           </Text>
         </TouchableOpacity>
       </View>

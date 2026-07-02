@@ -273,10 +273,10 @@ export const OrderDetailsScreen: React.FC = () => {
     if (!order) return undefined;
     const facts: { label: string; value: string }[] = [];
     if (order.trackingNumber) {
-      facts.push({ label: 'Tracking', value: order.trackingNumber });
+      facts.push({ label: t('orderDetails.tracking'), value: order.trackingNumber });
     }
     return facts.length ? facts : undefined;
-  }, [order]);
+  }, [order, t]);
 
   const onEditOrder = useCallback(() => {
     if (!resolvedOrderId || isSupplierPortal) return;
@@ -416,7 +416,7 @@ export const OrderDetailsScreen: React.FC = () => {
               </ErpDocSection>
             ) : null}
 
-            <ErpDocSection title={`Items · ${order.items?.length ?? 0}`}>
+            <ErpDocSection title={t('common.itemsCount', { count: order.items?.length ?? 0 })}>
               {order.items?.length ? (
                 <ErpDocItemsList>
                   {order.items.map((item, idx) => {

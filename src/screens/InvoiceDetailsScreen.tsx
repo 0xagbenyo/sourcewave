@@ -42,15 +42,17 @@ import { ERP_DOC_FLAT } from '../constants/erpDocFlatUi';
 
 type InvoiceTab = 'details' | 'payments';
 
-const INVOICE_TABS = [
-  { id: 'details' as const, label: 'Details' },
-  { id: 'payments' as const, label: 'Payments' },
-];
-
 export const InvoiceDetailsScreen: React.FC = () => {
   const navigation = useNavigation();
   const route = useRoute();
   const { t } = useTranslation();
+  const INVOICE_TABS = React.useMemo(
+    () => [
+      { id: 'details' as const, label: t('invoiceDetails.tabDetails') },
+      { id: 'payments' as const, label: t('invoiceDetails.tabPayments') },
+    ],
+    [t]
+  );
   const { user } = useUserSession();
   const isSupplierPortal = isSupplierPortalUser(user);
   const { invoiceId } = (route.params as { invoiceId?: string }) || {};
@@ -240,13 +242,13 @@ export const InvoiceDetailsScreen: React.FC = () => {
   return (
     <>
       <ErpDocumentPreviewLayout
-        screenTitle="Invoice"
+        screenTitle={t('invoiceDetails.screenTitle')}
         printDoctype="Sales Invoice"
         printDocName={invoice?.invoiceNumber || id}
         loading={loading}
         errorMessage={
           !loading && (error || !invoice)
-            ? error?.message || 'This invoice could not be found or you may not have access.'
+            ? error?.message || t('invoiceDetails.notFound')
             : null
         }
         onBack={() => (navigation as { goBack: () => void }).goBack()}
@@ -258,13 +260,13 @@ export const InvoiceDetailsScreen: React.FC = () => {
               statusLabel={invoice.status}
               statusColor={statusColor}
               amount={formatErpDocMoney(invoice.grandTotal)}
-              amountLabel="Total"
-              subtitle={dateLabel ? `Issued ${dateLabel}` : undefined}
+              amountLabel={t('invoiceDetails.total')}
+              subtitle={dateLabel ? t('invoiceDetails.issued', { date: dateLabel }) : undefined}
               facts={
                 canPay
-                  ? [{ label: 'Outstanding', value: formatErpDocMoney(outstanding!, currency) }]
+                  ? [{ label: t('invoiceDetails.outstanding'), value: formatErpDocMoney(outstanding!, currency) }]
                   : invoice.customer
-                    ? [{ label: 'Customer', value: invoice.customer }]
+                    ? [{ label: t('invoiceDetails.customer'), value: invoice.customer }]
                     : undefined
               }
               statusTrailing={
@@ -326,7 +328,7 @@ export const InvoiceDetailsScreen: React.FC = () => {
                     />
                   </ErpDocSection>
                 ) : null}
-                <ErpDocSection title={`Items · ${invoice.items?.length ?? 0}`}>
+                <ErpDocSection title={t('common.itemsCount', { count: invoice.items?.length ?? 0 })}>
                   {invoice.items?.length ? (
                     <ErpDocItemsList>
                       {invoice.items.map((item, index) => (
@@ -342,7 +344,7 @@ export const InvoiceDetailsScreen: React.FC = () => {
                       ))}
                     </ErpDocItemsList>
                   ) : (
-                    <ErpDocEmptyState title="No line items" />
+                    <ErpDocEmptyState title={t('common.noLineItems')} />
                   )}
                 </ErpDocSection>
               </>

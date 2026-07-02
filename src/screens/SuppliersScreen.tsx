@@ -186,8 +186,8 @@ export const SuppliersScreen: React.FC = () => {
   return (
     <View style={styles.root}>
       <SourceWaveStackHeader
-        title="Suppliers"
-        subtitle="Directory from your connected catalog"
+        title={t('tabs.suppliers')}
+        subtitle={t('suppliersList.directorySubtitle')}
         onBack={() => {
           if (navigation.canGoBack()) {
             navigation.goBack();
@@ -227,7 +227,7 @@ export const SuppliersScreen: React.FC = () => {
         {loading && combined.length === 0 ? (
           <View style={styles.centered}>
             <ActivityIndicator size="large" color={Colors.WINE} />
-            <Text style={styles.loadingLabel}>Loading suppliers…</Text>
+            <Text style={styles.loadingLabel}>{t('suppliersList.loading')}</Text>
           </View>
         ) : (
           <FlatList

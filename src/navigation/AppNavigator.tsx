@@ -9,6 +9,7 @@ import { LanguageSelectScreen } from '../screens/LanguageSelectScreen';
 import { OnboardingScreen } from '../screens/OnboardingScreen';
 import { LoginScreen } from '../screens/LoginScreen';
 import { RegisterScreen } from '../screens/RegisterScreen';
+import { HowDidYouHearScreen } from '../screens/HowDidYouHearScreen';
 import { ForgotPasswordScreen } from '../screens/ForgotPasswordScreen';
 import {
   LegalDocumentScreen,
@@ -51,7 +52,7 @@ import {
   STORAGE_APP_LANGUAGE,
   STORAGE_ONBOARDING_COMPLETE,
 } from '../constants/appPreferencesKeys';
-import { ensureChineseMachineLocale, applyEnglishLocale } from '../i18n/machineChineseLocale';
+import { applyChineseLocale, applyEnglishLocale } from '../i18n/machineChineseLocale';
 import { RootMainNavigator } from './RootMainNavigator';
 import { rootNavigationRef } from './rootNavigation';
 
@@ -68,6 +69,7 @@ const AuthNavigator = () => {
     >
       <AuthStack.Screen name="Login" component={LoginScreen} />
       <AuthStack.Screen name="RegisterConsent" component={RegisterConsentScreen} />
+      <AuthStack.Screen name="HowDidYouHear" component={HowDidYouHearScreen} />
       <AuthStack.Screen name="Register" component={RegisterScreen} />
       <AuthStack.Screen name="PrivacyPolicy" component={LegalDocumentScreen} />
       <AuthStack.Screen name="TermsAndConditions" component={LegalDocumentScreen} />
@@ -101,7 +103,7 @@ export const AppNavigator = () => {
         }
 
         if (lang === 'zh') {
-          await ensureChineseMachineLocale();
+          await applyChineseLocale();
         } else {
           await applyEnglishLocale();
         }

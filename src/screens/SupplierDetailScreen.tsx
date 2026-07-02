@@ -77,7 +77,7 @@ export const SupplierDetailScreen: React.FC = () => {
   if (loadingDoc) {
     return (
       <View style={styles.root}>
-        <SourceWaveStackHeader title="Supplier" subtitle="Loading…" onBack={() => navigation.goBack()} />
+        <SourceWaveStackHeader title={t('common.supplier')} subtitle={t('common.loading')} onBack={() => navigation.goBack()} />
         <SafeAreaView style={styles.safe} edges={['bottom']}>
           <View style={styles.loadingWrap}>
             <ActivityIndicator size="large" color={Colors.WINE} />
@@ -90,9 +90,9 @@ export const SupplierDetailScreen: React.FC = () => {
   if (!supplier) {
     return (
       <View style={styles.root}>
-        <SourceWaveStackHeader title="Supplier" onBack={() => navigation.goBack()} />
+        <SourceWaveStackHeader title={t('common.supplier')} onBack={() => navigation.goBack()} />
         <SafeAreaView style={styles.safe} edges={['bottom']}>
-          <Text style={styles.missing}>This supplier was not found in the catalog.</Text>
+          <Text style={styles.missing}>{t('supplierDetail.notFound')}</Text>
         </SafeAreaView>
       </View>
     );
@@ -101,7 +101,7 @@ export const SupplierDetailScreen: React.FC = () => {
   if (!user?.email) {
     return (
       <View style={styles.root}>
-        <SourceWaveStackHeader title="Supplier" onBack={() => navigation.goBack()} />
+        <SourceWaveStackHeader title={t('common.supplier')} onBack={() => navigation.goBack()} />
         <SafeAreaView style={[styles.safe, styles.gatePad]} edges={['bottom']}>
           <Text style={styles.gateTitle}>{t('suppliersPremium.signInTitle')}</Text>
           <Text style={styles.gateBody}>{t('suppliersPremium.signInBody')}</Text>
@@ -116,7 +116,7 @@ export const SupplierDetailScreen: React.FC = () => {
   if (subscriptionLoading) {
     return (
       <View style={styles.root}>
-        <SourceWaveStackHeader title="Supplier" onBack={() => navigation.goBack()} />
+        <SourceWaveStackHeader title={t('common.supplier')} onBack={() => navigation.goBack()} />
         <SafeAreaView style={styles.safe} edges={['bottom']}>
           <View style={styles.loadingWrap}>
             <ActivityIndicator size="large" color={Colors.WINE} />
@@ -129,7 +129,7 @@ export const SupplierDetailScreen: React.FC = () => {
   if (!isActive) {
     return (
       <View style={styles.root}>
-        <SourceWaveStackHeader title="Supplier" onBack={() => navigation.goBack()} />
+        <SourceWaveStackHeader title={t('common.supplier')} onBack={() => navigation.goBack()} />
         <SafeAreaView style={styles.safe} edges={['bottom']}>
           <View style={styles.loadingWrap}>
             <ActivityIndicator size="large" color={Colors.WINE} />
@@ -143,7 +143,7 @@ export const SupplierDetailScreen: React.FC = () => {
     setOpeningChat(true);
     try {
       if (!supplier.enabled) {
-        Alert.alert('Supplier disabled', 'This supplier is marked disabled and cannot be messaged.');
+        Alert.alert(t('supplierDetail.disabledTitle'), t('supplierDetail.disabledBody'));
         return;
       }
       const { isActive } = await refresh();
@@ -167,7 +167,7 @@ export const SupplierDetailScreen: React.FC = () => {
   return (
     <View style={styles.root}>
       <SourceWaveStackHeader
-        title="Supplier"
+        title={t('common.supplier')}
         subtitle={`${supplier.supplier_name} · ${supplier.country}`}
         onBack={() => navigation.goBack()}
       />
@@ -184,13 +184,13 @@ export const SupplierDetailScreen: React.FC = () => {
             <View style={styles.heroBadges}>
               <View style={[styles.pill, supplier.enabled ? styles.pillOn : styles.pillOff]}>
                 <Text style={[styles.pillText, !supplier.enabled && styles.pillTextOff]}>
-                  {supplier.enabled ? 'Enabled' : 'Disabled'}
+                  {supplier.enabled ? t('supplierDetail.enabled') : t('supplierDetail.disabled')}
                 </Text>
               </View>
               {supplier.is_transporter ? (
                 <View style={styles.pillNeutral}>
                   <Ionicons name="bus-outline" size={14} color={Colors.DARK_GRAY} />
-                  <Text style={styles.pillNeutralText}> Transporter</Text>
+                  <Text style={styles.pillNeutralText}> {t('supplierDetail.transporter')}</Text>
                 </View>
               ) : null}
             </View>
@@ -209,49 +209,49 @@ export const SupplierDetailScreen: React.FC = () => {
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Supplier type</Text>
+            <Text style={styles.sectionTitle}>{t('supplierDetail.sectionType')}</Text>
             <FieldRow label="supplier_type" value={supplier.supplier_type} />
             <FieldRow label="supplier_name" value={supplier.supplier_name} />
             <FieldRow label="supplier_group" value={supplier.supplier_group} />
             <FieldRow label="country" value={supplier.country} />
-            <FieldRow label="is_transporter" value={supplier.is_transporter ? 'Yes' : 'No'} />
+            <FieldRow label="is_transporter" value={supplier.is_transporter ? t('supplierDetail.yes') : t('supplierDetail.no')} />
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Defaults</Text>
+            <Text style={styles.sectionTitle}>{t('supplierDetail.sectionDefaults')}</Text>
             <FieldRow label="default_currency" value={dash(supplier.default_currency)} />
             <FieldRow label="default_bank_account" value={dash(supplier.default_bank_account)} />
             <FieldRow label="default_price_list" value={dash(supplier.default_price_list)} />
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>More information</Text>
+            <Text style={styles.sectionTitle}>{t('supplierDetail.sectionMore')}</Text>
             <Text style={styles.sectionHint}>supplier_details</Text>
             <Text style={styles.body}>{supplier.supplier_details}</Text>
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Contact & print</Text>
+            <Text style={styles.sectionTitle}>{t('supplierDetail.sectionContact')}</Text>
             <FieldRow label="website" value={dash(supplier.website)} />
             {supplier.website?.trim() ? (
               <TouchableOpacity onPress={openWebsite} style={styles.linkBtn}>
-                <Text style={styles.linkBtnText}>Open website</Text>
+                <Text style={styles.linkBtnText}>{t('supplierDetail.openWebsite')}</Text>
               </TouchableOpacity>
             ) : null}
             <FieldRow label="language" value={supplier.language} />
           </View>
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Customer numbers</Text>
+            <Text style={styles.sectionTitle}>{t('supplierDetail.sectionCustomerNumbers')}</Text>
             <Text style={styles.sectionHint}>customer_numbers</Text>
             {supplier.customer_numbers.length === 0 ? (
-              <Text style={styles.emptyTable}>No rows</Text>
+              <Text style={styles.emptyTable}>{t('supplierDetail.noRows')}</Text>
             ) : (
               supplier.customer_numbers.map((row, i) => (
                 <View key={`${row.company}-${row.customer_number}-${i}`} style={styles.cnRow}>
-                  <Text style={styles.cnHead}>Company</Text>
+                  <Text style={styles.cnHead}>{t('supplierDetail.company')}</Text>
                   <Text style={styles.cnVal}>{row.company}</Text>
-                  <Text style={[styles.cnHead, styles.cnHeadSecond]}>Customer number</Text>
+                  <Text style={[styles.cnHead, styles.cnHeadSecond]}>{t('supplierDetail.customerNumber')}</Text>
                   <Text style={styles.cnVal}>{row.customer_number}</Text>
                 </View>
               ))
@@ -260,16 +260,18 @@ export const SupplierDetailScreen: React.FC = () => {
 
           {supplier.markupNote ? (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>SourceWave pricing note</Text>
+              <Text style={styles.sectionTitle}>{t('supplierDetail.sectionPricingNote')}</Text>
               <Text style={styles.body}>{supplier.markupNote}</Text>
             </View>
           ) : null}
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>In-app chat</Text>
+            <Text style={styles.sectionTitle}>{t('supplierDetail.sectionInAppChat')}</Text>
             <Text style={styles.body}>
-              Supplier messaging opens in your browser on the supplier site. Sign in when prompted. Print language on
-              file: {supplier.language} ({supplier.chatLanguageLabel}).
+              {t('supplierDetail.inAppChatBody', {
+                language: supplier.language,
+                label: supplier.chatLanguageLabel,
+              })}
             </Text>
           </View>
         </ScrollView>
@@ -286,7 +288,7 @@ export const SupplierDetailScreen: React.FC = () => {
             ) : (
               <>
                 <Ionicons name="chatbubbles-outline" size={22} color={Colors.WHITE} />
-                <Text style={styles.ctaText}>Message as sourcing agent</Text>
+                <Text style={styles.ctaText}>{t('supplierDetail.messageAsAgent')}</Text>
               </>
             )}
           </TouchableOpacity>

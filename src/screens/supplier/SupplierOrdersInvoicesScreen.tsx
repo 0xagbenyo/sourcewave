@@ -18,6 +18,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Colors } from '../../constants/colors';
 import { Spacing } from '../../constants/spacing';
 import { useSupplierDocumentId } from '../../hooks/useSupplierDocumentId';
@@ -106,16 +108,16 @@ function salesInvoicePayKind(row: any): PayKind {
   return 'partial';
 }
 
-function salesInvoiceStatusLabel(row: any, kind: PayKind): string {
+function salesInvoiceStatusLabel(row: any, kind: PayKind, t: TFunction): string {
   const raw = String(row?.status ?? '').trim();
   if (raw) return raw;
   switch (kind) {
     case 'paid':
-      return 'Paid';
+      return t('supplierOrdersInvoices.statusPaid');
     case 'unpaid':
-      return 'Unpaid';
+      return t('supplierOrdersInvoices.statusUnpaid');
     case 'partial':
-      return 'Partly paid';
+      return t('supplierOrdersInvoices.statusPartlyPaid');
     default:
       return '—';
   }
@@ -130,18 +132,19 @@ function paymentEntryPayKind(row: any): PayKind {
   return 'neutral';
 }
 
-function paymentEntryStatusLabel(row: any, kind: PayKind): string {
+function paymentEntryStatusLabel(row: any, kind: PayKind, t: TFunction): string {
   const ds = Number(row?.docstatus);
-  if (ds === 2) return 'Cancelled';
-  if (ds === 0) return 'Draft';
+  if (ds === 2) return t('supplierOrdersInvoices.statusCancelled');
+  if (ds === 0) return t('supplierOrdersInvoices.statusDraft');
   const pt = String(row?.payment_type ?? '').trim();
   if (pt) return pt;
-  if (kind === 'paid') return 'Posted';
+  if (kind === 'paid') return t('supplierOrdersInvoices.statusPosted');
   return '—';
 }
 
 export const SupplierOrdersInvoicesScreen: React.FC = () => {
   const navigation = useNavigation();
+  const { t } = useTranslation();
   const { supplierDocId, loading: sidLoading, error: sidError } = useSupplierDocumentId();
   const [segment, setSegment] = useState<Segment>('si');
   const [rows, setRows] = useState<any[]>([]);
@@ -198,7 +201,7 @@ export const SupplierOrdersInvoicesScreen: React.FC = () => {
   const load = useCallback(async () => {
     if (!supplierDocId) {
       setRows([]);
-      setError(sidLoading ? null : sidError || 'No supplier linked to this login.');
+      setError(sidLoading ? null : sidError || t('supplierOrdersInvoices.noSupplierLinked'));
       setLoading(false);
       setRefreshing(false);
       return;
@@ -227,13 +230,13 @@ export const SupplierOrdersInvoicesScreen: React.FC = () => {
             });
       setRows(data);
     } catch (e: any) {
-      setError(e?.message || 'Could not load documents');
+      setError(e?.message || t('supplierOrdersInvoices.loadFailed'));
       setRows([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [supplierDocId, sidLoading, sidError, segment, appliedCustomerId, appliedFrom, appliedTo, paymentsForInvoice]);
+  }, [supplierDocId, sidLoading, sidError, segment, appliedCustomerId, appliedFrom, appliedTo, paymentsForInvoice, t]);
 
   useEffect(() => {
     if (sidLoading) {
@@ -310,10 +313,10 @@ export const SupplierOrdersInvoicesScreen: React.FC = () => {
     const parts: string[] = [];
     if (appliedCustomerId) parts.push(appliedCustomerLabel || appliedCustomerId);
     if (appliedFrom || appliedTo) {
-      parts.push(`${appliedFrom || '—'} to ${appliedTo || '—'}`);
+      parts.push(`${appliedFrom || '—'} ${t('supplierOrdersInvoices.to')} ${appliedTo || '—'}`);
     }
-    return parts.length ? parts.join(' · ') : 'No filters applied';
-  }, [appliedCustomerId, appliedCustomerLabel, appliedFrom, appliedTo]);
+    return parts.length ? parts.join(' · ') : t('supplierOrdersInvoices.noFilters');
+  }, [appliedCustomerId, appliedCustomerLabel, appliedFrom, appliedTo, t]);
 
   const Tab = ({ id, label }: { id: Segment; label: string }) => {
     const on = segment === id;
@@ -336,33 +339,33 @@ export const SupplierOrdersInvoicesScreen: React.FC = () => {
           onPress={() => setFiltersOpen((o) => !o)}
           activeOpacity={0.75}
         >
-          <Text style={styles.filterHeadTitle}>Search & date range</Text>
+          <Text style={styles.filterHeadTitle}>{t('supplierOrdersInvoices.searchDateRange')}</Text>
           <Ionicons name={filtersOpen ? 'chevron-up' : 'chevron-down'} size={20} color={TEXT_MUTED} />
         </TouchableOpacity>
         {!filtersOpen ? <Text style={styles.filterSummary}>{activeFilterSummary}</Text> : null}
 
         {filtersOpen ? (
           <View style={styles.filterBody}>
-            <Text style={styles.filterFieldLabel}>Customer</Text>
+            <Text style={styles.filterFieldLabel}>{t('supplierOrdersInvoices.customer')}</Text>
             <TouchableOpacity style={styles.customerRow} onPress={openCustomerModal} activeOpacity={0.7}>
               <Ionicons name="person-outline" size={20} color={TEXT_MUTED} style={styles.customerRowIcon} />
               <Text style={styles.customerRowTxt} numberOfLines={1}>
-                {appliedCustomerId ? appliedCustomerLabel || appliedCustomerId : 'All customers'}
+                {appliedCustomerId ? appliedCustomerLabel || appliedCustomerId : t('supplierOrdersInvoices.allCustomers')}
               </Text>
               <Ionicons name="chevron-forward" size={18} color={TEXT_MUTED} />
             </TouchableOpacity>
             {!!appliedCustomerId ? (
               <TouchableOpacity onPress={clearCustomer} style={styles.clearLinkHit}>
-                <Text style={styles.clearLink}>Remove customer filter</Text>
+                <Text style={styles.clearLink}>{t('supplierOrdersInvoices.removeCustomerFilter')}</Text>
               </TouchableOpacity>
             ) : null}
 
-            <Text style={[styles.filterFieldLabel, { marginTop: 18 }]}>Posting date</Text>
+            <Text style={[styles.filterFieldLabel, { marginTop: 18 }]}>{t('supplierOrdersInvoices.postingDate')}</Text>
             <View style={styles.dateRow}>
               <View style={styles.dateCol}>
                 <TouchableOpacity style={styles.dateField} onPress={() => setFromPickerOpen(true)} activeOpacity={0.7}>
-                  <Text style={styles.dateFieldCap}>From</Text>
-                  <Text style={styles.dateFieldVal}>{fromDate ? toYmd(fromDate) : 'Any'}</Text>
+                  <Text style={styles.dateFieldCap}>{t('supplierOrdersInvoices.from')}</Text>
+                  <Text style={styles.dateFieldVal}>{fromDate ? toYmd(fromDate) : t('supplierOrdersInvoices.any')}</Text>
                 </TouchableOpacity>
                 {fromPickerOpen ? (
                   <DateTimePicker
@@ -380,14 +383,14 @@ export const SupplierOrdersInvoicesScreen: React.FC = () => {
                 ) : null}
                 {Platform.OS === 'ios' && fromPickerOpen ? (
                   <TouchableOpacity style={styles.iosDone} onPress={() => setFromPickerOpen(false)}>
-                    <Text style={styles.iosDoneTxt}>Done</Text>
+                    <Text style={styles.iosDoneTxt}>{t('supplierOrdersInvoices.done')}</Text>
                   </TouchableOpacity>
                 ) : null}
               </View>
               <View style={[styles.dateCol, { marginLeft: 12 }]}>
                 <TouchableOpacity style={styles.dateField} onPress={() => setToPickerOpen(true)} activeOpacity={0.7}>
-                  <Text style={styles.dateFieldCap}>To</Text>
-                  <Text style={styles.dateFieldVal}>{toDate ? toYmd(toDate) : 'Any'}</Text>
+                  <Text style={styles.dateFieldCap}>{t('supplierOrdersInvoices.to')}</Text>
+                  <Text style={styles.dateFieldVal}>{toDate ? toYmd(toDate) : t('supplierOrdersInvoices.any')}</Text>
                 </TouchableOpacity>
                 {toPickerOpen ? (
                   <DateTimePicker
@@ -405,14 +408,14 @@ export const SupplierOrdersInvoicesScreen: React.FC = () => {
                 ) : null}
                 {Platform.OS === 'ios' && toPickerOpen ? (
                   <TouchableOpacity style={styles.iosDone} onPress={() => setToPickerOpen(false)}>
-                    <Text style={styles.iosDoneTxt}>Done</Text>
+                    <Text style={styles.iosDoneTxt}>{t('supplierOrdersInvoices.done')}</Text>
                   </TouchableOpacity>
                 ) : null}
               </View>
             </View>
 
             <TouchableOpacity style={styles.applyBtn} onPress={applyFilters} activeOpacity={0.85}>
-              <Text style={styles.applyBtnTxt}>Apply</Text>
+              <Text style={styles.applyBtnTxt}>{t('supplierOrdersInvoices.apply')}</Text>
             </TouchableOpacity>
           </View>
         ) : null}
@@ -433,28 +436,26 @@ export const SupplierOrdersInvoicesScreen: React.FC = () => {
           <Ionicons name="chevron-back" size={24} color={TEXT} />
         </TouchableOpacity>
         <View style={styles.navTitleBlock}>
-          <Text style={styles.screenTitle}>Invoices & payments</Text>
-          <Text style={styles.screenSubtitle}>
-            Long-press a sales invoice row to filter payments to that invoice only.
-          </Text>
+          <Text style={styles.screenTitle}>{t('supplierOrdersInvoices.title')}</Text>
+          <Text style={styles.screenSubtitle}>{t('supplierOrdersInvoices.subtitle')}</Text>
         </View>
       </View>
 
       <View style={styles.tabBar}>
-        <Tab id="si" label="Sales invoices" />
-        <Tab id="pe" label="Payments" />
+        <Tab id="si" label={t('supplierOrdersInvoices.tabInvoices')} />
+        <Tab id="pe" label={t('supplierOrdersInvoices.tabPayments')} />
       </View>
 
       {segment === 'pe' && paymentsForInvoice ? (
         <View style={styles.focusStrip}>
           <View style={styles.focusStripText}>
-            <Text style={styles.focusStripLabel}>Filtered by invoice</Text>
+            <Text style={styles.focusStripLabel}>{t('supplierOrdersInvoices.filteredByInvoice')}</Text>
             <Text style={styles.focusStripName} numberOfLines={2}>
               {paymentsForInvoice.name}
             </Text>
           </View>
           <TouchableOpacity onPress={clearPaymentsInvoiceFocus} hitSlop={12} activeOpacity={0.7}>
-            <Text style={styles.focusStripClear}>Clear</Text>
+            <Text style={styles.focusStripClear}>{t('supplierOrdersInvoices.clear')}</Text>
           </TouchableOpacity>
         </View>
       ) : null}
@@ -466,18 +467,18 @@ export const SupplierOrdersInvoicesScreen: React.FC = () => {
   const toolbarMeta =
     segment === 'si'
       ? rows.length === 0
-        ? 'No invoices'
-        : `${rows.length} invoice${rows.length !== 1 ? 's' : ''}`
+        ? t('supplierOrdersInvoices.noInvoices')
+        : t('supplierOrdersInvoices.countInvoices', { count: rows.length })
       : rows.length === 0
-        ? 'No payments'
-        : `${rows.length} payment${rows.length !== 1 ? 's' : ''}`;
+        ? t('supplierOrdersInvoices.noPayments')
+        : t('supplierOrdersInvoices.countPayments', { count: rows.length });
 
   const renderItem = ({ item }: { item: any }) => {
     const isSi = segment === 'si';
     const kind = isSi ? salesInvoicePayKind(item) : paymentEntryPayKind(item);
     const chip = chipColors(kind);
     const accent = accentForPayKind(kind);
-    const statusLabel = isSi ? salesInvoiceStatusLabel(item, kind) : paymentEntryStatusLabel(item, kind);
+    const statusLabel = isSi ? salesInvoiceStatusLabel(item, kind, t) : paymentEntryStatusLabel(item, kind, t);
     const dateStr = item.posting_date || '—';
     const invoiceName = String(item?.name || '').trim();
     const shareable = isSi && Number(item?.docstatus) !== 2;
@@ -515,7 +516,7 @@ export const SupplierOrdersInvoicesScreen: React.FC = () => {
             </Text>
           ) : null}
           {!isSi && item._linked_sales_invoice ? (
-            <Text style={styles.rowRef}>Ref. {item._linked_sales_invoice}</Text>
+            <Text style={styles.rowRef}>{t('supplierOrdersInvoices.ref', { name: item._linked_sales_invoice })}</Text>
           ) : null}
         </View>
       </>
@@ -543,7 +544,7 @@ export const SupplierOrdersInvoicesScreen: React.FC = () => {
                 )
               }
               hitSlop={8}
-              accessibilityLabel={`Share invoice ${invoiceName}`}
+              accessibilityLabel={t('supplierOrdersInvoices.shareInvoiceA11y', { name: invoiceName })}
               activeOpacity={0.7}
             >
               <Ionicons name="paper-plane-outline" size={18} color={Colors.WINE} />
@@ -568,11 +569,11 @@ export const SupplierOrdersInvoicesScreen: React.FC = () => {
 
   const listEmpty = !loading ? (
     <View style={styles.emptyWrap}>
-      <Text style={styles.emptyTitle}>No records</Text>
+      <Text style={styles.emptyTitle}>{t('supplierOrdersInvoices.emptyTitle')}</Text>
       <Text style={styles.emptySub}>
         {segment === 'si'
-          ? 'Adjust filters or confirm invoices exist for your quotations.'
-          : 'Adjust filters or long-press an invoice to narrow payments.'}
+          ? t('supplierOrdersInvoices.emptyInvoicesSub')
+          : t('supplierOrdersInvoices.emptyPaymentsSub')}
       </Text>
     </View>
   ) : null;
@@ -589,14 +590,14 @@ export const SupplierOrdersInvoicesScreen: React.FC = () => {
             <Pressable style={styles.modalSheet} onPress={(e) => e.stopPropagation()}>
             <View style={styles.modalGrab} />
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Customer</Text>
+              <Text style={styles.modalTitle}>{t('supplierOrdersInvoices.customerModalTitle')}</Text>
               <TouchableOpacity onPress={() => setCustomerModal(false)} hitSlop={12}>
                 <Ionicons name="close" size={24} color={TEXT_MUTED} />
               </TouchableOpacity>
             </View>
             <TextInput
               style={styles.modalSearch}
-              placeholder="Search by name or ID"
+              placeholder={t('supplierOrdersInvoices.searchByNameId')}
               placeholderTextColor={TEXT_MUTED}
               value={customerSearch}
               onChangeText={setCustomerSearch}
@@ -618,8 +619,8 @@ export const SupplierOrdersInvoicesScreen: React.FC = () => {
                       setCustomerModal(false);
                     }}
                   >
-                    <Text style={styles.modalRowTitle}>All customers</Text>
-                    <Text style={styles.modalRowSub}>No filter</Text>
+                    <Text style={styles.modalRowTitle}>{t('supplierOrdersInvoices.allCustomers')}</Text>
+                    <Text style={styles.modalRowSub}>{t('supplierOrdersInvoices.noFilter')}</Text>
                   </TouchableOpacity>
                 }
                 renderItem={({ item }) => (
@@ -649,7 +650,7 @@ export const SupplierOrdersInvoicesScreen: React.FC = () => {
             {loading && !refreshing ? (
               <View style={styles.panelLoading}>
                 <ActivityIndicator size="large" color="#78909C" />
-                <Text style={styles.loadingCaption}>Loading…</Text>
+                <Text style={styles.loadingCaption}>{t('supplierOrdersInvoices.loading')}</Text>
               </View>
             ) : (
               <FlatList

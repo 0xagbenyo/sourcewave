@@ -449,6 +449,7 @@ export type AuthStackParamList = {
   Login: undefined;
   Register: undefined;
   RegisterConsent: undefined;
+  HowDidYouHear: undefined;
   PrivacyPolicy: undefined;
   TermsAndConditions: undefined;
   ForgotPassword: { email?: string } | undefined;

@@ -516,7 +516,7 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
               Number.isFinite(qtyNum) && Number.isFinite(rateNum)
                 ? `${qtyNum} × ${formatErpDocMoney(rateNum, currency)}`
                 : qtyNum > 0
-                  ? `Qty ${qtyNum}`
+                  ? t('orderDetails.salesOrderLineQty', { qty: qtyNum })
                   : undefined;
             const amountNum = Number(line.amount);
             const lineAmount = Number.isFinite(amountNum)
@@ -525,7 +525,7 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
             return (
               <DnLineItem
                 key={String(line.name || idx)}
-                title={String(line.item_name || line.item_code || 'Item')}
+                title={String(line.item_name || line.item_code || t('common.itemFallback'))}
                 detail={weightDetail}
                 meta={qtyMeta}
                 amount={lineAmount}

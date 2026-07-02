@@ -1861,6 +1861,61 @@ class ERPNextClient {
     }
   }
 
+  /**
+   * List active **Lead Source** names (for the "How did you hear about us?" picker).
+   * Returns `[]` on any failure so sign-up flows never break on this optional lookup.
+   */
+  async getLeadSources(): Promise<string[]> {
+    try {
+      const rows = await this.listResourceRows('Lead Source', {
+        fields: ['name'],
+        order_by: 'name asc',
+        limit_page_length: 500,
+      });
+      return (rows || [])
+        .map((r: any) => String(r?.name || '').trim())
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Create a **Lead** capturing the sign-up marketing attribution.
+   * `first_name` and `source` are mandatory on the Lead doctype.
+   */
+  async createLead(args: {
+    first_name: string;
+    last_name?: string;
+    lead_name?: string;
+    email?: string;
+    mobile_no?: string;
+    source: string;
+  }): Promise<any> {
+    const first = String(args.first_name || '').trim();
+    const last = String(args.last_name || '').trim();
+    const payload: Record<string, unknown> = {
+      first_name: first || 'Lead',
+    };
+    if (last) payload.last_name = last;
+
+    const leadName =
+      String(args.lead_name || '').trim() ||
+      [first, last].filter(Boolean).join(' ') ||
+      first;
+    if (leadName) payload.lead_name = leadName;
+
+    const email = String(args.email || '').trim();
+    const mobile = String(args.mobile_no || '').trim();
+    if (email) payload.email_id = email;
+    if (mobile) payload.mobile_no = mobile;
+
+    const source = String(args.source || '').trim();
+    if (source) payload.source = source;
+
+    return this.createResourceDoc('Lead', payload);
+  }
+
   // ITEMS/PRODUCTS — list uses Item doctype (images from Item.image; Website Item not required)
   async getWebsiteItems(filters?: any, limit: number = 20, offset: number = 0, orderBy?: string, sortByPrice?: 'asc' | 'desc'): Promise<any[]> {
     if (sortByPrice) {

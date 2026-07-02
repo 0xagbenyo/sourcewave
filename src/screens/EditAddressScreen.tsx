@@ -18,6 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import type { NavigationProp } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { Header } from '../components/Header';
@@ -44,6 +45,7 @@ function isValidEmail(email: string): boolean {
 export const EditAddressScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'EditAddress'>>();
+  const { t } = useTranslation();
   const { user } = useUserSession();
   const [saving, setSaving] = useState(false);
   const [regionPickerOpen, setRegionPickerOpen] = useState(false);
@@ -98,27 +100,27 @@ export const EditAddressScreen: React.FC = () => {
     const phoneT = phone.trim();
 
     if (!title) {
-      Alert.alert('Required', 'Please enter an address title.');
+      Alert.alert(t('editAddress.required'), t('editAddress.errTitle'));
       return;
     }
     if (!line1) {
-      Alert.alert('Required', 'Please enter your residential address details.');
+      Alert.alert(t('editAddress.required'), t('editAddress.errLine1'));
       return;
     }
     if (!cityT) {
-      Alert.alert('Required', 'Please enter city or town.');
+      Alert.alert(t('editAddress.required'), t('editAddress.errCity'));
       return;
     }
     if (!regionNorm || !GHANA_REGIONS.some((r) => r === regionNorm)) {
-      Alert.alert('Required', 'Please select a region in Ghana.');
+      Alert.alert(t('editAddress.required'), t('editAddress.errRegion'));
       return;
     }
     if (!phoneT) {
-      Alert.alert('Required', 'Please enter a phone number.');
+      Alert.alert(t('editAddress.required'), t('editAddress.errPhone'));
       return;
     }
     if (!isValidEmail(email)) {
-      Alert.alert('Required', 'Please enter a valid email address.');
+      Alert.alert(t('editAddress.required'), t('editAddress.errEmail'));
       return;
     }
 
@@ -156,7 +158,9 @@ export const EditAddressScreen: React.FC = () => {
           navigation.navigate('OrderDetails', { orderId });
           return;
         }
-        Alert.alert('Saved', 'Address updated.', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+        Alert.alert(t('editAddress.savedTitle'), t('editAddress.savedUpdated'), [
+          { text: t('editAddress.ok'), onPress: () => navigation.goBack() },
+        ]);
       } else {
         const created = await client.createAddress(addressPayload);
         const savedName = String(created?.name || '').trim();
@@ -165,21 +169,23 @@ export const EditAddressScreen: React.FC = () => {
           navigation.navigate('OrderDetails', { orderId });
           return;
         }
-        Alert.alert('Saved', 'Address added.', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+        Alert.alert(t('editAddress.savedTitle'), t('editAddress.savedAdded'), [
+          { text: t('editAddress.ok'), onPress: () => navigation.goBack() },
+        ]);
       }
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : 'Failed to save address';
-      Alert.alert('Error', msg);
+      const msg = error instanceof Error ? error.message : t('editAddress.saveFailed');
+      Alert.alert(t('editAddress.errorTitle'), msg);
     } finally {
       setSaving(false);
     }
   };
 
-  const headerTitle = isEditing ? 'Edit address' : 'Add address';
+  const headerTitle = isEditing ? t('editAddress.editTitle') : t('editAddress.addTitle');
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
-      <Header showBackButton title={headerTitle} subtitle="Shipping details" />
+      <Header showBackButton title={headerTitle} subtitle={t('editAddress.subtitle')} />
 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -192,13 +198,13 @@ export const EditAddressScreen: React.FC = () => {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.sectionLabel}>Address</Text>
+          <Text style={styles.sectionLabel}>{t('editAddress.sectionAddress')}</Text>
           <View style={styles.group}>
             <View style={styles.fieldPad}>
-              <Text style={styles.label}>Address title</Text>
+              <Text style={styles.label}>{t('editAddress.addressTitle')}</Text>
               <TextInput
                 style={styles.textInput}
-                placeholder="e.g. Home, Office"
+                placeholder={t('editAddress.addressTitlePlaceholder')}
                 placeholderTextColor={Colors.TEXT_SECONDARY}
                 value={addressTitle}
                 onChangeText={setAddressTitle}
@@ -206,11 +212,11 @@ export const EditAddressScreen: React.FC = () => {
               />
             </View>
             <View style={styles.fieldPad}>
-              <Text style={styles.label}>Residential address details</Text>
-              <Text style={styles.hint}>e.g. EW-0000-0000 — street, house number, area</Text>
+              <Text style={styles.label}>{t('editAddress.residentialDetails')}</Text>
+              <Text style={styles.hint}>{t('editAddress.residentialHint')}</Text>
               <TextInput
                 style={[styles.textInput, styles.textInputTall]}
-                placeholder="Enter full residential details"
+                placeholder={t('editAddress.residentialPlaceholder')}
                 placeholderTextColor={Colors.TEXT_SECONDARY}
                 value={addressLine1}
                 onChangeText={setAddressLine1}
@@ -220,10 +226,10 @@ export const EditAddressScreen: React.FC = () => {
               />
             </View>
             <View style={[styles.fieldPad, styles.fieldPadLast]}>
-              <Text style={styles.label}>City / town</Text>
+              <Text style={styles.label}>{t('editAddress.cityTown')}</Text>
               <TextInput
                 style={styles.textInput}
-                placeholder="City or town"
+                placeholder={t('editAddress.cityPlaceholder')}
                 placeholderTextColor={Colors.TEXT_SECONDARY}
                 value={city}
                 onChangeText={setCity}
@@ -232,7 +238,7 @@ export const EditAddressScreen: React.FC = () => {
             </View>
           </View>
 
-          <Text style={styles.sectionLabel}>Region</Text>
+          <Text style={styles.sectionLabel}>{t('editAddress.sectionRegion')}</Text>
           <View style={styles.group}>
             <TouchableOpacity
               style={styles.selectRow}
@@ -241,20 +247,20 @@ export const EditAddressScreen: React.FC = () => {
             >
               <View style={styles.selectMain}>
                 <Text style={region ? styles.selectValue : styles.selectPlaceholder}>
-                  {region || 'Select region in Ghana'}
+                  {region || t('editAddress.selectRegion')}
                 </Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={Colors.TEXT_SECONDARY} />
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.sectionLabel}>Contact</Text>
+          <Text style={styles.sectionLabel}>{t('editAddress.sectionContact')}</Text>
           <View style={styles.group}>
             <View style={styles.fieldPad}>
-              <Text style={styles.label}>Phone</Text>
+              <Text style={styles.label}>{t('editAddress.phone')}</Text>
               <TextInput
                 style={styles.textInput}
-                placeholder="Mobile number"
+                placeholder={t('editAddress.phonePlaceholder')}
                 placeholderTextColor={Colors.TEXT_SECONDARY}
                 value={phone}
                 onChangeText={setPhone}
@@ -263,10 +269,10 @@ export const EditAddressScreen: React.FC = () => {
               />
             </View>
             <View style={[styles.fieldPad, styles.fieldPadLast]}>
-              <Text style={styles.label}>Email address</Text>
+              <Text style={styles.label}>{t('editAddress.emailAddress')}</Text>
               <TextInput
                 style={styles.textInput}
-                placeholder="you@example.com"
+                placeholder={t('editAddress.emailPlaceholder')}
                 placeholderTextColor={Colors.TEXT_SECONDARY}
                 value={emailId}
                 onChangeText={setEmailId}
@@ -278,7 +284,7 @@ export const EditAddressScreen: React.FC = () => {
             </View>
           </View>
 
-          <Text style={styles.sectionLabel}>Options</Text>
+          <Text style={styles.sectionLabel}>{t('editAddress.sectionOptions')}</Text>
           <View style={styles.group}>
             <TouchableOpacity
               style={styles.toggleRow}
@@ -287,8 +293,8 @@ export const EditAddressScreen: React.FC = () => {
             >
               <Ionicons name="star-outline" size={22} color={Colors.WINE} style={styles.rowIcon} />
               <View style={styles.rowMain}>
-                <Text style={styles.rowTitle}>Primary shipping address</Text>
-                <Text style={styles.rowSubtitle}>Use as default when placing orders</Text>
+                <Text style={styles.rowTitle}>{t('editAddress.primaryTitle')}</Text>
+                <Text style={styles.rowSubtitle}>{t('editAddress.primarySubtitle')}</Text>
               </View>
               <View style={[styles.switchBox, isPrimary && styles.switchBoxOn]}>
                 {isPrimary ? <Ionicons name="checkmark" size={16} color={Colors.WHITE} /> : null}
@@ -311,7 +317,9 @@ export const EditAddressScreen: React.FC = () => {
             ) : (
               <>
                 <Ionicons name="checkmark" size={20} color={Colors.WHITE} />
-                <Text style={styles.saveButtonText}>{isEditing ? 'Save changes' : 'Save address'}</Text>
+                <Text style={styles.saveButtonText}>
+                  {isEditing ? t('editAddress.saveChanges') : t('editAddress.saveAddress')}
+                </Text>
               </>
             )}
           </TouchableOpacity>
@@ -324,7 +332,7 @@ export const EditAddressScreen: React.FC = () => {
             <View style={styles.modalGrab}>
               <View style={styles.modalHandle} />
             </View>
-            <Text style={styles.modalTitle}>Region</Text>
+            <Text style={styles.modalTitle}>{t('editAddress.regionModalTitle')}</Text>
             <FlatList
               data={[...GHANA_REGIONS]}
               keyExtractor={(item) => item}

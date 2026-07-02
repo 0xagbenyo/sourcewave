@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { Colors } from '../../constants/colors';
 import { Spacing } from '../../constants/spacing';
 import { useSupplierDocumentId } from '../../hooks/useSupplierDocumentId';
@@ -74,6 +75,7 @@ function accentForKind(kind: WfKind): string {
 
 export const SupplierQuotationListScreen: React.FC = () => {
   const navigation = useNavigation();
+  const { t } = useTranslation();
   const route = useRoute<R>();
   const { supplierDocId, loading: sidLoading, error: sidError } = useSupplierDocumentId();
   const [tab, setTab] = useState<'list' | 'new'>(() =>
@@ -125,7 +127,7 @@ export const SupplierQuotationListScreen: React.FC = () => {
   const load = useCallback(async () => {
     if (!supplierDocId) {
       setRows([]);
-      setError(sidLoading ? null : sidError || 'No supplier linked to this login.');
+      setError(sidLoading ? null : sidError || t('supplierQuotationList.noSupplierLinked'));
       setLoading(false);
       setRefreshing(false);
       return;
@@ -136,13 +138,13 @@ export const SupplierQuotationListScreen: React.FC = () => {
       const data = await client.listSupplierQuotationsForSupplier(supplierDocId, { limit: 50, start: 0 });
       setRows(data);
     } catch (e: any) {
-      setError(e?.message || 'Could not load quotations');
+      setError(e?.message || t('supplierQuotationList.loadFailed'));
       setRows([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [supplierDocId, sidLoading, sidError]);
+  }, [supplierDocId, sidLoading, sidError, t]);
 
   useEffect(() => {
     if (sidLoading) {
@@ -196,7 +198,7 @@ export const SupplierQuotationListScreen: React.FC = () => {
         {loading && !refreshing ? (
           <View style={styles.center}>
             <ActivityIndicator size="large" color={Colors.WINE} />
-            <Text style={styles.loadingCaption}>Loading register…</Text>
+            <Text style={styles.loadingCaption}>{t('supplierQuotationList.loadingRegister')}</Text>
           </View>
         ) : (
           <View style={styles.listBody}>
@@ -204,10 +206,13 @@ export const SupplierQuotationListScreen: React.FC = () => {
               <View style={styles.registerToolbar}>
                 <Text style={styles.toolbarMeta} numberOfLines={1}>
                   {rows.length === 0
-                    ? 'No quotations'
+                    ? t('supplierQuotationList.noQuotations')
                     : statusFilter !== 'all' || sortMode !== 'recent'
-                      ? `${displayRows.length}/${rows.length} shown`
-                      : `${rows.length} quotation${rows.length !== 1 ? 's' : ''}`}
+                      ? t('supplierQuotationList.shownCount', {
+                          shown: displayRows.length,
+                          total: rows.length,
+                        })
+                      : t('supplierQuotationList.countQuot', { count: rows.length })}
                 </Text>
                 <TouchableOpacity
                   style={styles.sortBtn}
@@ -218,7 +223,11 @@ export const SupplierQuotationListScreen: React.FC = () => {
                 >
                   <Ionicons name="swap-vertical" size={15} color={rows.length === 0 ? '#B0BEC5' : Colors.WINE} />
                   <Text style={[styles.sortBtnText, rows.length === 0 && styles.sortBtnTextDisabled]}>
-                    {sortMode === 'recent' ? 'Recent' : sortMode === 'status_az' ? 'A–Z' : 'Z–A'}
+                    {sortMode === 'recent'
+                      ? t('supplierQuotationList.sortRecent')
+                      : sortMode === 'status_az'
+                        ? t('supplierQuotationList.sortAz')
+                        : t('supplierQuotationList.sortZa')}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -231,11 +240,11 @@ export const SupplierQuotationListScreen: React.FC = () => {
               >
                 {(
                   [
-                    ['all', 'All'],
-                    ['pending', 'Pending'],
-                    ['approved', 'Approved'],
-                    ['rejected', 'Rejected'],
-                    ['neutral', 'Other'],
+                    ['all', t('supplierQuotationList.filterAll')],
+                    ['pending', t('supplierQuotationList.filterPending')],
+                    ['approved', t('supplierQuotationList.filterApproved')],
+                    ['rejected', t('supplierQuotationList.filterRejected')],
+                    ['neutral', t('supplierQuotationList.filterOther')],
                   ] as const
                 ).map(([key, label]) => (
                   <TouchableOpacity
@@ -271,14 +280,14 @@ export const SupplierQuotationListScreen: React.FC = () => {
                       {rows.length > 0 && displayRows.length === 0 ? (
                         <>
                           <Ionicons name="funnel-outline" size={40} color="#B0BEC5" />
-                          <Text style={styles.emptyTitle}>No matches</Text>
-                          <Text style={styles.empty}>Try All or another status filter.</Text>
+                          <Text style={styles.emptyTitle}>{t('supplierQuotationList.noMatches')}</Text>
+                          <Text style={styles.empty}>{t('supplierQuotationList.noMatchesSub')}</Text>
                         </>
                       ) : (
                         <>
                           <Ionicons name="folder-open-outline" size={40} color="#B0BEC5" />
-                          <Text style={styles.emptyTitle}>No quotations yet</Text>
-                          <Text style={styles.empty}>Open the New tab to create your first draft.</Text>
+                          <Text style={styles.emptyTitle}>{t('supplierQuotationList.emptyTitle')}</Text>
+                          <Text style={styles.empty}>{t('supplierQuotationList.emptySub')}</Text>
                         </>
                       )}
                     </View>
@@ -332,7 +341,7 @@ export const SupplierQuotationListScreen: React.FC = () => {
                             )
                           }
                           hitSlop={8}
-                          accessibilityLabel={`Share quotation ${name}`}
+                          accessibilityLabel={t('supplierQuotationList.shareA11y', { name })}
                           activeOpacity={0.7}
                         >
                           <Ionicons name="paper-plane-outline" size={18} color={Colors.WINE} />
@@ -361,7 +370,7 @@ export const SupplierQuotationListScreen: React.FC = () => {
             </TouchableOpacity>
             <View style={styles.headerCenter}>
               <Text style={styles.headerTitle} numberOfLines={1}>
-                Quotations
+                {t('supplierQuotationList.title')}
               </Text>
             </View>
         <View style={{ width: 40 }} />
@@ -374,7 +383,7 @@ export const SupplierQuotationListScreen: React.FC = () => {
               activeOpacity={0.85}
             >
               <Ionicons name="list-outline" size={17} color={tab === 'list' ? Colors.WINE : '#78909C'} />
-              <Text style={[styles.tabText, tab === 'list' && styles.tabTextOn]}>List</Text>
+              <Text style={[styles.tabText, tab === 'list' && styles.tabTextOn]}>{t('supplierQuotationList.tabList')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.tab, tab === 'new' && styles.tabOn]}
@@ -382,7 +391,7 @@ export const SupplierQuotationListScreen: React.FC = () => {
               activeOpacity={0.85}
             >
               <Ionicons name="create-outline" size={17} color={tab === 'new' ? Colors.WINE : '#78909C'} />
-              <Text style={[styles.tabText, tab === 'new' && styles.tabTextOn]}>New</Text>
+              <Text style={[styles.tabText, tab === 'new' && styles.tabTextOn]}>{t('supplierQuotationList.tabNew')}</Text>
             </TouchableOpacity>
           </View>
         </>

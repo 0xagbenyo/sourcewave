@@ -194,12 +194,6 @@ const RAVEN_GLOBAL_INBOX_PREVIEW_CONCURRENCY = 12;
 /** Shown while a channel preview is still being fetched (replaced when the fetch completes). */
 const GLOBAL_INBOX_PREVIEW_PLACEHOLDER = '…';
 
-const HUB_INFO_SUPPLIER_GROUPS_BODY =
-  'Choose a supplier group to see suppliers, open supplier profiles, and start conversations.';
-
-const HUB_INFO_SUPPLIERS_BODY =
-  'These people represent suppliers in this supplier group. Tap a row to open their supplier profile, then use chat from there if you need to message them.';
-
 /** When `listChannelsForWorkspace` has not yet returned a freshly-created DM, match `openDmWith` fallback. */
 function buildFallbackDmChannelRow(workspaceWs: string, channelId: string, peerUserId: string): RavenChannelRow {
   return {
@@ -3801,12 +3795,12 @@ export const RavenUIMessagesScreen: React.FC = () => {
                 hitSlop={10}
                 accessibilityLabel={
                   channel
-                    ? 'Back to all chats'
+                    ? t('messagesMenu.backAllChats')
                     : workspace
                       ? isHeaderChatInbox
-                        ? 'Back to all chats'
-                        : 'Back to supplier groups'
-                      : 'Go back'
+                        ? t('messagesMenu.backAllChats')
+                        : t('messagesMenu.backSupplierGroups')
+                      : t('messagesMenu.goBack')
                 }
               >
                 <Ionicons name="chevron-back" size={22} color={RavenLight.text} />
@@ -3818,7 +3812,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
                 style={s.headerCenter}
                 onPress={() => setDrawerOpen(true)}
                 activeOpacity={0.85}
-                accessibilityLabel="Open messages menu"
+                accessibilityLabel={t('messagesMenu.openMessagesMenu')}
               >
                 <View style={s.headerAvatarCircleWrap}>
                   <RavenChannelPeerAvatar
@@ -3898,7 +3892,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
                   style={s.headerHubInfoBtn}
                   hitSlop={10}
                   accessibilityRole="button"
-                  accessibilityLabel="About supplier groups"
+                  accessibilityLabel={t('messagesMenu.aboutSupplierGroups')}
                 >
                   <Ionicons name="information-circle-outline" size={26} color={RavenLight.textMuted} />
                 </TouchableOpacity>
@@ -3909,7 +3903,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
                   style={s.headerHubInfoBtn}
                   hitSlop={10}
                   accessibilityRole="button"
-                  accessibilityLabel="About suppliers"
+                  accessibilityLabel={t('messagesMenu.aboutSuppliers')}
                 >
                   <Ionicons name="information-circle-outline" size={26} color={RavenLight.textMuted} />
                 </TouchableOpacity>
@@ -3920,7 +3914,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
                   style={s.headerIconBtn}
                   hitSlop={10}
                   accessibilityRole="button"
-                  accessibilityLabel="Open chat menu"
+                  accessibilityLabel={t('messagesMenu.openChatMenu')}
                 >
                   <Ionicons name="menu-outline" size={24} color={RavenLight.text} />
                 </TouchableOpacity>
@@ -3940,12 +3934,12 @@ export const RavenUIMessagesScreen: React.FC = () => {
                   onChangeText={setListSearchQuery}
                   placeholder={
                     isHeaderChatInbox && !workspace
-                      ? 'Search chats and messages…'
+                      ? t('messagesMenu.searchChatsPlaceholder')
                       : isWorkspaceHubList
-                        ? 'Search supplier groups…'
+                        ? t('messagesMenu.searchSupplierGroupsPlaceholder')
                         : !workspace
-                          ? 'Search supplier groups…'
-                          : 'Search suppliers…'
+                          ? t('messagesMenu.searchSupplierGroupsPlaceholder')
+                          : t('messagesMenu.searchSuppliersPlaceholder')
                   }
                   placeholderTextColor={RavenLight.textSubtle}
                   autoCorrect={false}
@@ -4370,7 +4364,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
               style={s.drawerCloseBtn}
               hitSlop={12}
               accessibilityRole="button"
-              accessibilityLabel="Close menu"
+              accessibilityLabel={t('messagesMenu.closeMenu')}
             >
               <Ionicons name="close" size={26} color={RavenLight.text} />
             </TouchableOpacity>
@@ -4380,8 +4374,8 @@ export const RavenUIMessagesScreen: React.FC = () => {
                 {channel
                   ? getRavenChannelDisplayLabel(channel, user?.email, ravenUserProfilesById)
                   : workspace
-                    ? workspaceScreenTitle || 'Supplier group'
-                    : 'Messages'}
+                    ? workspaceScreenTitle || t('messagesMenu.fallbackSupplierGroup')
+                    : t('messagesMenu.fallbackMessages')}
               </Text>
               {channel && headerPeerSubtitle ? (
                 <Text style={s.drawerHeadSubtitle} numberOfLines={1} ellipsizeMode="tail">
@@ -4396,7 +4390,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
                 onPress={openSettingsFromDrawer}
                 hitSlop={8}
                 accessibilityRole="button"
-                accessibilityLabel="Settings"
+                accessibilityLabel={t('messagesMenu.settings')}
               >
                 <Ionicons name="settings-outline" size={22} color={RavenLight.text} />
               </TouchableOpacity>
@@ -4404,7 +4398,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
                 style={s.drawerHeadAvatarWrap}
                 onPress={openProfileFromDrawer}
                 accessibilityRole="button"
-                accessibilityLabel="Profile"
+                accessibilityLabel={t('messagesMenu.profile')}
                 activeOpacity={0.75}
               >
                 <View style={[s.drawerHeadAvatar, { backgroundColor: pastelAvatarBg(user?.email || 'me') }]}>
@@ -4426,10 +4420,10 @@ export const RavenUIMessagesScreen: React.FC = () => {
                 style={s.drawerNavRow}
                 onPress={openSearchFromDrawer}
                 accessibilityRole="button"
-                accessibilityLabel="Search messages"
+                accessibilityLabel={t('messagesMenu.searchMessages')}
               >
                 <Ionicons name="search-outline" size={22} color={RavenLight.text} style={s.drawerNavIcon} />
-                <Text style={s.drawerNavText}>Search messages</Text>
+                <Text style={s.drawerNavText}>{t('messagesMenu.searchMessages')}</Text>
                 <Ionicons name="chevron-forward" size={18} color={RavenLight.textMuted} />
               </TouchableOpacity>
             ) : null}
@@ -4447,19 +4441,13 @@ export const RavenUIMessagesScreen: React.FC = () => {
             {showSuggestedSuppliersInMenu ? (
               <>
                 <View style={s.drawerSectionRow}>
-                  <Text style={s.drawerSectionBold}>Suggested suppliers</Text>
+                  <Text style={s.drawerSectionBold}>{t('messagesMenu.suggestedSuppliers')}</Text>
                 </View>
-                <Text style={s.drawerMemberScopeHint}>
-                  Workspace administrators in this supplier group you can message. Your own account is not listed. Switch
-                  to another supplier group to refresh this list.
-                </Text>
+                <Text style={s.drawerMemberScopeHint}>{t('messagesMenu.suggestedHint')}</Text>
                 {members.length === 0 ? (
-                  <Text style={s.drawerEmpty}>
-                    No contacts returned. Your account may need permission to view members for this
-                    supplier group.
-                  </Text>
+                  <Text style={s.drawerEmpty}>{t('messagesMenu.noContacts')}</Text>
                 ) : directoryMembers.length === 0 ? (
-                  <Text style={s.drawerEmpty}>No other admins to show for this supplier group yet.</Text>
+                  <Text style={s.drawerEmpty}>{t('messagesMenu.noOtherAdmins')}</Text>
                 ) : (
                   directoryMembers.map((m) => {
                     const isAdmin = ravenWorkspaceMemberIsAdmin(m);
@@ -4493,7 +4481,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
                           <Text style={s.memberUser} numberOfLines={1}>
                             {resolveDisplayName(m.user, m.full_name)}
                           </Text>
-                          {isAdmin ? <Text style={s.memberAdmin}>Supplier</Text> : null}
+                          {isAdmin ? <Text style={s.memberAdmin}>{t('messagesMenu.supplierBadge')}</Text> : null}
                         </View>
                         {busy ? <ActivityIndicator size="small" color={RavenLight.accent} /> : null}
                       </TouchableOpacity>
@@ -4516,19 +4504,21 @@ export const RavenUIMessagesScreen: React.FC = () => {
           <Pressable
             style={s.hubInfoBackdrop}
             onPress={() => setHubInfoModal(null)}
-            accessibilityLabel="Dismiss"
+            accessibilityLabel={t('messagesMenu.dismiss')}
           />
           <View style={s.hubInfoCenterWrap} pointerEvents="box-none">
             <View style={s.hubInfoCard}>
               <View style={s.hubInfoHead}>
                 <Text style={s.hubInfoTitle}>
-                  {hubInfoModal === 'supplier-groups' ? 'Supplier groups' : 'Suppliers'}
+                  {hubInfoModal === 'supplier-groups'
+                    ? t('messagesMenu.infoSupplierGroupsTitle')
+                    : t('messagesMenu.infoSuppliersTitle')}
                 </Text>
                 <TouchableOpacity
                   onPress={() => setHubInfoModal(null)}
                   hitSlop={12}
                   accessibilityRole="button"
-                  accessibilityLabel="Close"
+                  accessibilityLabel={t('messagesMenu.close')}
                 >
                   <Ionicons name="close" size={26} color={RavenLight.text} />
                 </TouchableOpacity>
@@ -4539,7 +4529,9 @@ export const RavenUIMessagesScreen: React.FC = () => {
                 showsVerticalScrollIndicator={false}
               >
                 <Text style={s.hubInfoBody}>
-                  {hubInfoModal === 'supplier-groups' ? HUB_INFO_SUPPLIER_GROUPS_BODY : HUB_INFO_SUPPLIERS_BODY}
+                  {hubInfoModal === 'supplier-groups'
+                    ? t('messagesMenu.infoSupplierGroupsBody')
+                    : t('messagesMenu.infoSuppliersBody')}
                 </Text>
               </ScrollView>
             </View>
@@ -4550,7 +4542,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
       <RavenGlobalSearchModal
         visible={searchOpen}
         onClose={() => setSearchOpen(false)}
-        title="Search"
+        title={t('common.search')}
         inChannelId={channel?.name}
         inChannelLabel={
           channel ? getRavenChannelDisplayLabel(channel, user?.email, ravenUserProfilesById) : undefined

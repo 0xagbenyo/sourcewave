@@ -1,5 +1,14 @@
-import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useState, useCallback, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Modal,
+  Pressable,
+  TouchableOpacity,
+  ScrollView,
+  ActivityIndicator,
+} from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,6 +16,11 @@ import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { getERPNextClient } from '../services/erpnext';
 import { OTP_PURPOSE_SIGN_UP } from '../constants/otpPurposes';
+import { appStorage } from '../services/appStorage';
+import {
+  STORAGE_REFERRAL_SOURCE,
+  STORAGE_REFERRAL_SOURCE_IS_OTHER,
+} from '../constants/appPreferencesKeys';
 import { appAlert as Alert } from '../services/appAlert';
 import { userFacingError } from '../utils/userFacingError';
 import { hasAcceptedLegalTerms } from '../legal/legalAcceptance';
@@ -17,6 +31,12 @@ import { resetToMainScreen } from '../navigation/rootNavigation';
 import { AuthScreenShell, AuthStepIndicator } from '../components/auth/AuthScreenShell';
 import { AuthField } from '../components/auth/AuthField';
 import { AuthPrimaryButton, AuthInlineSwitch, AuthTextLink } from '../components/auth/AuthPrimaryButton';
+
+/** Sentinel for the free-text "Other" referral source choice. */
+const OTHER_SOURCE = '__other__';
+
+/** Lead Source used for every "Other" entry (we don't create new sources). */
+const OTHER_LEAD_SOURCE = 'Content';
 
 export const RegisterScreen: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -31,6 +51,10 @@ export const RegisterScreen: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [resendingOtp, setResendingOtp] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [leadSources, setLeadSources] = useState<string[]>([]);
+  const [sourceValue, setSourceValue] = useState<string>('');
+  const [otherSource, setOtherSource] = useState('');
+  const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const navigation = useNavigation();
   const { t } = useTranslation();
   const { setUser } = useUserSession();
@@ -49,6 +73,65 @@ export const RegisterScreen: React.FC = () => {
         active = false;
       };
     }, [navigation])
+  );
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const [rows, storedSource, storedIsOther] = await Promise.all([
+        getERPNextClient().getLeadSources(),
+        appStorage.getItem(STORAGE_REFERRAL_SOURCE),
+        appStorage.getItem(STORAGE_REFERRAL_SOURCE_IS_OTHER),
+      ]);
+      if (!active) return;
+      setLeadSources(rows);
+      const stored = String(storedSource || '').trim();
+      if (!stored) return;
+      if (storedIsOther === '1') {
+        setSourceValue(OTHER_SOURCE);
+        setOtherSource(stored);
+      } else {
+        setSourceValue(stored);
+        // Keep the prior choice selectable even if the list fetch omitted it.
+        if (!rows.includes(stored)) setLeadSources([stored, ...rows]);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const isOtherSource = sourceValue === OTHER_SOURCE;
+  const sourceDisplay = isOtherSource
+    ? t('howDidYouHear.other')
+    : sourceValue || t('register.sourcePlaceholder');
+
+  // "Other" always maps to the fixed "Content" Lead Source (no new sources created).
+  const resolvedSource = isOtherSource ? OTHER_LEAD_SOURCE : sourceValue.trim();
+
+  const createSignupLead = useCallback(
+    async (
+      firstNameVal: string,
+      lastNameVal: string,
+      fullName: string,
+      emailId: string,
+      mobile: string
+    ) => {
+      if (!resolvedSource) return;
+      try {
+        await getERPNextClient().createLead({
+          first_name: firstNameVal || fullName || emailId,
+          last_name: lastNameVal || undefined,
+          lead_name: fullName || firstNameVal || emailId,
+          email: emailId,
+          mobile_no: mobile,
+          source: resolvedSource,
+        });
+      } catch (leadError) {
+        console.warn('Lead creation skipped or failed:', leadError);
+      }
+    },
+    [resolvedSource]
   );
 
   const validateEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
@@ -173,6 +256,8 @@ export const RegisterScreen: React.FC = () => {
       } catch (e) {
         console.warn('Link Raven User → Customer skipped or failed:', e);
       }
+
+      await createSignupLead(firstName.trim(), lastName.trim(), fullName, emailTrim, phone.trim());
 
       try {
         const session = await completeAppSignIn(emailTrim, passwordTrim);
@@ -304,6 +389,42 @@ export const RegisterScreen: React.FC = () => {
             error={errors.phone ? t(errors.phone) : undefined}
           />
 
+          <View style={styles.sourceField}>
+            <Text style={styles.sourceLabel}>{t('register.sourceLabel')}</Text>
+            <TouchableOpacity
+              style={styles.sourceSelect}
+              onPress={() => setSourcePickerOpen(true)}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel={t('register.sourceLabel')}
+            >
+              <Ionicons
+                name="megaphone-outline"
+                size={18}
+                color={Colors.TEXT_SECONDARY}
+                style={styles.sourceLeadingIcon}
+              />
+              <Text
+                style={[styles.sourceValueText, !sourceValue && styles.sourcePlaceholder]}
+                numberOfLines={1}
+              >
+                {sourceDisplay}
+              </Text>
+              <Ionicons name="chevron-down" size={18} color={Colors.TEXT_SECONDARY} />
+            </TouchableOpacity>
+          </View>
+
+          {isOtherSource ? (
+            <AuthField
+              label={t('register.sourceOtherLabel')}
+              icon="create-outline"
+              placeholder={t('howDidYouHear.otherPlaceholder')}
+              value={otherSource}
+              onChangeText={setOtherSource}
+              autoCapitalize="sentences"
+            />
+          ) : null}
+
           <View style={styles.infoBanner}>
             <Ionicons name="information-circle-outline" size={18} color={Colors.TEXT_SECONDARY} />
             <Text style={styles.infoText}>{t('register.infoBanner')}</Text>
@@ -397,6 +518,63 @@ export const RegisterScreen: React.FC = () => {
         action={t('register.signIn')}
         onPress={() => navigation.navigate('Login' as never)}
       />
+
+      <Modal
+        visible={sourcePickerOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSourcePickerOpen(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setSourcePickerOpen(false)}>
+          <Pressable style={styles.modalSheet} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHead}>
+              <Text style={styles.modalTitle}>{t('register.sourceLabel')}</Text>
+              <TouchableOpacity onPress={() => setSourcePickerOpen(false)} hitSlop={12}>
+                <Ionicons name="close" size={24} color={Colors.TEXT_SECONDARY} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.modalList} keyboardShouldPersistTaps="handled">
+              {leadSources.length === 0 ? (
+                <View style={styles.modalLoading}>
+                  <ActivityIndicator color={Colors.WINE} />
+                </View>
+              ) : null}
+              {leadSources.map((src) => {
+                const active = sourceValue === src;
+                return (
+                  <TouchableOpacity
+                    key={src}
+                    style={styles.modalRow}
+                    onPress={() => {
+                      setSourceValue(src);
+                      setSourcePickerOpen(false);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.modalRowText, active && styles.modalRowTextActive]}>
+                      {src}
+                    </Text>
+                    {active ? <Ionicons name="checkmark" size={18} color={Colors.WINE} /> : null}
+                  </TouchableOpacity>
+                );
+              })}
+              <TouchableOpacity
+                style={styles.modalRow}
+                onPress={() => {
+                  setSourceValue(OTHER_SOURCE);
+                  setSourcePickerOpen(false);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.modalRowText, isOtherSource && styles.modalRowTextActive]}>
+                  {t('howDidYouHear.other')}
+                </Text>
+                {isOtherSource ? <Ionicons name="checkmark" size={18} color={Colors.WINE} /> : null}
+              </TouchableOpacity>
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </AuthScreenShell>
   );
 };
@@ -458,6 +636,85 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     color: Colors.TEXT_SECONDARY,
     fontStyle: 'italic',
+  },
+  sourceField: {
+    marginBottom: Spacing.MD,
+  },
+  sourceLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.TEXT_SECONDARY,
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  sourceSelect: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 48,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.BORDER,
+  },
+  sourceLeadingIcon: {
+    marginRight: 10,
+  },
+  sourceValueText: {
+    flex: 1,
+    fontSize: 16,
+    color: Colors.BRAND_NAVY,
+    paddingVertical: 10,
+  },
+  sourcePlaceholder: {
+    color: Colors.TEXT_DISABLED,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: Colors.WHITE,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    maxHeight: '70%',
+    paddingBottom: Spacing.LG,
+  },
+  modalHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.LG,
+    paddingVertical: Spacing.MD,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.LIGHT_GRAY,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.BRAND_NAVY,
+  },
+  modalList: {
+    paddingHorizontal: Spacing.LG,
+  },
+  modalLoading: {
+    paddingVertical: Spacing.XL,
+    alignItems: 'center',
+  },
+  modalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Colors.LIGHT_GRAY,
+  },
+  modalRowText: {
+    fontSize: 16,
+    color: Colors.DARK_GRAY,
+  },
+  modalRowTextActive: {
+    color: Colors.WINE,
+    fontWeight: '700',
   },
   legalText: {
     fontSize: 12,

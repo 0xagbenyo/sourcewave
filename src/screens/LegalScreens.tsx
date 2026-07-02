@@ -15,23 +15,20 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { LegalDocumentBody } from '../components/LegalDocumentBody';
-import { privacyPolicy } from '../legal/privacyPolicy';
-import { termsAndConditions } from '../legal/termsAndConditions';
+import { getPrivacyPolicy, getTermsAndConditions } from '../legal/getLegalDocuments';
 import { setLegalTermsAccepted } from '../legal/legalAcceptance';
 import type { AuthStackParamList } from '../types';
-import type { LegalDocument } from '../legal/types';
 
 const SCROLL_THRESHOLD = 48;
 
-function getDocument(doc: 'privacy' | 'terms'): LegalDocument {
-  return doc === 'privacy' ? privacyPolicy : termsAndConditions;
-}
-
 export const LegalDocumentScreen: React.FC = () => {
   const navigation = useNavigation();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const route = useRoute<RouteProp<AuthStackParamList, 'PrivacyPolicy' | 'TermsAndConditions'>>();
-  const document = getDocument(route.name === 'PrivacyPolicy' ? 'privacy' : 'terms');
+  const document =
+    route.name === 'PrivacyPolicy'
+      ? getPrivacyPolicy(i18n.language)
+      : getTermsAndConditions(i18n.language);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -62,7 +59,9 @@ export const LegalDocumentScreen: React.FC = () => {
 
 export const RegisterConsentScreen: React.FC = () => {
   const navigation = useNavigation();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const privacyPolicy = getPrivacyPolicy(i18n.language);
+  const termsAndConditions = getTermsAndConditions(i18n.language);
   const [reachedBottom, setReachedBottom] = useState(false);
   const contentHeightRef = useRef(0);
   const layoutHeightRef = useRef(0);
@@ -97,7 +96,7 @@ export const RegisterConsentScreen: React.FC = () => {
 
   const handleAccept = useCallback(async () => {
     await setLegalTermsAccepted();
-    navigation.replace('Register' as never);
+    navigation.replace('HowDidYouHear' as never);
   }, [navigation]);
 
   return (

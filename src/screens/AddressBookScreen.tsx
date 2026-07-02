@@ -12,6 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NavigationProp } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { Header } from '../components/Header';
@@ -24,6 +25,7 @@ const hairline = StyleSheet.hairlineWidth;
 
 export const AddressBookScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
+  const { t } = useTranslation();
   const { user } = useUserSession();
 
   const [addresses, setAddresses] = useState<ErpCustomerAddressRow[]>([]);
@@ -38,11 +40,11 @@ export const AddressBookScreen: React.FC = () => {
       setAddresses((fetched || []) as ErpCustomerAddressRow[]);
     } catch (error) {
       console.error('Error fetching addresses:', error);
-      Alert.alert('Error', 'Failed to load addresses');
+      Alert.alert(t('addressBook.errorTitle'), t('addressBook.loadFailed'));
     } finally {
       setAddressLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -53,10 +55,10 @@ export const AddressBookScreen: React.FC = () => {
   );
 
   const handleDeleteAddress = (index: number) => {
-    Alert.alert('Delete address', 'Remove this shipping address?', [
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert(t('addressBook.deleteTitle'), t('addressBook.deleteBody'), [
+      { text: t('addressBook.cancel'), style: 'cancel' },
       {
-        text: 'Delete',
+        text: t('addressBook.delete'),
         style: 'destructive',
         onPress: async () => {
           try {
@@ -68,8 +70,8 @@ export const AddressBookScreen: React.FC = () => {
               await fetchAddresses(user?.email || '');
             }
           } catch (error: unknown) {
-            const msg = error instanceof Error ? error.message : 'Failed to delete address';
-            Alert.alert('Error', msg);
+            const msg = error instanceof Error ? error.message : t('addressBook.deleteFailed');
+            Alert.alert(t('addressBook.errorTitle'), msg);
           } finally {
             setAddressSaving(false);
           }
@@ -85,7 +87,7 @@ export const AddressBookScreen: React.FC = () => {
   if (addressLoading) {
     return (
       <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
-        <Header showBackButton title="Shipping addresses" subtitle="Delivery locations" />
+        <Header showBackButton title={t('addressBook.title')} subtitle={t('addressBook.subtitle')} />
         <View style={styles.loaderWrap}>
           <ActivityIndicator size="large" color={Colors.WINE} />
         </View>
@@ -95,7 +97,7 @@ export const AddressBookScreen: React.FC = () => {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
-      <Header showBackButton title="Shipping addresses" subtitle="Delivery locations" />
+      <Header showBackButton title={t('addressBook.title')} subtitle={t('addressBook.subtitle')} />
 
       <ScrollView
         style={styles.scroll}
@@ -110,13 +112,13 @@ export const AddressBookScreen: React.FC = () => {
           />
         }
       >
-        <Text style={styles.sectionLabel}>New</Text>
+        <Text style={styles.sectionLabel}>{t('addressBook.sectionNew')}</Text>
         <View style={styles.group}>
           <TouchableOpacity style={styles.row} onPress={() => goEdit(undefined)} activeOpacity={0.75}>
             <Ionicons name="add-circle-outline" size={22} color={Colors.WINE} style={styles.rowIcon} />
             <View style={styles.rowMain}>
-              <Text style={styles.rowTitle}>Add shipping address</Text>
-              <Text style={styles.rowSubtitle}>Create a new delivery address</Text>
+              <Text style={styles.rowTitle}>{t('addressBook.addAddress')}</Text>
+              <Text style={styles.rowSubtitle}>{t('addressBook.addAddressSub')}</Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={Colors.TEXT_SECONDARY} />
           </TouchableOpacity>
@@ -124,7 +126,7 @@ export const AddressBookScreen: React.FC = () => {
 
         {addresses.length > 0 ? (
           <>
-            <Text style={styles.sectionLabel}>Saved addresses</Text>
+            <Text style={styles.sectionLabel}>{t('addressBook.sectionSaved')}</Text>
             <View style={styles.group}>
               {addresses.map((item, index) => {
                 const primary =
@@ -149,11 +151,11 @@ export const AddressBookScreen: React.FC = () => {
                       <View style={styles.rowMain}>
                         <View style={styles.titleRow}>
                           <Text style={styles.rowTitle} numberOfLines={1}>
-                            {item.address_title || 'Address'}
+                            {item.address_title || t('addressBook.addressFallback')}
                           </Text>
                           {primary ? (
                             <View style={styles.primaryPill}>
-                              <Text style={styles.primaryPillText}>Primary</Text>
+                              <Text style={styles.primaryPillText}>{t('addressBook.primary')}</Text>
                             </View>
                           ) : null}
                         </View>
@@ -177,7 +179,7 @@ export const AddressBookScreen: React.FC = () => {
                       style={styles.deleteHit}
                       onPress={() => handleDeleteAddress(index)}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      accessibilityLabel="Delete address"
+                      accessibilityLabel={t('addressBook.deleteA11y')}
                     >
                       <Ionicons name="trash-outline" size={20} color={Colors.TEXT_SECONDARY} />
                     </TouchableOpacity>
@@ -187,7 +189,7 @@ export const AddressBookScreen: React.FC = () => {
             </View>
           </>
         ) : (
-          <Text style={styles.emptyHint}>No saved addresses yet. Use “Add shipping address” above.</Text>
+          <Text style={styles.emptyHint}>{t('addressBook.emptyHint')}</Text>
         )}
       </ScrollView>
     </SafeAreaView>

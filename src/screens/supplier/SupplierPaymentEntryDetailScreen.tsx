@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { getERPNextClient } from '../../services/erpnext';
 import type { SupplierStackParamList } from '../../types';
 import { ErpDocumentPreviewLayout, ErpDocSheet } from '../../components/ErpDocumentPreviewLayout';
@@ -9,6 +10,7 @@ type R = RouteProp<SupplierStackParamList, 'SupplierPaymentEntryDetail'>;
 
 export const SupplierPaymentEntryDetailScreen: React.FC = () => {
   const navigation = useNavigation();
+  const { t } = useTranslation();
   const route = useRoute<R>();
   const { name } = route.params;
   const [doc, setDoc] = useState<Record<string, unknown> | null>(null);
@@ -33,12 +35,12 @@ export const SupplierPaymentEntryDetailScreen: React.FC = () => {
 
   return (
     <ErpDocumentPreviewLayout
-      screenTitle="Payment"
+      screenTitle={t('paymentEntry.screenTitle')}
       printDoctype="Payment Entry"
       printDocName={name}
-      printLabel="Download receipt"
+      printLabel={t('paymentEntry.downloadReceipt')}
       loading={loading}
-      errorMessage={!loading && !doc ? 'Could not load this payment.' : null}
+      errorMessage={!loading && !doc ? t('paymentEntry.loadFailed') : null}
       onBack={() => navigation.goBack()}
     >
       {doc ? (

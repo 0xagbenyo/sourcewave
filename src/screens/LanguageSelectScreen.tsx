@@ -9,16 +9,17 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CommonActions, useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { RootStackParamList } from '../types';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/colors';
 import { appStorage } from '../services/appStorage';
-import { appAlert as Alert } from '../services/appAlert';
 import { STORAGE_APP_LANGUAGE } from '../constants/appPreferencesKeys';
-import { ensureChineseMachineLocale, applyEnglishLocale } from '../i18n/machineChineseLocale';
+import { applyChineseLocale, applyEnglishLocale } from '../i18n/machineChineseLocale';
 
 export const LanguageSelectScreen: React.FC = () => {
   const navigation = useNavigation();
+  const { t } = useTranslation();
   const route = useRoute<RouteProp<RootStackParamList, 'LanguageSelect'>>();
   const fromSettings = Boolean(route.params?.fromSettings);
   const [busy, setBusy] = useState(false);
@@ -59,13 +60,7 @@ export const LanguageSelectScreen: React.FC = () => {
     setBusyHint('zh');
     try {
       await appStorage.setItem(STORAGE_APP_LANGUAGE, 'zh');
-      const ok = await ensureChineseMachineLocale();
-      if (!ok) {
-        Alert.alert(
-          'Chinese unavailable',
-          'Online translation for Chinese could not be reached. The app will use English for now.'
-        );
-      }
+      await applyChineseLocale();
       afterLanguageChosen();
     } finally {
       setBusy(false);
@@ -80,25 +75,23 @@ export const LanguageSelectScreen: React.FC = () => {
           style={styles.backBar}
           onPress={() => (navigation as { goBack: () => void }).goBack()}
           accessibilityRole="button"
-          accessibilityLabel="Go back"
+          accessibilityLabel={t('legal.back')}
         >
           <Ionicons name="arrow-back" size={24} color={Colors.BLACK} />
         </TouchableOpacity>
       ) : null}
       <View style={styles.inner}>
-        <Text style={styles.title}>Choose your language</Text>
-        <Text style={styles.subtitle}>
-          You can change this later in settings when available.
-        </Text>
+        <Text style={styles.title}>{t('languageSelect.title')}</Text>
+        <Text style={styles.subtitle}>{t('languageSelect.subtitle')}</Text>
 
         <TouchableOpacity
           style={[styles.card, busy && styles.cardDisabled]}
           onPress={pickEnglish}
           disabled={busy}
           accessibilityRole="button"
-          accessibilityLabel="English"
+          accessibilityLabel={t('languageSelect.english')}
         >
-          <Text style={styles.cardTitle}>English</Text>
+          <Text style={styles.cardTitle}>{t('languageSelect.english')}</Text>
           <Ionicons name="chevron-forward" size={22} color={Colors.TEXT_SECONDARY} />
         </TouchableOpacity>
 
@@ -107,9 +100,9 @@ export const LanguageSelectScreen: React.FC = () => {
           onPress={pickChinese}
           disabled={busy}
           accessibilityRole="button"
-          accessibilityLabel="Simplified Chinese"
+          accessibilityLabel={t('languageSelect.chinese')}
         >
-          <Text style={styles.cardTitle}>简体中文</Text>
+          <Text style={styles.cardTitle}>{t('languageSelect.chinese')}</Text>
           <Ionicons name="chevron-forward" size={22} color={Colors.TEXT_SECONDARY} />
         </TouchableOpacity>
 
@@ -117,10 +110,7 @@ export const LanguageSelectScreen: React.FC = () => {
           <View style={styles.busy}>
             <ActivityIndicator size="large" color={Colors.BLACK} />
             {busyHint === 'zh' ? (
-              <Text style={styles.busyText}>
-                Preparing Chinese…{'\n'}
-                <Text style={styles.busyHint}>First time only. Uses automatic translation.</Text>
-              </Text>
+              <Text style={styles.busyText}>切换到简体中文…</Text>
             ) : null}
           </View>
         ) : null}

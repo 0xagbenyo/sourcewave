@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { getERPNextClient } from '../../services/erpnext';
 import { navigateToDeliveryNoteDetail } from '../../utils/erpDocumentNavigation';
@@ -11,6 +11,9 @@ import {
   readSalesInvoiceSupplier,
 } from '../../utils/erpSalesInvoiceSupplier';
 import { ErpInvoicePaymentsPanel } from '../../components/ErpInvoicePaymentsPanel';
+import { SupplierQuotationPaymentModal } from '../../components/SupplierQuotationPaymentModal';
+import { appAlert as Alert } from '../../services/appAlert';
+import { userFacingError } from '../../utils/userFacingError';
 import {
   ErpDocumentPreviewLayout,
   ErpDocSheet,
@@ -30,15 +33,17 @@ import { useTranslation } from 'react-i18next';
 
 type InvoiceTab = 'details' | 'payments';
 
-const INVOICE_TABS = [
-  { id: 'details' as const, label: 'Details' },
-  { id: 'payments' as const, label: 'Payments' },
-];
-
 export const SupplierSalesInvoiceDetailScreen: React.FC = () => {
   const navigation = useNavigation();
   const route = useRoute();
   const { t } = useTranslation();
+  const INVOICE_TABS = useMemo(
+    () => [
+      { id: 'details' as const, label: t('invoiceDetails.tabDetails') },
+      { id: 'payments' as const, label: t('invoiceDetails.tabPayments') },
+    ],
+    [t]
+  );
   const { user } = useUserSession();
   const { supplierDocId } = useSupplierDocumentId();
   const isSupplierPortal = isSupplierPortalUser(user);
@@ -49,6 +54,18 @@ export const SupplierSalesInvoiceDetailScreen: React.FC = () => {
   const [deliveryNotes, setDeliveryNotes] = useState<Array<{ name: string; docstatus?: number }>>([]);
   const [deliveryNotesLoading, setDeliveryNotesLoading] = useState(false);
   const [lineImages, setLineImages] = useState<Record<string, string>>({});
+  const [recordPayModal, setRecordPayModal] = useState(false);
+  const [recordPaySubmitting, setRecordPaySubmitting] = useState(false);
+  const [paymentsRefreshKey, setPaymentsRefreshKey] = useState(0);
+
+  const reloadDoc = useCallback(async () => {
+    try {
+      const d = await getERPNextClient().getInvoice(name);
+      setDoc(d as Record<string, unknown> | null);
+    } catch {
+      /* keep prior doc */
+    }
+  }, [name]);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,7 +141,12 @@ export const SupplierSalesInvoiceDetailScreen: React.FC = () => {
   }, [doc, items, linkedQuotation]);
 
   const currency = String(doc?.currency || 'GHS');
-  const status = String(doc?.status || (Number(doc?.docstatus) === 0 ? 'Draft' : 'Submitted'));
+  const status = String(
+    doc?.status ||
+      (Number(doc?.docstatus) === 0
+        ? t('invoiceDetails.statusDraft')
+        : t('invoiceDetails.statusSubmitted'))
+  );
   const statusColor = useMemo(
     () => erpDocStatusAccent(status, doc?.docstatus != null ? Number(doc.docstatus) : undefined),
     [status, doc?.docstatus]
@@ -139,12 +161,14 @@ export const SupplierSalesInvoiceDetailScreen: React.FC = () => {
     isSupplierPortal && invoiceOwnedByOther && Number(doc?.docstatus) !== 0;
 
   const facts = useMemo(() => {
-    const rows: { label: string; value: string }[] = [{ label: 'Customer', value: customer }];
+    const rows: { label: string; value: string }[] = [
+      { label: t('invoiceDetails.customer'), value: customer },
+    ];
     if (outstanding > 0.009) {
-      rows.push({ label: 'Outstanding', value: formatErpDocMoney(outstanding, currency) });
+      rows.push({ label: t('invoiceDetails.outstanding'), value: formatErpDocMoney(outstanding, currency) });
     }
     return rows;
-  }, [customer, currency, outstanding]);
+  }, [customer, currency, outstanding, t]);
 
   const onShareInvoice = () => {
     (navigation as { navigate: (n: string, p?: object) => void }).navigate('SupplierInvoiceShare', {
@@ -154,16 +178,48 @@ export const SupplierSalesInvoiceDetailScreen: React.FC = () => {
 
   const canShare = doc != null && Number(doc.docstatus) !== 2;
 
+  const canRecordPayment =
+    isSupplierPortal &&
+    !invoiceOwnedByOther &&
+    Number(doc?.docstatus) === 1 &&
+    outstanding > 0.009;
+
+  const onConfirmRecordPayment = async (amount: number) => {
+    if (!invoiceName.trim()) return;
+    setRecordPaySubmitting(true);
+    try {
+      await getERPNextClient().recordReceivePaymentAgainstSalesInvoice({
+        salesInvoiceName: invoiceName.trim(),
+        amount,
+      });
+      setRecordPayModal(false);
+      await reloadDoc();
+      setPaymentsRefreshKey((k) => k + 1);
+      setTab('payments');
+      Alert.alert(
+        t('invoicePayment.recordSuccessTitle'),
+        t('invoicePayment.recordSuccessBody')
+      );
+    } catch (e: unknown) {
+      Alert.alert(
+        t('invoicePayment.failedTitle'),
+        userFacingError(e, t('invoicePayment.recordFailedBody'))
+      );
+    } finally {
+      setRecordPaySubmitting(false);
+    }
+  };
+
   return (
     <ErpDocumentPreviewLayout
-      screenTitle="Invoice"
+      screenTitle={t('invoiceDetails.screenTitle')}
       printDoctype="Sales Invoice"
       printDocName={name}
       loading={loading}
-      errorMessage={!loading && !doc ? 'This invoice could not be found or you may not have access.' : null}
+      errorMessage={!loading && !doc ? t('invoiceDetails.notFound') : null}
       onBack={() => navigation.goBack()}
       onShare={canShare ? onShareInvoice : undefined}
-      shareAccessibilityLabel="Share invoice in chat"
+      shareAccessibilityLabel={t('invoiceDetails.shareInChat')}
     >
       {doc ? (
         <ErpDocSheet>
@@ -172,8 +228,8 @@ export const SupplierSalesInvoiceDetailScreen: React.FC = () => {
             statusLabel={status}
             statusColor={statusColor}
             amount={grandTotal}
-            amountLabel="Total"
-            subtitle={doc.posting_date ? `Posted ${formatErpDocDate(doc.posting_date)}` : undefined}
+            amountLabel={t('invoiceDetails.total')}
+            subtitle={doc.posting_date ? t('invoiceDetails.posted', { date: formatErpDocDate(doc.posting_date) }) : undefined}
             facts={facts}
           />
 
@@ -203,9 +259,9 @@ export const SupplierSalesInvoiceDetailScreen: React.FC = () => {
                   }
                 />
               ) : deliveryNotesLoading ? null : null}
-              <ErpDocSection title={`Items · ${items.length}`}>
+              <ErpDocSection title={t('common.itemsCount', { count: items.length })}>
               {items.length === 0 ? (
-                <ErpDocEmptyState title="No line items" />
+                <ErpDocEmptyState title={t('common.noLineItems')} />
               ) : (
                 <ErpDocItemsList>
                   {items.map((line, idx) => {
@@ -213,12 +269,15 @@ export const SupplierSalesInvoiceDetailScreen: React.FC = () => {
                     const weights = readErpLineWeightFromRow(line);
                     const weightDetail =
                       weights.total_weight != null || weights.weight_per_unit != null
-                        ? `${formatErpLineWeight(weights.total_weight ?? 0)} kg total · ${formatErpLineWeight(weights.weight_per_unit ?? 0)} kg/unit`
+                        ? t('invoiceDelivery.weightDetail', {
+                            weight: formatErpLineWeight(weights.total_weight ?? 0),
+                            perUnit: formatErpLineWeight(weights.weight_per_unit ?? 0),
+                          })
                         : undefined;
                     return (
                     <ErpDocLineItem
                       key={String(line.name || idx)}
-                      title={String(line.item_name || line.item_code || 'Item')}
+                      title={String(line.item_name || line.item_code || t('common.itemFallback'))}
                       detail={weightDetail}
                       qty={line.qty}
                       rate={line.rate}
@@ -234,16 +293,28 @@ export const SupplierSalesInvoiceDetailScreen: React.FC = () => {
             </>
           ) : (
             <ErpInvoicePaymentsPanel
+              key={paymentsRefreshKey}
               invoiceName={invoiceName}
               currency={currency}
               active={tab === 'payments'}
               variant="supplier"
               totalDue={Number(doc.grand_total) || 0}
               outstanding={outstanding}
+              onRecordPayment={canRecordPayment ? () => setRecordPayModal(true) : undefined}
+              recordDisabled={!canRecordPayment || recordPaySubmitting}
             />
           )}
         </ErpDocSheet>
       ) : null}
+
+      <SupplierQuotationPaymentModal
+        visible={recordPayModal}
+        currency={currency}
+        maxAmount={outstanding}
+        loading={recordPaySubmitting}
+        onClose={() => setRecordPayModal(false)}
+        onSubmit={onConfirmRecordPayment}
+      />
     </ErpDocumentPreviewLayout>
   );
 };

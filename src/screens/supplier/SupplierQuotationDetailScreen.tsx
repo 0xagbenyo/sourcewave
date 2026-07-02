@@ -171,7 +171,7 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
   const facts = useMemo(() => {
     const rows: { label: string; value: string }[] = [];
     if (!isSupplierPortal) {
-      rows.push({ label: 'Supplier', value: supplierLabel });
+      rows.push({ label: t('quotationDetails.supplier'), value: supplierLabel });
     }
     const valid = formatErpDocDate(doc?.valid_till);
     if (valid) rows.push({ label: t('quotationDetails.validTo'), value: valid });
@@ -206,14 +206,14 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
 
   return (
     <ErpDocumentPreviewLayout
-      screenTitle="Quotation"
+      screenTitle={t('quotationDetails.screenTitle')}
       printDoctype="Supplier Quotation"
       printDocName={name}
       loading={loading}
-      errorMessage={!loading && !doc ? 'This quotation could not be found or you may not have access.' : null}
+      errorMessage={!loading && !doc ? t('quotationDetails.notFound') : null}
       onBack={() => navigation.goBack()}
       onShare={canShare ? onShareQuotation : undefined}
-      shareAccessibilityLabel="Share quotation in chat"
+      shareAccessibilityLabel={t('quotationDetails.shareInChat')}
     >
       {doc ? (
         <ErpDocSheet>
@@ -222,9 +222,11 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
             statusLabel={status}
             statusColor={statusColor}
             amount={grandTotal}
-            amountLabel="Quote budget"
+            amountLabel={t('quotationDetails.quoteBudget')}
             subtitle={
-              doc.transaction_date ? `Submitted ${formatErpDocDate(doc.transaction_date)}` : undefined
+              doc.transaction_date
+                ? t('quotationDetails.submitted', { date: formatErpDocDate(doc.transaction_date) })
+                : undefined
             }
             facts={facts}
             statusTrailing={
@@ -236,13 +238,13 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
                   onReject={() => void buyerReview.reject()}
                 />
               ) : canEdit ? (
-                <ErpDocHeroActionButton label="Edit" onPress={onEditQuotation} variant="outline" />
+                <ErpDocHeroActionButton label={t('quotationDetails.edit')} onPress={onEditQuotation} variant="outline" />
               ) : canResend ? (
                 <ErpDocHeroActionButton
-                  label="Revise & resend"
+                  label={t('quotationDetails.reviseResend')}
                   onPress={onResendQuotation}
                   variant="outline"
-                  accessibilityLabel="Revise and send a new quotation"
+                  accessibilityLabel={t('quotationDetails.reviseResendA11y')}
                 />
               ) : undefined
             }
@@ -293,9 +295,9 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
             })}
           </ErpDocLinkedSection>
 
-          <ErpDocSection title={`Items · ${items.length}`}>
+          <ErpDocSection title={t('common.itemsCount', { count: items.length })}>
             {items.length === 0 ? (
-              <ErpDocEmptyState title="No line items" />
+              <ErpDocEmptyState title={t('common.noLineItems')} />
             ) : (
               <ErpDocItemsList>
                 {items.map((line, idx) => {
@@ -303,7 +305,10 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
                   const weights = readErpLineWeightFromRow(line as Record<string, unknown>);
                   const weightDetail =
                     weights.total_weight != null || weights.weight_per_unit != null
-                      ? `${formatErpLineWeight(weights.total_weight ?? 0)} kg total · ${formatErpLineWeight(weights.weight_per_unit ?? 0)} kg/unit`
+                      ? t('invoiceDelivery.weightDetail', {
+                          weight: formatErpLineWeight(weights.total_weight ?? 0),
+                          perUnit: formatErpLineWeight(weights.weight_per_unit ?? 0),
+                        })
                       : undefined;
                   return (
                   <ErpDocLineItem

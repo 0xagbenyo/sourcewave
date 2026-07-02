@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
@@ -25,6 +26,9 @@ type Props = {
   totalDue?: number | null;
   /** Current outstanding balance (optional — fetched when omitted). */
   outstanding?: number | null;
+  /** Supplier-only: record a payment received from the customer. */
+  onRecordPayment?: () => void;
+  recordDisabled?: boolean;
 };
 
 export const ErpInvoicePaymentsPanel: React.FC<Props> = ({
@@ -35,6 +39,8 @@ export const ErpInvoicePaymentsPanel: React.FC<Props> = ({
   customerId,
   totalDue: totalDueProp,
   outstanding: outstandingProp,
+  onRecordPayment,
+  recordDisabled,
 }) => {
   const { t } = useTranslation();
   const navigation = useNavigation();
@@ -136,6 +142,18 @@ export const ErpInvoicePaymentsPanel: React.FC<Props> = ({
 
   return (
     <View>
+      {variant === 'supplier' && onRecordPayment ? (
+        <TouchableOpacity
+          style={[styles.recordBtn, recordDisabled && styles.recordBtnDisabled]}
+          onPress={onRecordPayment}
+          disabled={recordDisabled}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="cash-outline" size={20} color={Colors.WHITE} />
+          <Text style={styles.recordBtnText}>{t('invoicePayment.recordCta')}</Text>
+        </TouchableOpacity>
+      ) : null}
+
       {showSummary ? (
         <ErpDocPaymentProgressSummary
           totalDue={due}
@@ -166,4 +184,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: Spacing.XL,
   },
+  recordBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginBottom: 12,
+    paddingVertical: 13,
+    borderRadius: 10,
+    backgroundColor: Colors.WINE,
+  },
+  recordBtnDisabled: { opacity: 0.5 },
+  recordBtnText: { color: Colors.WHITE, fontSize: 15, fontWeight: '700' },
 });

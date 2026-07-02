@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp, useFocusEffect } from '@react-navigation/native';
 import type { NavigationProp } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { getSupplierById, resolveSupplier, type Supplier } from '../data/suppliers';
@@ -15,6 +16,7 @@ import type { RootStackParamList } from '../types';
 export const AgentSupplierChatScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'AgentSupplierChat'>>();
+  const { t } = useTranslation();
   const { user } = useUserSession();
   const { refresh } = useSubscription();
   const supplierId = route.params.supplierId;
@@ -66,7 +68,7 @@ export const AgentSupplierChatScreen: React.FC = () => {
   if (resolvingSupplier) {
     return (
       <View style={styles.root}>
-        <SourceWaveStackHeader title="Chat" subtitle="Loading supplier…" onBack={() => navigation.goBack()} />
+        <SourceWaveStackHeader title={t('agentChat.chat')} subtitle={t('agentChat.loadingSupplier')} onBack={() => navigation.goBack()} />
         <SafeAreaView style={styles.bodySafe} edges={['bottom']}>
           <View style={styles.centered}>
             <ActivityIndicator size="large" color={Colors.WINE} />
@@ -79,12 +81,12 @@ export const AgentSupplierChatScreen: React.FC = () => {
   if (!supplier) {
     return (
       <View style={styles.root}>
-        <SourceWaveStackHeader title="Chat" onBack={() => navigation.goBack()} />
+        <SourceWaveStackHeader title={t('agentChat.chat')} onBack={() => navigation.goBack()} />
         <SafeAreaView style={styles.bodySafe} edges={['bottom']}>
           <View style={styles.blocked}>
-            <Text style={styles.blockedTitle}>Supplier not found</Text>
+            <Text style={styles.blockedTitle}>{t('agentChat.supplierNotFound')}</Text>
             <TouchableOpacity style={styles.secondaryCta} onPress={() => navigation.goBack()}>
-              <Text style={styles.secondaryCtaText}>Go back</Text>
+              <Text style={styles.secondaryCtaText}>{t('agentChat.goBack')}</Text>
             </TouchableOpacity>
           </View>
         </SafeAreaView>
@@ -95,11 +97,11 @@ export const AgentSupplierChatScreen: React.FC = () => {
   if (!user?.email) {
     return (
       <View style={styles.root}>
-        <SourceWaveStackHeader title="Chat" onBack={() => navigation.goBack()} />
+        <SourceWaveStackHeader title={t('agentChat.chat')} onBack={() => navigation.goBack()} />
         <SafeAreaView style={styles.bodySafe} edges={['bottom']}>
           <View style={styles.blocked}>
-            <Text style={styles.blockedTitle}>Sign in required</Text>
-            <Text style={styles.blockedText}>Log in to open in-app chat.</Text>
+            <Text style={styles.blockedTitle}>{t('agentChat.signInRequired')}</Text>
+            <Text style={styles.blockedText}>{t('agentChat.signInBody')}</Text>
           </View>
         </SafeAreaView>
       </View>
@@ -109,7 +111,7 @@ export const AgentSupplierChatScreen: React.FC = () => {
   if (accessGate === 'checking') {
     return (
       <View style={styles.root}>
-        <SourceWaveStackHeader title="Chat" onBack={() => navigation.goBack()} />
+        <SourceWaveStackHeader title={t('agentChat.chat')} onBack={() => navigation.goBack()} />
         <SafeAreaView style={styles.bodySafe} edges={['bottom']}>
           <View style={styles.centered}>
             <ActivityIndicator size="large" color={Colors.WINE} />
@@ -123,7 +125,7 @@ export const AgentSupplierChatScreen: React.FC = () => {
     <View style={styles.root}>
       <SourceWaveStackHeader
         title={supplier.supplier_name}
-        subtitle="In-app"
+        subtitle={t('agentChat.inApp')}
         onBack={() => navigation.goBack()}
       />
       <SafeAreaView style={styles.bodySafe} edges={['bottom']}>

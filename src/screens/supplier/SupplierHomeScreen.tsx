@@ -10,6 +10,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { Colors } from '../../constants/colors';
 import { useUserSession } from '../../context/UserContext';
 import { useRavenUnread } from '../../context/RavenUnreadContext';
@@ -34,6 +35,7 @@ type MenuItem = {
 
 export const SupplierHomeScreen: React.FC = () => {
   const navigation = useNavigation();
+  const { t } = useTranslation();
   const { user } = useUserSession();
   const { unreadTotal, refreshUnreadCounts } = useRavenUnread();
 
@@ -43,7 +45,7 @@ export const SupplierHomeScreen: React.FC = () => {
     }, [refreshUnreadCounts])
   );
 
-  const displayName = user?.supplierName || user?.fullName || 'Supplier';
+  const displayName = user?.supplierName || user?.fullName || t('supplierHome.supplierFallback');
 
   const openStack = (route: string) => {
     const parent = navigation.getParent();
@@ -56,15 +58,15 @@ export const SupplierHomeScreen: React.FC = () => {
     {
       key: 'inv',
       icon: 'layers-outline',
-      title: 'Invoices & payments',
-      subtitle: 'Sales invoices linked to your quotations and related payments',
+      title: t('supplierHome.invTitle'),
+      subtitle: t('supplierHome.invSub'),
       onPress: () => openStack('SupplierOrdersInvoices'),
     },
     {
       key: 'quo',
       icon: 'reader-outline',
-      title: 'Quotations',
-      subtitle: 'Submitted supplier quotations and statuses',
+      title: t('supplierHome.quoTitle'),
+      subtitle: t('supplierHome.quoSub'),
       onPress: () => openStack('SupplierQuotationList'),
     },
   ];
@@ -73,8 +75,8 @@ export const SupplierHomeScreen: React.FC = () => {
     {
       key: 'new',
       icon: 'create-outline',
-      title: 'New quotation',
-      subtitle: 'Draft a quotation to share with a buyer in chat',
+      title: t('supplierHome.newTitle'),
+      subtitle: t('supplierHome.newSub'),
       onPress: () => {
         const parent = navigation.getParent();
         if (parent) {
@@ -87,15 +89,15 @@ export const SupplierHomeScreen: React.FC = () => {
     {
       key: 'chat',
       icon: 'chatbubble-ellipses-outline',
-      title: 'Messages',
-      subtitle: 'Open the Chat tab for buyer conversations',
+      title: t('supplierHome.chatTitle'),
+      subtitle: t('supplierHome.chatSub'),
       onPress: () => navigation.navigate('SupplierMessages' as never),
     },
     {
       key: 'profile',
       icon: 'id-card-outline',
-      title: 'Profile & account',
-      subtitle: 'Supplier details and sign out',
+      title: t('supplierHome.profileTitle'),
+      subtitle: t('supplierHome.profileSub'),
       onPress: () => navigation.navigate('SupplierProfile' as never),
     },
   ];
@@ -141,22 +143,20 @@ export const SupplierHomeScreen: React.FC = () => {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.header}>
-          <Text style={styles.kicker}>Supplier portal</Text>
+          <Text style={styles.kicker}>{t('supplierHome.portal')}</Text>
           <Text style={styles.headline} numberOfLines={2}>
             {displayName}
           </Text>
           <View style={styles.accentRule} />
         </View>
 
-        <Text style={styles.sectionLabel}>Operations</Text>
+        <Text style={styles.sectionLabel}>{t('supplierHome.sectionOperations')}</Text>
         {renderGroup(documentItems)}
 
-        <Text style={styles.sectionLabel}>Account</Text>
+        <Text style={styles.sectionLabel}>{t('supplierHome.sectionAccount')}</Text>
         {renderGroup(accountItems)}
 
-        <Text style={styles.footerNote}>
-          Use the tabs below to switch between this overview, messages, and your profile.
-        </Text>
+        <Text style={styles.footerNote}>{t('supplierHome.footerNote')}</Text>
       </ScrollView>
     </SafeAreaView>
   );

@@ -20,15 +20,27 @@ const hairline = StyleSheet.hairlineWidth;
 
 export const SupplierProfileScreen: React.FC = () => {
   const navigation = useNavigation();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { user, clearUser } = useUserSession();
   const { supplierDocId, loading: sidLoading, error: sidError } = useSupplierDocumentId();
 
+  const languageSubtitle = React.useMemo(() => {
+    const code = (i18n.resolvedLanguage || i18n.language || 'en').toLowerCase();
+    if (code.startsWith('zh')) return t('languageSelect.chinese');
+    return t('languageSelect.english');
+  }, [i18n.language, i18n.resolvedLanguage, t]);
+
+  const openLanguage = () => {
+    (navigation as { navigate: (n: string, p?: object) => void }).navigate('LanguageSelect', {
+      fromSettings: true,
+    });
+  };
+
   const signOut = () => {
-    Alert.alert('Sign out', 'You will return to the login screen.', [
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert(t('supplierProfile.signOutTitle'), t('supplierProfile.signOutBody'), [
+      { text: t('supplierProfile.cancel'), style: 'cancel' },
       {
-        text: 'Sign out',
+        text: t('supplierProfile.signOut'),
         style: 'destructive',
         onPress: () => {
           clearUser();
@@ -61,14 +73,14 @@ export const SupplierProfileScreen: React.FC = () => {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <Text style={styles.title}>Profile</Text>
+          <Text style={styles.title}>{t('supplierProfile.title')}</Text>
         </View>
 
         <View style={styles.card}>
           <View style={styles.row}>
             <Ionicons name="business-outline" size={22} color={Colors.TEXT_SECONDARY} />
             <View style={styles.rowText}>
-              <Text style={styles.label}>Supplier</Text>
+              <Text style={styles.label}>{t('supplierProfile.supplierLabel')}</Text>
               <Text style={styles.value}>{user?.supplierName || '—'}</Text>
             </View>
           </View>
@@ -76,9 +88,9 @@ export const SupplierProfileScreen: React.FC = () => {
           <View style={styles.row}>
             <Ionicons name="pricetag-outline" size={22} color={Colors.TEXT_SECONDARY} />
             <View style={styles.rowText}>
-              <Text style={styles.label}>Supplier ID</Text>
+              <Text style={styles.label}>{t('supplierProfile.supplierIdLabel')}</Text>
               <Text style={styles.value}>
-                {sidLoading ? 'Resolving…' : supplierDocId || user?.supplierId || sidError || '—'}
+                {sidLoading ? t('supplierProfile.resolving') : supplierDocId || user?.supplierId || sidError || '—'}
               </Text>
             </View>
           </View>
@@ -86,11 +98,25 @@ export const SupplierProfileScreen: React.FC = () => {
           <View style={styles.row}>
             <Ionicons name="mail-outline" size={22} color={Colors.TEXT_SECONDARY} />
             <View style={styles.rowText}>
-              <Text style={styles.label}>Email</Text>
+              <Text style={styles.label}>{t('supplierProfile.emailLabel')}</Text>
               <Text style={styles.value}>{user?.email || '—'}</Text>
             </View>
           </View>
         </View>
+
+        <Text style={styles.sectionLabel}>{t('supplierProfile.preferencesSection')}</Text>
+        <TouchableOpacity
+          style={styles.faqRow}
+          onPress={openLanguage}
+          activeOpacity={0.75}
+        >
+          <Ionicons name="language-outline" size={22} color={Colors.WINE} />
+          <View style={styles.faqTextWrap}>
+            <Text style={styles.faqTitle}>{t('supplierProfile.language')}</Text>
+            <Text style={styles.faqSub}>{languageSubtitle}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={Colors.TEXT_SECONDARY} />
+        </TouchableOpacity>
 
         <Text style={styles.sectionLabel}>{t('supplierProfile.catalogSection')}</Text>
         <TouchableOpacity
@@ -123,7 +149,7 @@ export const SupplierProfileScreen: React.FC = () => {
 
         <TouchableOpacity style={styles.signOut} onPress={signOut} activeOpacity={0.85}>
           <Ionicons name="log-out-outline" size={22} color={Colors.WHITE} />
-          <Text style={styles.signOutText}>Sign out</Text>
+          <Text style={styles.signOutText}>{t('supplierProfile.signOut')}</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
