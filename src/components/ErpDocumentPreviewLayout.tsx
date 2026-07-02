@@ -227,8 +227,8 @@ export const ErpDocHero: React.FC<HeroProps> = ({
   <View style={styles.hero}>
     <View style={styles.heroBadgeRow}>
       <ErpDocStatusBadge label={statusLabel} color={statusColor} />
+      {statusTrailing ? <View style={styles.heroTrailingRow}>{statusTrailing}</View> : null}
     </View>
-    {statusTrailing ? <View style={styles.heroTrailingRow}>{statusTrailing}</View> : null}
     <Text style={styles.docId} numberOfLines={1} ellipsizeMode="middle">
       {docId}
     </Text>
@@ -346,6 +346,11 @@ type LineProps = {
   amount?: unknown;
   currency?: string;
   imageUri?: string | null;
+  /** Small caption above the primary amount (e.g. "Budget"). */
+  amountLabel?: string;
+  /** Optional second amount shown under the primary (e.g. accepted quote). */
+  secondaryAmount?: unknown;
+  secondaryAmountLabel?: string;
 };
 
 export const ErpDocLineItem: React.FC<LineProps> = ({
@@ -356,6 +361,9 @@ export const ErpDocLineItem: React.FC<LineProps> = ({
   amount,
   currency,
   imageUri,
+  amountLabel,
+  secondaryAmount,
+  secondaryAmountLabel,
 }) => {
   const insets = useSafeAreaInsets();
   const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
@@ -363,6 +371,11 @@ export const ErpDocLineItem: React.FC<LineProps> = ({
   const rateNum = Number(rate);
   const amountNum = Number(amount);
   const lineTotal = Number.isFinite(amountNum) ? formatErpDocMoney(amountNum, currency) : null;
+  const secondaryNum = Number(secondaryAmount);
+  const secondaryTotal =
+    secondaryAmount != null && secondaryAmount !== '' && Number.isFinite(secondaryNum)
+      ? formatErpDocMoney(secondaryNum, currency)
+      : null;
   const qtyLine =
     Number.isFinite(qtyNum) && Number.isFinite(rateNum)
       ? `${qtyNum} × ${formatErpDocMoney(rateNum, currency)}`
@@ -400,7 +413,33 @@ export const ErpDocLineItem: React.FC<LineProps> = ({
             <Text style={styles.lineDetail}>{qtyLine}</Text>
           ) : null}
         </View>
-        {lineTotal ? <Text style={styles.lineAmount}>{lineTotal}</Text> : null}
+        {lineTotal || secondaryTotal ? (
+          <View style={styles.lineAmountCol}>
+            {lineTotal ? (
+              <>
+                {amountLabel ? (
+                  <Text style={styles.lineAmountLabel} numberOfLines={1}>
+                    {amountLabel}
+                  </Text>
+                ) : null}
+                <Text style={styles.lineAmount}>{lineTotal}</Text>
+              </>
+            ) : null}
+            {secondaryTotal ? (
+              <>
+                {secondaryAmountLabel ? (
+                  <Text
+                    style={[styles.lineAmountLabel, styles.lineAmountLabelSecondary]}
+                    numberOfLines={1}
+                  >
+                    {secondaryAmountLabel}
+                  </Text>
+                ) : null}
+                <Text style={styles.lineAmountSecondary}>{secondaryTotal}</Text>
+              </>
+            ) : null}
+          </View>
+        ) : null}
       </View>
 
       <Modal
@@ -670,15 +709,14 @@ const styles = StyleSheet.create({
     width: '100%',
     minWidth: 0,
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    alignSelf: 'flex-start',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
   },
   heroTrailingRow: {
-    width: '100%',
-    minWidth: 0,
+    flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    flexWrap: 'wrap',
     gap: 8,
   },
   heroActionBtn: {
@@ -885,6 +923,32 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: flatInk,
     fontVariant: ['tabular-nums'],
+    textAlign: 'right',
+  },
+  lineAmountCol: {
+    alignItems: 'flex-end',
+    flexShrink: 0,
+    maxWidth: '42%',
+    gap: 1,
+  },
+  lineAmountLabel: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: flatMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.2,
+    textAlign: 'right',
+  },
+  lineAmountLabelSecondary: {
+    marginTop: 4,
+    color: flatAccent,
+  },
+  lineAmountSecondary: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: flatAccent,
+    fontVariant: ['tabular-nums'],
+    textAlign: 'right',
   },
   lineImageModalRoot: {
     flex: 1,

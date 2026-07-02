@@ -719,7 +719,7 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
                     <>
                       {shareDeliveryNoteNameParam ? (
                         <View style={styles.shareOrderBanner}>
-                          <Ionicons name="cube-outline" size={18} color={RavenLight.accent} />
+                          <Ionicons name="airplane-outline" size={18} color={RavenLight.accent} />
                           <View style={styles.shareOrderBannerText}>
                             <Text style={styles.shareOrderBannerTitle}>
                               {isLogisticsWorkspace

@@ -3978,7 +3978,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
 
         {isSuppliersBuyerTab && !!activeShareDeliveryNoteName && !channel ? (
           <View style={s.shareOrderBanner}>
-            <Ionicons name="cube-outline" size={18} color={RavenLight.accent} style={{ marginRight: 10 }} />
+            <Ionicons name="airplane-outline" size={18} color={RavenLight.accent} style={{ marginRight: 10 }} />
             <View style={s.shareOrderBannerText}>
               <Text style={s.shareOrderBannerTitle}>{t('deliveryNoteShare.pickLogisticsBannerTitle')}</Text>
               <Text style={s.shareOrderBannerSub} numberOfLines={2}>

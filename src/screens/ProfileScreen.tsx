@@ -256,7 +256,7 @@ export const ProfileScreen: React.FC = () => {
                 onPress={() => nav.navigate('CustomerDeliveryNotes')}
                 activeOpacity={0.75}
               >
-                <Ionicons name="cube-outline" size={22} color={Colors.WINE} style={styles.rowIcon} />
+                <Ionicons name="airplane-outline" size={22} color={Colors.WINE} style={styles.rowIcon} />
                 <View style={styles.rowMain}>
                   <Text style={styles.rowTitle}>{t('profile.myDeliveryNotes')}</Text>
                   <Text style={styles.rowSubtitle}>{t('profile.myDeliveryNotesHint')}</Text>

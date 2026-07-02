@@ -28,6 +28,7 @@ import type { RootStackParamList, ErpCustomerAddressRow } from '../types';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { categoryAsSourcingItem } from '../utils/sourcingItems';
 import { buildSourcingSalesOrderLines } from '../utils/sourcingSubmit';
+import { readSalesOrderReference } from '../utils/erpSalesOrderLineFields';
 import { navigateToSalesOrderDetail } from '../utils/erpDocumentNavigation';
 import {
   buildSourcingPrefillFromSalesOrder,
@@ -125,6 +126,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
   const [loadingGroups, setLoadingGroups] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [shipToAddressName, setShipToAddressName] = useState('');
+  const [reference, setReference] = useState('');
   const [forms, setForms] = useState<RequestForm[]>([newForm(true)]);
   const [didAutoPrefill, setDidAutoPrefill] = useState(false);
   const [loadingOrder, setLoadingOrder] = useState(editMode);
@@ -245,6 +247,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
           throw new Error('This order has no line items to edit.');
         }
         setShipToAddressName(prefill.shipToAddressName);
+        setReference(readSalesOrderReference(raw as Record<string, unknown>));
         setForms(
           prefill.forms.map((row, idx) => ({
             id: `${paramSalesOrderName}-${idx}-${Date.now()}`,
@@ -484,6 +487,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
 
         await client.updateDraftSalesOrder(paramSalesOrderName, {
           shipping_address_name: shipTo,
+          po_no: reference.trim(),
           items: itemsForUpdate,
         });
 
@@ -555,6 +559,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
         transaction_date: transactionDate.toISOString().split('T')[0],
         delivery_date: deliveryDate.toISOString().split('T')[0],
         shipping_address_name: shipTo,
+        ...(reference.trim() ? { po_no: reference.trim() } : {}),
         items,
       });
 
@@ -852,6 +857,17 @@ export const SourcingRequestMultiScreen: React.FC = () => {
           <Ionicons name="add-circle-outline" size={20} color={Colors.WINE} />
           <Text style={styles.addAnotherText}>Add Another Item</Text>
         </TouchableOpacity>
+
+        <Text style={styles.label}>{t('sourcing.fieldReference')}</Text>
+        <TextInput
+          style={styles.input}
+          value={reference}
+          onChangeText={setReference}
+          placeholder={t('sourcing.phReference')}
+          placeholderTextColor={Colors.TEXT_SECONDARY}
+          maxLength={60}
+        />
+        <Text style={styles.fieldHint}>{t('sourcing.referenceHint')}</Text>
 
         <ShipToAddressField
           value={shipToAddressName}

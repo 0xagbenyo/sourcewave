@@ -4,6 +4,42 @@ export const ERP_SO_LINE_REQUESTED_QTY_FIELD = 'custom_new_quantity';
 /** Mandatory on some sites — copy of naming series ("Series Copy"). */
 export const ERP_SO_SERIES_COPY_FIELD = 'custom_series_copy';
 
+/** Buyer-facing reference the customer types when creating the order (default: standard `po_no`). */
+export const ERP_SO_REFERENCE_FIELD = 'po_no';
+
+/** Sales Order → accepted Supplier Quotation link (default `custom_quotation`). */
+export const ERP_SO_QUOTATION_LINK_FIELD = 'custom_quotation';
+
+/** Field name for the buyer's own order reference (`po_no` unless overridden). */
+export function salesOrderReferenceFieldName(): string {
+  return (
+    String(process.env.EXPO_PUBLIC_ERPNEXT_SO_REFERENCE_FIELD || ERP_SO_REFERENCE_FIELD).trim() ||
+    ERP_SO_REFERENCE_FIELD
+  );
+}
+
+/** Buyer's own reference entered when creating the order. */
+export function readSalesOrderReference(row: Record<string, unknown> | null | undefined): string {
+  if (!row || typeof row !== 'object') return '';
+  const field = salesOrderReferenceFieldName();
+  return String(row[field] ?? row.po_no ?? '').trim();
+}
+
+/** Field name for the accepted Supplier Quotation link on the Sales Order. */
+export function salesOrderAcceptedQuotationFieldName(): string {
+  return (
+    String(process.env.EXPO_PUBLIC_ERPNEXT_SO_QUOTATION_LINK_FIELD || ERP_SO_QUOTATION_LINK_FIELD).trim() ||
+    ERP_SO_QUOTATION_LINK_FIELD
+  );
+}
+
+/** Accepted Supplier Quotation name linked to this Sales Order (empty when none accepted). */
+export function readSalesOrderAcceptedQuotation(row: Record<string, unknown> | null | undefined): string {
+  if (!row || typeof row !== 'object') return '';
+  const field = salesOrderAcceptedQuotationFieldName();
+  return String(row[field] ?? row.custom_quotation ?? '').trim();
+}
+
 /** Quantity for supplier quotation pre-fill from a linked Sales Order line. */
 export function readSalesOrderLineRequestedQty(row: Record<string, unknown> | null | undefined): number {
   if (!row || typeof row !== 'object') return 1;

@@ -301,7 +301,7 @@ export const InvoiceDetailsScreen: React.FC = () => {
                             .filter(Boolean)
                             .join(' · ') || t('invoiceDelivery.linkedDeliveryNoteSub')
                     }
-                    icon="cube-outline"
+                    icon="airplane-outline"
                     onPress={() =>
                       navigateToDeliveryNoteDetail(
                         navigation as { navigate: (n: string, p?: object) => void },

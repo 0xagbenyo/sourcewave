@@ -150,6 +150,10 @@ export interface Order {
   paymentMethod: PaymentMethod;
   trackingNumber?: string;
   estimatedDelivery?: string;
+  /** Buyer's own reference typed when creating the order (default ERP `po_no`). */
+  reference?: string;
+  /** Accepted Supplier Quotation name linked on the Sales Order (`custom_quotation`). */
+  acceptedQuotationId?: string;
   /** ERPNext Supplier document linked on the Sales Order (`custom_supplier`). */
   supplierId?: string;
   /** Resolved `Supplier.supplier_name` when available. */

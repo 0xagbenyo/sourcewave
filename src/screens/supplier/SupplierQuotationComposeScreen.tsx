@@ -77,6 +77,8 @@ type QuotationLine = {
   buyer_budget?: string;
   weight_per_unit: string;
   total_weight: string;
+  /** UI-only: whether the editable fields for this line are shown. */
+  expanded: boolean;
 };
 
 function newLine(): QuotationLine {
@@ -89,6 +91,7 @@ function newLine(): QuotationLine {
     rate: '',
     weight_per_unit: '0.000',
     total_weight: '0',
+    expanded: true,
   };
 }
 
@@ -212,6 +215,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
                 ...ln,
                 item_image: resolved.fallback[ln.item_code] || ln.item_image,
                 supplier_image: resolved.supplier[ln.item_code] || ln.supplier_image,
+                expanded: true,
               }))
             );
           }
@@ -235,7 +239,8 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
           setOrderLoadError('This order has no line items to quote.');
           setLines([newLine()]);
         } else {
-          setLines(mapped.lines);
+          // Start collapsed when quoting an existing order — supplier expands to make changes.
+          setLines(mapped.lines.map((ln) => ({ ...ln, expanded: false })));
         }
         if (mapped.referenceTitle) setReferenceTitle(mapped.referenceTitle);
         if (mapped.currency) setCurrency(mapped.currency);
@@ -331,6 +336,9 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
   const addLine = () => setLines((prev) => [...prev, newLine()]);
   const removeLine = (key: string) => {
     setLines((prev) => (prev.length <= 1 ? prev : prev.filter((l) => l.key !== key)));
+  };
+  const toggleLineExpanded = (key: string) => {
+    setLines((prev) => prev.map((l) => (l.key === key ? { ...l, expanded: !l.expanded } : l)));
   };
 
   const updateLine = (
@@ -535,15 +543,29 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
       }
 
       const chatChannelId = await (async () => {
-        let chId = paramChannelId.trim();
-        if (chId || !resendMode || !paramResendFromQuotation) return chId;
-        const thread = await resolveErpDocChatThread({
-          linkDoctype: 'Supplier Quotation',
-          linkDocument: paramResendFromQuotation,
-          linkMessageId: paramLinkMessageId || undefined,
-          sessionEmail: user?.email ?? null,
-        });
-        return thread?.channelId?.trim() || '';
+        const chId = paramChannelId.trim();
+        if (chId) return chId;
+        if (resendMode && paramResendFromQuotation) {
+          const thread = await resolveErpDocChatThread({
+            linkDoctype: 'Supplier Quotation',
+            linkDocument: paramResendFromQuotation,
+            linkMessageId: paramLinkMessageId || undefined,
+            sessionEmail: user?.email ?? null,
+          });
+          const resolved = thread?.channelId?.trim();
+          if (resolved) return resolved;
+        }
+        // Quoting against a shared Sales Order — return to the chat where the order was shared.
+        if (linkedOrderName) {
+          const thread = await resolveErpDocChatThread({
+            linkDoctype: 'Sales Order',
+            linkDocument: linkedOrderName,
+            sessionEmail: user?.email ?? null,
+          });
+          const resolved = thread?.channelId?.trim();
+          if (resolved) return resolved;
+        }
+        return '';
       })();
 
       if (chatChannelId) {
@@ -564,14 +586,12 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
         await shareQuotationToChannel(chatChannelId, quotation, channelRows, {
           replyToMessageId: replyToMessageId || undefined,
         });
-        showQuotationShareSentAndOpenChat({
-          navigation: navigation as { dispatch: (action: unknown) => void },
-          sessionEmail: user?.email,
-          channelId: chatChannelId,
-          channelRows,
-          title: 'Shared',
-          body: 'Your new quotation was sent as a reply in this conversation.',
-        });
+        // Return to the chat the supplier came from (works in both the main app and supplier portal).
+        Alert.success(
+          'Shared',
+          'Your new quotation was sent as a reply in this conversation.',
+          [{ text: 'OK', onPress: () => exitCompose() }]
+        );
         return;
       }
 
@@ -828,7 +848,33 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
               return (
               <View key={ln.key} style={styles.lineBlock}>
                 <View style={styles.lineBlockTop}>
-                  <Text style={styles.lineIndex}>Line {lineIdx + 1}</Text>
+                  <TouchableOpacity
+                    style={styles.lineHeaderTap}
+                    onPress={() => toggleLineExpanded(ln.key)}
+                    activeOpacity={0.6}
+                    accessibilityRole="button"
+                    accessibilityLabel={ln.expanded ? 'Collapse line' : 'Expand line to edit'}
+                  >
+                    <Ionicons
+                      name={ln.expanded ? 'chevron-down' : 'chevron-forward'}
+                      size={16}
+                      color="#636366"
+                      style={{ marginRight: 6 }}
+                    />
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={styles.lineIndex}>Line {lineIdx + 1}</Text>
+                      {!ln.expanded ? (
+                        <Text style={styles.lineCollapsedSummary} numberOfLines={1}>
+                          {(ln.item_name || ln.item_code || 'Item').trim()} · {ln.qty || '0'} ×{' '}
+                          {currency.trim() || '—'}{' '}
+                          {lineTotal(ln).toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </Text>
+                      ) : null}
+                    </View>
+                  </TouchableOpacity>
                   <TouchableOpacity
                     onPress={() => removeLine(ln.key)}
                     hitSlop={10}
@@ -839,6 +885,8 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
                   </TouchableOpacity>
                 </View>
 
+                {ln.expanded ? (
+                <>
                 <View style={styles.itemRow}>
                   <TouchableOpacity
                     style={styles.itemRowThumb}
@@ -959,6 +1007,8 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
                     {lineTotal(ln).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </Text>
                 </View>
+                </>
+                ) : null}
               </View>
             );
             })}
@@ -1181,7 +1231,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 10,
   },
+  lineHeaderTap: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', paddingVertical: 2 },
   lineIndex: { fontSize: 12, fontWeight: '500', color: '#636366' },
+  lineCollapsedSummary: { fontSize: 14, fontWeight: '400', color: '#1C1C1E', marginTop: 3, lineHeight: 19 },
   lineRemoveText: { fontSize: 14, fontWeight: '500', color: '#636366' },
   lineRemoveTextOff: { color: '#C7C7CC' },
   itemRow: {

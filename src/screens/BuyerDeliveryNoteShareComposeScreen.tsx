@@ -202,7 +202,7 @@ export const BuyerDeliveryNoteShareComposeScreen: React.FC = () => {
         </View>
       ) : null}
       <View style={flat.center}>
-        <Ionicons name="cube-outline" size={40} color={Colors.WINE} style={{ marginBottom: 12 }} />
+        <Ionicons name="airplane-outline" size={40} color={Colors.WINE} style={{ marginBottom: 12 }} />
         <Text style={styles.dnName}>{dnCaption || paramDeliveryNoteName}</Text>
       </View>
       {showSendingOverlay ? (

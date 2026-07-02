@@ -322,7 +322,7 @@ export const CustomerDeliveryNotesScreen: React.FC = () => {
           ListEmptyComponent={
             !loading ? (
               <View style={styles.emptyWrap}>
-                <Ionicons name="cube-outline" size={40} color={Colors.TEXT_SECONDARY} />
+                <Ionicons name="airplane-outline" size={40} color={Colors.TEXT_SECONDARY} />
                 <Text style={styles.emptyTitle}>{t('deliveryNoteList.emptyTitle')}</Text>
                 <Text style={styles.emptySub}>
                   {statusFilter !== 'all' ? t('deliveryNoteList.emptyFilter') : t('deliveryNoteList.emptySub')}

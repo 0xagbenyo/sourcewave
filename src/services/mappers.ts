@@ -9,6 +9,8 @@ import { readErpDocLineImage } from '../utils/erpDocLineImageField';
 import {
   readSalesOrderLineBudget,
   readSalesOrderLineRequestedQty,
+  readSalesOrderReference,
+  readSalesOrderAcceptedQuotation,
 } from '../utils/erpSalesOrderLineFields';
 import { readSalesOrderSupplier } from '../utils/erpSalesOrderSupplier';
 
@@ -629,6 +631,8 @@ export const mapERPSalesOrderToOrder = (erpOrder: any): Order => {
     },
     trackingNumber: erpOrder.custom_tracking_number,
     estimatedDelivery: erpOrder.delivery_date,
+    reference: readSalesOrderReference(erpOrder as Record<string, unknown>) || undefined,
+    acceptedQuotationId: readSalesOrderAcceptedQuotation(erpOrder as Record<string, unknown>) || undefined,
     createdAt: erpOrder.creation || new Date().toISOString(),
     updatedAt: erpOrder.modified || new Date().toISOString(),
   };

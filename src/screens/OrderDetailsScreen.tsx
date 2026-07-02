@@ -28,7 +28,6 @@ import { erpLineItemTitle } from '../utils/erpLineItemDisplay';
 import type { OrderItem } from '../types';
 import { formatGhanaCedis } from '../utils/currency';
 import { salesOrderSupplierUiLabel } from '../utils/erpSalesOrderSupplier';
-import { navigateShareSalesOrderToSuppliers } from '../utils/navigateShareSalesOrderToSuppliers';
 import { getSalesOrderShareUiState } from '../utils/salesOrderShareState';
 import { isSupplierPortalUser } from '../utils/isSupplierPortalUser';
 import {
@@ -117,6 +116,7 @@ export const OrderDetailsScreen: React.FC = () => {
   const { customerId, loading: customerLoading } = useSessionCustomerId();
   const [linkedQuotations, setLinkedQuotations] = useState<Record<string, unknown>[]>([]);
   const [linksLoading, setLinksLoading] = useState(false);
+  const [acceptedQuotation, setAcceptedQuotation] = useState<Record<string, unknown> | null>(null);
   const [canShareWithSupplier, setCanShareWithSupplier] = useState(false);
   const [canEditOrder, setCanEditOrder] = useState(false);
   const [shareStateLoading, setShareStateLoading] = useState(true);
@@ -181,6 +181,26 @@ export const OrderDetailsScreen: React.FC = () => {
   }, [customerLoading, loadLinkedQuotations]);
 
   useEffect(() => {
+    const qName = String(order?.acceptedQuotationId || '').trim();
+    if (!qName) {
+      setAcceptedQuotation(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const doc = await getERPNextClient().getSupplierQuotationByName(qName);
+        if (!cancelled) setAcceptedQuotation((doc || null) as Record<string, unknown> | null);
+      } catch {
+        if (!cancelled) setAcceptedQuotation(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [order?.acceptedQuotationId]);
+
+  useEffect(() => {
     void loadShareState();
   }, [loadShareState]);
 
@@ -201,6 +221,26 @@ export const OrderDetailsScreen: React.FC = () => {
     void loadLinkedQuotations();
     void loadShareState(order?.id, order?.status === 'pending');
   }, [refreshing, loadLinkedQuotations, loadShareState, order?.id, order?.status]);
+
+  const acceptedCurrency = String((acceptedQuotation?.currency as string) || 'GHS').trim() || 'GHS';
+  const acceptedTotal = acceptedQuotation ? Number(acceptedQuotation.grand_total) || 0 : null;
+  const hasAccepted = !!acceptedQuotation && order?.status !== 'pending';
+  const acceptedLineRates = useMemo(() => {
+    const items = Array.isArray(acceptedQuotation?.items)
+      ? (acceptedQuotation!.items as Record<string, unknown>[])
+      : [];
+    return (order?.items || []).map((it, idx) => {
+      const soCode = String(it.productId || '').trim();
+      let match: Record<string, unknown> | undefined = items[idx];
+      if (!match || (soCode && String(match.item_code || '').trim() !== soCode)) {
+        const found = items.find((q) => String(q.item_code || '').trim() === soCode && soCode);
+        if (found) match = found;
+      }
+      if (!match) return null;
+      const rate = Number(match.rate);
+      return Number.isFinite(rate) ? rate : null;
+    });
+  }, [acceptedQuotation, order?.items]);
 
   const statusKey = (order?.status || 'pending') as OrderStatus;
   const statusLabel = t(`orderDetails.status.${statusKey}`, {
@@ -235,9 +275,6 @@ export const OrderDetailsScreen: React.FC = () => {
     if (order.trackingNumber) {
       facts.push({ label: 'Tracking', value: order.trackingNumber });
     }
-    if (order.estimatedDelivery) {
-      facts.push({ label: 'Est. delivery', value: formatErpDocDate(order.estimatedDelivery) });
-    }
     return facts.length ? facts : undefined;
   }, [order]);
 
@@ -249,14 +286,13 @@ export const OrderDetailsScreen: React.FC = () => {
     });
   }, [navigation, resolvedOrderId, chatChannelId, isSupplierPortal]);
 
-  const onShareOrder = useCallback(async () => {
+  const onShareOrder = useCallback(() => {
     if (!resolvedOrderId) return;
-    await navigateShareSalesOrderToSuppliers({
-      navigation: navigation as { dispatch: (action: unknown) => void },
-      salesOrderName: resolvedOrderId,
-      t,
-    });
-  }, [navigation, resolvedOrderId, t]);
+    (navigation as { navigate: (name: string, params?: object) => void }).navigate(
+      'BuyerSalesOrderShareCompose',
+      { salesOrderName: resolvedOrderId }
+    );
+  }, [navigation, resolvedOrderId]);
 
   const openQuotation = useCallback(
     (quotationName: string) => {
@@ -342,11 +378,17 @@ export const OrderDetailsScreen: React.FC = () => {
         <>
           <ErpDocSheet>
             <ErpDocHero
-              docId={order.orderNumber}
+              docId={order.reference || order.orderNumber}
               statusLabel={statusLabel}
               statusColor={accent}
               amount={formatGhanaCedis(order.total)}
-              amountLabel={t('orderDetails.orderBudget')}
+              amountLabel={hasAccepted ? t('orderDetails.budget') : t('orderDetails.orderBudget')}
+              secondaryAmount={
+                hasAccepted && acceptedTotal != null
+                  ? formatErpDocMoney(acceptedTotal, acceptedCurrency)
+                  : undefined
+              }
+              secondaryAmountLabel={hasAccepted ? t('orderDetails.acceptedBudget') : undefined}
               subtitle={`${t('orderDetails.orderPlaced')} ${formatErpDocDate(order.createdAt)}`}
               facts={heroFacts}
               statusTrailing={
@@ -361,6 +403,13 @@ export const OrderDetailsScreen: React.FC = () => {
               }
             />
 
+            {order.reference ? (
+              <ErpDocSection title={t('orderDetails.detailsSection')}>
+                <ErpDocMetaRow label={t('orderDetails.referenceField')} value={order.reference} />
+                <ErpDocMetaRow label={t('orderDetails.orderNoField')} value={order.orderNumber} />
+              </ErpDocSection>
+            ) : null}
+
             {!isSupplierPortal ? (
               <ErpDocSection title={t('orderDetails.supplier')}>
                 <ErpDocMetaRow label={t('orderDetails.supplierField')} value={supplierLabel} />
@@ -370,18 +419,35 @@ export const OrderDetailsScreen: React.FC = () => {
             <ErpDocSection title={`Items · ${order.items?.length ?? 0}`}>
               {order.items?.length ? (
                 <ErpDocItemsList>
-                  {order.items.map((item) => (
-                    <ErpDocLineItem
-                      key={item.id || `${item.productId}-${item.quantity}`}
-                      title={orderItemTitle(item)}
-                      detail={t('orderDetails.salesOrderLineDetail', {
-                        qty: item.quantity,
-                        budget: formatGhanaCedis(item.price),
-                      })}
-                      amount={item.price}
-                      imageUri={pickLineDisplayImageUri(null, item.product?.images?.[0])}
-                    />
-                  ))}
+                  {order.items.map((item, idx) => {
+                    const acceptedRate = hasAccepted ? acceptedLineRates[idx] : null;
+                    return (
+                      <ErpDocLineItem
+                        key={item.id || `${item.productId}-${item.quantity}`}
+                        title={orderItemTitle(item)}
+                        detail={
+                          hasAccepted
+                            ? t('orderDetails.salesOrderLineQty', { qty: item.quantity })
+                            : t('orderDetails.salesOrderLineDetail', {
+                                qty: item.quantity,
+                                budget: formatGhanaCedis(item.price),
+                              })
+                        }
+                        amount={item.price}
+                        currency={acceptedCurrency}
+                        amountLabel={hasAccepted ? t('orderDetails.budget') : undefined}
+                        secondaryAmount={
+                          hasAccepted && acceptedRate != null ? acceptedRate : undefined
+                        }
+                        secondaryAmountLabel={
+                          hasAccepted && acceptedRate != null
+                            ? t('orderDetails.acceptedBudget')
+                            : undefined
+                        }
+                        imageUri={pickLineDisplayImageUri(null, item.product?.images?.[0])}
+                      />
+                    );
+                  })}
                 </ErpDocItemsList>
               ) : (
                 <ErpDocEmptyState title={t('orderDetails.emptyItems')} />
@@ -463,7 +529,7 @@ export const OrderDetailsScreen: React.FC = () => {
               <Text style={styles.sendHint}>{t('orderDetails.sendToSupplierHint')}</Text>
               <TouchableOpacity
                 style={styles.sendButton}
-                onPress={() => void onShareOrder()}
+                onPress={onShareOrder}
                 activeOpacity={0.85}
                 accessibilityRole="button"
               >

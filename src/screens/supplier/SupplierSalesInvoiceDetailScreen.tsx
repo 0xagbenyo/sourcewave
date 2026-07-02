@@ -193,7 +193,7 @@ export const SupplierSalesInvoiceDetailScreen: React.FC = () => {
                       ? t('invoiceDelivery.linkedDeliveryNoteDraftSub')
                       : t('deliveryNoteDetails.viewDeliveryNoteSub')
                   }
-                  icon="cube-outline"
+                  icon="airplane-outline"
                   onPress={() =>
                     navigateToDeliveryNoteDetail(
                       navigation as { navigate: (n: string, p?: object) => void },

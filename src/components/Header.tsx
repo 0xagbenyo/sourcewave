@@ -252,7 +252,7 @@ export const Header: React.FC<HeaderProps> = ({
           {
             key: 'suppliers-delivery-notes',
             label: t('home.menuDeliveryNotes'),
-            icon: 'cube-outline',
+            icon: 'airplane-outline',
             onPress: () => nav.navigate('CustomerDeliveryNotes'),
           },
           {

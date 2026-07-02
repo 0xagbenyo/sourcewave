@@ -179,7 +179,7 @@ export const CustomerInvoicesScreen: React.FC = () => {
         }
         activeOpacity={0.85}
       >
-        <Ionicons name="cube-outline" size={20} color={Colors.WINE} />
+        <Ionicons name="airplane-outline" size={20} color={Colors.WINE} />
         <View style={styles.hubLinkText}>
           <Text style={styles.hubLinkTitle}>{t('deliveryNoteList.title')}</Text>
           <Text style={styles.hubLinkSub}>{t('profile.myDeliveryNotesHint')}</Text>

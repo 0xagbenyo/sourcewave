@@ -27,6 +27,8 @@ import {
   readSalesOrderLineRequestedQty,
   readSalesOrderSeriesCopy,
   salesOrderHeaderPreservePatch,
+  salesOrderReferenceFieldName,
+  salesOrderAcceptedQuotationFieldName,
 } from '../utils/erpSalesOrderLineFields';
 import { salesOrderSupplierFieldName } from '../utils/erpSalesOrderSupplier';
 import {
@@ -2638,6 +2640,8 @@ class ERPNextClient {
     company: string;
     transaction_date?: string;
     shipping_address_name?: string;
+    /** Buyer's own reference (ERP `po_no`). */
+    po_no?: string;
     items: Array<{
       item_code: string;
       qty: number;
@@ -3937,20 +3941,27 @@ class ERPNextClient {
       }
 
       const supplierField = salesOrderSupplierFieldName();
+      const referenceField = salesOrderReferenceFieldName();
+      const acceptedQuotationField = salesOrderAcceptedQuotationFieldName();
+      const listFields = Array.from(
+        new Set([
+          'name',
+          'customer',
+          'company',
+          'status',
+          'docstatus',
+          'total',
+          'transaction_date',
+          'grand_total',
+          'creation',
+          supplierField,
+          referenceField,
+          acceptedQuotationField,
+        ])
+      );
       const response = await this.client.get(`${API_VERSION}/Sales Order`, {
         params: {
-          fields: JSON.stringify([
-            'name',
-            'customer',
-            'company',
-            'status',
-            'docstatus',
-            'total',
-            'transaction_date',
-            'grand_total',
-            'creation',
-            supplierField,
-          ]),
+          fields: JSON.stringify(listFields),
           filters: JSON.stringify(filters),
           limit_page_length: limit,
           limit_start: start,
@@ -4872,6 +4883,8 @@ class ERPNextClient {
     orderName: string,
     args: {
       shipping_address_name?: string;
+      /** Buyer's own reference (ERP `po_no`). Pass empty string to clear. */
+      po_no?: string;
       items: Array<{
         item_code: string;
         qty: number;
@@ -4926,6 +4939,9 @@ class ERPNextClient {
     };
     const shipTo = String(args.shipping_address_name || '').trim();
     if (shipTo) payload.shipping_address_name = shipTo;
+    if (args.po_no !== undefined) {
+      payload[salesOrderReferenceFieldName()] = String(args.po_no || '').trim();
+    }
 
     await this.updateSalesOrder(n, payload);
     return { name: n };
@@ -6334,6 +6350,38 @@ class ERPNextClient {
     }
   }
 
+  /**
+   * Batch-fetch Supplier Quotation header totals by name.
+   * Returns a map keyed by quotation name → `{ grandTotal, currency }` (accepted budget source).
+   */
+  async getSupplierQuotationTotalsByNames(
+    names: string[]
+  ): Promise<Record<string, { grandTotal: number; currency: string }>> {
+    const unique = Array.from(
+      new Set((names || []).map((n) => String(n || '').trim()).filter(Boolean))
+    );
+    const out: Record<string, { grandTotal: number; currency: string }> = {};
+    if (!unique.length) return out;
+    try {
+      const rows = await this.listResourceRows('Supplier Quotation', {
+        filters: [['name', 'in', unique]],
+        fields: ['name', 'grand_total', 'currency'],
+        limit_page_length: Math.min(Math.max(unique.length, 1), 50),
+      });
+      for (const row of rows || []) {
+        const name = String(row?.name || '').trim();
+        if (!name) continue;
+        out[name] = {
+          grandTotal: Number(row?.grand_total) || 0,
+          currency: String(row?.currency || 'GHS').trim() || 'GHS',
+        };
+      }
+    } catch {
+      return out;
+    }
+    return out;
+  }
+
   async listPurchaseReceiptsForSupplier(
     supplierDocName: string,
     opts?: { limit?: number; start?: number }
@@ -6384,14 +6432,28 @@ class ERPNextClient {
     }
   }
 
+  /** Child doctype for the Item → Suppliers table (default ERPNext "Item Supplier" behind `supplier_items`). */
+  private itemSupplierChildDoctype(): string {
+    return (
+      String(process.env.EXPO_PUBLIC_ERPNEXT_ITEM_SUPPLIER_CHILD_DOCTYPE || 'Item Supplier').trim() ||
+      'Item Supplier'
+    );
+  }
+
+  /** Supplier Link field on each Item → Suppliers child row (default "supplier"). */
+  private itemSupplierLinkField(): string {
+    return String(process.env.EXPO_PUBLIC_ERPNEXT_ITEM_SUPPLIER_FIELD || 'supplier').trim() || 'supplier';
+  }
+
   /**
    * Search purchasable Items for supplier quotation lines (Item master, not Website Item).
    * Matches item code or item name; excludes disabled items.
-   * Only Items whose **Supplier** link `custom_supplier` equals the given supplier document name are returned.
+   * Only Items that list the given supplier in the **`supplier_items`** child table (field `supplier`)
+   * are returned — a many-to-many mapping (an item can have several suppliers and vice-versa).
    * Optional **`image`** in each row is the Item master **image** field only (not `website_image`).
    */
   async searchItemsForQuotation(opts: {
-    /** ERPNext **Supplier** document name linked on Item `custom_supplier`. */
+    /** ERPNext **Supplier** document name listed in the Item's `supplier_items` table. */
     supplier: string;
     q: string;
     limit?: number;
@@ -6417,7 +6479,10 @@ class ERPNextClient {
       .filter(Boolean);
     /** Item master Attach field only (not Website Item / `website_image`). */
     const fields = ['name', 'item_code', 'item_name', 'item_group', 'stock_uom', 'image'];
-    const baseDisabled: any[] = [['disabled', '=', 0], ['custom_supplier', '=', supplier]];
+    const baseDisabled: any[] = [
+      ['disabled', '=', 0],
+      [this.itemSupplierChildDoctype(), this.itemSupplierLinkField(), '=', supplier],
+    ];
     if (itemGroups.length === 1) {
       baseDisabled.push(['item_group', '=', itemGroups[0]]);
     } else if (itemGroups.length > 1) {

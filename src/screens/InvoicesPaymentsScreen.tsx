@@ -47,7 +47,7 @@ export const InvoicesPaymentsScreen: React.FC = () => {
         activeOpacity={0.85}
       >
         <View style={[styles.cardIcon, { backgroundColor: 'rgba(25, 118, 210, 0.1)' }]}>
-          <Ionicons name="cube-outline" size={28} color="#1976D2" />
+          <Ionicons name="airplane-outline" size={28} color="#1976D2" />
         </View>
         <View style={styles.cardBody}>
           <Text style={styles.cardTitle}>{t('profile.myDeliveryNotes')}</Text>

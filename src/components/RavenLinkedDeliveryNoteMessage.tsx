@@ -108,7 +108,7 @@ export const RavenLinkedDeliveryNoteMessage: React.FC<Props> = ({ deliveryNoteNa
     <View style={ravenChatDocCardStyle(mine)}>
       {mine ? <Text style={ravenChatDocSharedLabelStyle(mine)}>You shared</Text> : null}
       <View style={styles.head}>
-        <Ionicons name="cube-outline" size={22} color={colors.icon} style={{ marginRight: 8 }} />
+        <Ionicons name="airplane-outline" size={22} color={colors.icon} style={{ marginRight: 8 }} />
         <Text style={[styles.headTitle, { color: colors.title }]} numberOfLines={1}>
           Delivery note
         </Text>

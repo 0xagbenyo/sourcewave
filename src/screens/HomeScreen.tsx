@@ -117,6 +117,38 @@ export const HomeScreen: React.FC = () => {
       .slice(0, 5);
   }, [orders]);
 
+  const [acceptedTotals, setAcceptedTotals] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    const targets = recentOrders.filter(
+      (o) => o.status !== 'pending' && String(o.acceptedQuotationId || '').trim()
+    );
+    if (!targets.length) {
+      setAcceptedTotals({});
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const client = (await import('../services/erpnext')).getERPNextClient();
+        const names = targets.map((o) => String(o.acceptedQuotationId || '').trim()).filter(Boolean);
+        const totals = await client.getSupplierQuotationTotalsByNames(names);
+        if (cancelled) return;
+        const byOrder: Record<string, number> = {};
+        for (const o of targets) {
+          const q = totals[String(o.acceptedQuotationId || '').trim()];
+          if (q) byOrder[o.id] = q.grandTotal;
+        }
+        setAcceptedTotals(byOrder);
+      } catch {
+        if (!cancelled) setAcceptedTotals({});
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [recentOrders]);
+
   useEffect(() => {
     flyersLenRef.current = flyers?.length ?? 0;
   }, [flyers?.length]);
@@ -350,6 +382,9 @@ export const HomeScreen: React.FC = () => {
           const statusLabel = t(`orderDetails.status.${statusKey}`, {
             defaultValue: statusKey,
           });
+          const acceptedTotal = o.status !== 'pending' ? acceptedTotals[o.id] : undefined;
+          const showAccepted = acceptedTotal != null;
+          const displayAmount = showAccepted ? acceptedTotal : o.total;
           return (
             <TouchableOpacity
               key={o.id}
@@ -360,7 +395,7 @@ export const HomeScreen: React.FC = () => {
               <View style={homeLayout.orderRowMain}>
                 <View style={homeLayout.orderRowTop}>
                   <Text style={homeLayout.orderId} numberOfLines={1}>
-                    {o.orderNumber || o.id}
+                    {o.reference || o.orderNumber || o.id}
                   </Text>
                   <View
                     style={[
@@ -383,7 +418,8 @@ export const HomeScreen: React.FC = () => {
                     year: 'numeric',
                   })}
                   {' · '}
-                  {formatGhanaCedis(o.total)}
+                  {formatGhanaCedis(displayAmount)}
+                  {showAccepted ? `  ·  ${t('home.acceptedBudgetShort')}` : ''}
                 </Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />

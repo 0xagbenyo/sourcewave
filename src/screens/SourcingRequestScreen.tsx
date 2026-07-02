@@ -69,6 +69,7 @@ export const SourcingRequestScreen: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [forms, setForms] = useState<RequestForm[]>([newForm(true)]);
   const [shipToAddressName, setShipToAddressName] = useState('');
+  const [reference, setReference] = useState('');
 
   const onShipToChange = useCallback((name: string, _row: ErpCustomerAddressRow) => {
     setShipToAddressName(name);
@@ -231,6 +232,7 @@ export const SourcingRequestScreen: React.FC = () => {
         transaction_date: transactionDate.toISOString().split('T')[0],
         delivery_date: deliveryDate.toISOString().split('T')[0],
         shipping_address_name: shipTo,
+        ...(reference.trim() ? { po_no: reference.trim() } : {}),
         items,
       });
 
@@ -264,6 +266,7 @@ export const SourcingRequestScreen: React.FC = () => {
       const orderName = createdOrder.name;
       resetAll();
       setShipToAddressName('');
+      setReference('');
       navigateToSalesOrderDetail(
         navigation as { navigate: (name: string, params?: object) => void },
         orderName
@@ -436,6 +439,19 @@ export const SourcingRequestScreen: React.FC = () => {
             <Text style={styles.addLineText}>{t('sourcing.addAnotherLine')}</Text>
           </TouchableOpacity>
 
+          <View style={styles.referenceBlock}>
+            <Text style={styles.fieldLabel}>{t('sourcing.fieldReference')}</Text>
+            <TextInput
+              style={styles.input}
+              value={reference}
+              onChangeText={setReference}
+              placeholder={t('sourcing.phReference')}
+              placeholderTextColor={Colors.TEXT_SECONDARY}
+              maxLength={60}
+            />
+            <Text style={styles.fieldHint}>{t('sourcing.referenceHint')}</Text>
+          </View>
+
           <ShipToAddressField
             value={shipToAddressName}
             onChange={onShipToChange}
@@ -589,6 +605,10 @@ const styles = StyleSheet.create({
   },
   rowTwoCell: { flex: 1 },
   rowTwoGap: { width: 14 },
+  referenceBlock: {
+    marginTop: 4,
+    marginBottom: 4,
+  },
   addLine: {
     flexDirection: 'row',
     alignItems: 'center',
