@@ -50,6 +50,25 @@ type SourcingRoute = RouteProp<RootStackParamList, 'SourcingRequest'>;
 
 const hairline = StyleSheet.hairlineWidth;
 
+function formatCurrency(amount: number): string {
+  const value = Number.isFinite(amount) && amount >= 0 ? amount : 0;
+  try {
+    return new Intl.NumberFormat('en-GH', {
+      style: 'currency',
+      currency: 'GHS',
+    }).format(value);
+  } catch {
+    return `GH₵ ${value.toFixed(2)}`;
+  }
+}
+
+function getLineTotal(quantityText: string, rateText: string): number {
+  const quantity = parseFloat(String(quantityText || '').replace(/,/g, ''));
+  const rate = parseFloat(String(rateText || '').replace(/,/g, ''));
+  if (!Number.isFinite(quantity) || !Number.isFinite(rate)) return 0;
+  return quantity * rate;
+}
+
 function resolveCanonicalItemGroupId(raw: string, allGroups: any[]): string {
   const q = raw.trim();
   if (!q) return '';
@@ -80,6 +99,7 @@ type RequestForm = {
   selectedCategoryId: string;
   selectedCategoryName: string;
   selectedProductId: string;
+  selectedItemName: string;
   itemDescription: string;
   referenceImageUri: string | null;
   quantity: string;
@@ -92,6 +112,7 @@ const newForm = (expanded: boolean): RequestForm => ({
   selectedCategoryId: '',
   selectedCategoryName: '',
   selectedProductId: '',
+  selectedItemName: '',
   itemDescription: '',
   referenceImageUri: null,
   quantity: '1',
@@ -189,6 +210,19 @@ export const SourcingRequestMultiScreen: React.FC = () => {
     selectedCategoryId: categoryId,
     selectedCategoryName: categoryName,
     selectedProductId: categoryId,
+    selectedItemName: categoryName,
+  });
+
+  const lockParentChildCategories = (
+    parentId: string,
+    parentName: string,
+    childId: string,
+    childName: string
+  ) => ({
+    selectedCategoryId: parentId,
+    selectedCategoryName: parentName,
+    selectedProductId: childId,
+    selectedItemName: childName,
   });
 
   useEffect(() => {
@@ -255,6 +289,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
             selectedCategoryId: row.selectedCategoryId,
             selectedCategoryName: row.selectedCategoryName,
             selectedProductId: row.selectedProductId,
+            selectedItemName: row.selectedItemName || row.selectedCategoryName,
             itemDescription: row.itemDescription,
             referenceImageUri: row.referenceImageUri,
             quantity: row.quantity,
@@ -374,8 +409,14 @@ export const SourcingRequestMultiScreen: React.FC = () => {
     const categoryId = String(parentGroupRaw.name || '').trim();
     const categoryName =
       parentGroupRaw.item_group_name || parentGroupRaw.name || parentParam || categoryId;
+    const childId = String(matchedSubcategoryRaw.name || '').trim();
+    const childName =
+      matchedSubcategoryRaw.item_group_name || matchedSubcategoryRaw.name || childId;
 
-    updateForm(firstForm.id, lockCategoryAsItem(categoryId, categoryName));
+    updateForm(
+      firstForm.id,
+      lockParentChildCategories(categoryId, categoryName, childId, childName)
+    );
 
     setDidAutoPrefill(true);
   }, [didAutoPrefill, loadingGroups, allGroups, forms, route?.params]);
@@ -441,7 +482,10 @@ export const SourcingRequestMultiScreen: React.FC = () => {
         return;
       }
       if (!rate || rate <= 0) {
-        Alert.alert('Invalid budget', `Item request #${requestNum}: my budget must be greater than 0.`);
+        Alert.alert(
+          'Invalid budget',
+          `Item request #${requestNum}: enter your budget for one item (unit price) must be greater than 0.`
+        );
         return;
       }
     }
@@ -462,11 +506,12 @@ export const SourcingRequestMultiScreen: React.FC = () => {
       const sessionEmail = (user?.email || '').trim();
 
       const orderLines = expandedForms.map((form) => {
-        const categoryName = form.selectedCategoryName.trim();
+        const itemName = (form.selectedItemName || form.selectedCategoryName).trim();
+        const itemId = (form.selectedProductId || form.selectedCategoryId).trim();
         return {
-          product: categoryAsSourcingItem(form.selectedCategoryId, categoryName),
+          product: categoryAsSourcingItem(itemId, itemName),
           selectedCategoryId: form.selectedCategoryId,
-          itemFieldText: categoryName,
+          itemFieldText: itemName,
           quantity: parseInt(form.quantity, 10),
           rate: parseFloat(form.expectedRate),
           description: form.itemDescription.trim(),
@@ -707,8 +752,21 @@ export const SourcingRequestMultiScreen: React.FC = () => {
           </View>
         ) : null}
         {!loadingOrder && !loadOrderError
-          ? forms.map((form, idx) => {
-          const itemLabel = form.selectedCategoryName.trim() || t('sourcing.tapToExpand');
+          ? (
+          <>
+        <Text style={styles.label}>{t('sourcing.fieldReference')}</Text>
+        <TextInput
+          style={styles.input}
+          value={reference}
+          onChangeText={setReference}
+          placeholder={t('sourcing.phReference')}
+          placeholderTextColor={Colors.TEXT_SECONDARY}
+          maxLength={60}
+        />
+        <Text style={styles.fieldHint}>{t('sourcing.referenceHint')}</Text>
+
+        {forms.map((form, idx) => {
+          const itemLabel = (form.selectedItemName || form.selectedCategoryName).trim() || t('sourcing.tapToExpand');
 
           return (
             <View key={form.id} style={styles.card}>
@@ -784,7 +842,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
                         <>
                           <TextInput
                             style={[styles.input, styles.inputLocked]}
-                            value={form.selectedCategoryName}
+                            value={form.selectedItemName || form.selectedCategoryName}
                             editable={false}
                           />
                           <Text style={styles.fieldHint}>{t('sourcing.categoryLockedItemHint')}</Text>
@@ -844,30 +902,22 @@ export const SourcingRequestMultiScreen: React.FC = () => {
                     placeholder={t('sourcing.phRate')}
                     placeholderTextColor={Colors.TEXT_SECONDARY}
                   />
+                  <Text style={styles.label}>{t('sourcing.fieldTotalBudget')}</Text>
+                  <TextInput
+                    style={[styles.input, styles.inputLocked]}
+                    value={formatCurrency(getLineTotal(form.quantity, form.expectedRate))}
+                    editable={false}
+                  />
                 </>
               )}
             </View>
           );
-        })
-          : null}
+        })}
 
-        {!loadingOrder && !loadOrderError ? (
-          <>
         <TouchableOpacity style={styles.addAnotherButton} onPress={addAnotherItem}>
           <Ionicons name="add-circle-outline" size={20} color={Colors.WINE} />
           <Text style={styles.addAnotherText}>Add Another Item</Text>
         </TouchableOpacity>
-
-        <Text style={styles.label}>{t('sourcing.fieldReference')}</Text>
-        <TextInput
-          style={styles.input}
-          value={reference}
-          onChangeText={setReference}
-          placeholder={t('sourcing.phReference')}
-          placeholderTextColor={Colors.TEXT_SECONDARY}
-          maxLength={60}
-        />
-        <Text style={styles.fieldHint}>{t('sourcing.referenceHint')}</Text>
 
         <ShipToAddressField
           value={shipToAddressName}

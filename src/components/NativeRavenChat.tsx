@@ -27,7 +27,6 @@ import { useChatComposerInsets } from '../hooks/useChatComposerInsets';
 import { useChatMessageJumpHighlight } from '../hooks/useChatMessageJumpHighlight';
 import { ChatMessageJumpHighlightBar } from './ChatMessageJumpHighlightBar';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { useUserSession } from '../context/UserContext';
@@ -160,9 +159,8 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const { user } = useUserSession();
   const { t } = useTranslation();
-  const insets = useSafeAreaInsets();
   const { setActiveChannelId, refreshUnreadCounts } = useRavenUnread();
-  const { composerBottomPad, rootKeyboardPad, keyboardOpen } = useChatComposerInsets(true);
+  const { composerBottomPad, rootKeyboardPad } = useChatComposerInsets(true);
   const { flashMessageHighlight, isMessageHighlighted } = useChatMessageJumpHighlight();
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [channels, setChannels] = useState<RavenChannelRow[]>([]);
@@ -1218,7 +1216,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
         style={[
           styles.composerWrap,
           {
-            paddingBottom: composerBottomPad + (keyboardOpen ? 0 : Math.max(insets.bottom, Platform.OS === 'android' ? 16 : 0)),
+            paddingBottom: composerBottomPad,
           },
         ]}
       >

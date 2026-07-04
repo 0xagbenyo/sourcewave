@@ -1,4 +1,4 @@
-/** Buyer-requested units on Sales Order Item only; ERP `qty` stays 1. */
+/** Legacy buyer-requested units field on older Sales Order Item rows. New rows use ERP `qty`. */
 export const ERP_SO_LINE_REQUESTED_QTY_FIELD = 'custom_new_quantity';
 
 /** Mandatory on some sites — copy of naming series ("Series Copy"). */
@@ -43,7 +43,7 @@ export function readSalesOrderAcceptedQuotation(row: Record<string, unknown> | n
 /** Quantity for supplier quotation pre-fill from a linked Sales Order line. */
 export function readSalesOrderLineRequestedQty(row: Record<string, unknown> | null | undefined): number {
   if (!row || typeof row !== 'object') return 1;
-  const raw = row[ERP_SO_LINE_REQUESTED_QTY_FIELD] ?? row.custom_new_quantity ?? row.qty;
+  const raw = row.qty ?? row[ERP_SO_LINE_REQUESTED_QTY_FIELD] ?? row.custom_new_quantity;
   const custom = Number(raw);
   if (Number.isFinite(custom) && custom > 0) return Math.floor(custom);
   return 1;

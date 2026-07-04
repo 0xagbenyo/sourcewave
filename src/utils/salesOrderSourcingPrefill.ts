@@ -9,6 +9,7 @@ export type SourcingFormPrefill = {
   selectedCategoryId: string;
   selectedCategoryName: string;
   selectedProductId: string;
+  selectedItemName: string;
   itemDescription: string;
   referenceImageUri: string | null;
   quantity: string;
@@ -80,6 +81,7 @@ export async function buildSourcingPrefillFromSalesOrder(
       selectedCategoryId: categoryId,
       selectedCategoryName: categoryName,
       selectedProductId: categoryId,
+      selectedItemName: String(row.item_name || categoryName).trim(),
       itemDescription: String(row.description || row.item_name || categoryName).trim(),
       referenceImageUri: lineImageUri(row),
       quantity: String(qty),

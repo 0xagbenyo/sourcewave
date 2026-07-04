@@ -33,12 +33,32 @@ import type { ErpCustomerAddressRow } from '../types';
 
 const hairline = StyleSheet.hairlineWidth;
 
+function formatCurrency(amount: number): string {
+  const value = Number.isFinite(amount) && amount >= 0 ? amount : 0;
+  try {
+    return new Intl.NumberFormat('en-GH', {
+      style: 'currency',
+      currency: 'GHS',
+    }).format(value);
+  } catch {
+    return `GH₵ ${value.toFixed(2)}`;
+  }
+}
+
+function getLineTotal(quantityText: string, rateText: string): number {
+  const quantity = parseFloat(String(quantityText || '').replace(/,/g, ''));
+  const rate = parseFloat(String(rateText || '').replace(/,/g, ''));
+  if (!Number.isFinite(quantity) || !Number.isFinite(rate)) return 0;
+  return quantity * rate;
+}
+
 type RequestForm = {
   id: string;
   expanded: boolean;
   selectedCategoryId: string;
   selectedCategoryName: string;
   selectedProductId: string;
+  selectedItemName: string;
   itemDescription: string;
   referenceImageUri: string | null;
   quantity: string;
@@ -51,6 +71,7 @@ const newForm = (expanded: boolean): RequestForm => ({
   selectedCategoryId: '',
   selectedCategoryName: '',
   selectedProductId: '',
+  selectedItemName: '',
   itemDescription: '',
   referenceImageUri: null,
   quantity: '1',
@@ -114,6 +135,7 @@ export const SourcingRequestScreen: React.FC = () => {
     selectedCategoryId: categoryId,
     selectedCategoryName: categoryName,
     selectedProductId: categoryId,
+    selectedItemName: categoryName,
   });
 
   const addAnotherLine = () => {
@@ -170,7 +192,10 @@ export const SourcingRequestScreen: React.FC = () => {
         return;
       }
       if (!rate || rate <= 0) {
-        Alert.alert('Invalid budget', `Line ${requestNum}: my budget must be greater than 0.`);
+        Alert.alert(
+          'Invalid budget',
+          `Line ${requestNum}: enter your budget for one item (unit price) must be greater than 0.`
+        );
         return;
       }
     }
@@ -213,11 +238,12 @@ export const SourcingRequestScreen: React.FC = () => {
       deliveryDate.setDate(deliveryDate.getDate() + 21);
 
       const orderLines = forms.map((form) => {
-        const categoryName = form.selectedCategoryName.trim();
+        const itemName = (form.selectedItemName || form.selectedCategoryName).trim();
+        const itemId = (form.selectedProductId || form.selectedCategoryId).trim();
         return {
-          product: categoryAsSourcingItem(form.selectedCategoryId, categoryName),
+          product: categoryAsSourcingItem(itemId, itemName),
           selectedCategoryId: form.selectedCategoryId,
-          itemFieldText: categoryName,
+          itemFieldText: itemName,
           quantity: parseInt(form.quantity, 10),
           rate: parseFloat(form.expectedRate),
           description: form.itemDescription.trim(),
@@ -302,8 +328,21 @@ export const SourcingRequestScreen: React.FC = () => {
         >
           <Text style={styles.pageHint}>{t('sourcing.pageHint')}</Text>
 
+          <View style={styles.referenceBlock}>
+            <Text style={styles.fieldLabel}>{t('sourcing.fieldReference')}</Text>
+            <TextInput
+              style={styles.input}
+              value={reference}
+              onChangeText={setReference}
+              placeholder={t('sourcing.phReference')}
+              placeholderTextColor={Colors.TEXT_SECONDARY}
+              maxLength={60}
+            />
+            <Text style={styles.fieldHint}>{t('sourcing.referenceHint')}</Text>
+          </View>
+
           {forms.map((form, idx) => {
-            const itemLabel = form.selectedCategoryName.trim() || t('sourcing.tapToExpand');
+            const itemLabel = (form.selectedItemName || form.selectedCategoryName).trim() || t('sourcing.tapToExpand');
 
             return (
               <View key={form.id} style={styles.lineCard}>
@@ -362,7 +401,7 @@ export const SourcingRequestScreen: React.FC = () => {
                       <>
                         <TextInput
                           style={[styles.input, styles.inputLocked]}
-                          value={form.selectedCategoryName}
+                          value={form.selectedItemName || form.selectedCategoryName}
                           editable={false}
                         />
                         <Text style={styles.fieldHint}>{t('sourcing.categoryLockedItemHint')}</Text>
@@ -428,6 +467,12 @@ export const SourcingRequestScreen: React.FC = () => {
                         />
                       </View>
                     </View>
+                    <Text style={styles.fieldLabel}>{t('sourcing.fieldTotalBudget')}</Text>
+                    <TextInput
+                      style={[styles.input, styles.inputLocked]}
+                      value={formatCurrency(getLineTotal(form.quantity, form.expectedRate))}
+                      editable={false}
+                    />
                   </View>
                 ) : null}
               </View>
@@ -438,19 +483,6 @@ export const SourcingRequestScreen: React.FC = () => {
             <Ionicons name="add" size={22} color={Colors.WINE} />
             <Text style={styles.addLineText}>{t('sourcing.addAnotherLine')}</Text>
           </TouchableOpacity>
-
-          <View style={styles.referenceBlock}>
-            <Text style={styles.fieldLabel}>{t('sourcing.fieldReference')}</Text>
-            <TextInput
-              style={styles.input}
-              value={reference}
-              onChangeText={setReference}
-              placeholder={t('sourcing.phReference')}
-              placeholderTextColor={Colors.TEXT_SECONDARY}
-              maxLength={60}
-            />
-            <Text style={styles.fieldHint}>{t('sourcing.referenceHint')}</Text>
-          </View>
 
           <ShipToAddressField
             value={shipToAddressName}
@@ -606,8 +638,8 @@ const styles = StyleSheet.create({
   rowTwoCell: { flex: 1 },
   rowTwoGap: { width: 14 },
   referenceBlock: {
-    marginTop: 4,
-    marginBottom: 4,
+    marginTop: 8,
+    marginBottom: 16,
   },
   addLine: {
     flexDirection: 'row',

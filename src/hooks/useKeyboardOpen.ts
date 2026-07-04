@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Keyboard, Platform, type KeyboardEvent } from 'react-native';
+import { Dimensions, Keyboard, Platform, type KeyboardEvent } from 'react-native';
 
 export type KeyboardInsets = {
   /** True while the soft keyboard is visible. */
@@ -10,6 +10,19 @@ export type KeyboardInsets = {
    */
   height: number;
 };
+
+function resolveKeyboardHeight(e: KeyboardEvent): number {
+  const reported = Math.round(e.endCoordinates?.height ?? 0);
+  const screenY = e.endCoordinates?.screenY;
+  if (typeof screenY !== 'number' || !Number.isFinite(screenY)) {
+    return reported;
+  }
+  const windowHeight = Dimensions.get('window').height;
+  const screenHeight = Dimensions.get('screen').height;
+  const fromWindow = Math.round(windowHeight - screenY);
+  const fromScreen = Math.round(screenHeight - screenY);
+  return Math.max(reported, fromWindow, fromScreen, 0);
+}
 
 /**
  * Keyboard visibility + height. Used to avoid stacking tab-bar padding under iOS KAV when open,
@@ -22,7 +35,7 @@ export function useKeyboardInsets(): KeyboardInsets {
   useEffect(() => {
     const onShow = (e: KeyboardEvent) => {
       setOpen(true);
-      setHeight(Math.round(e.endCoordinates?.height ?? 0));
+      setHeight(resolveKeyboardHeight(e));
     };
     const onHide = () => {
       setOpen(false);

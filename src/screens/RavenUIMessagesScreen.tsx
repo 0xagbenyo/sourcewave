@@ -545,7 +545,10 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const [workspaceRows, setWorkspaceRows] = useState<RavenWorkspaceRow[]>([]);
   const [channels, setChannels] = useState<RavenChannelRow[]>([]);
   const [channel, setChannel] = useState<RavenChannelRow | null>(null);
-  const { composerBottomPad, rootKeyboardPad } = useChatComposerInsets(!!channel);
+  const inBottomTabChatScene = route.name === 'Suppliers' || route.name === 'SupplierMessages';
+  const { composerBottomPad, rootKeyboardPad } = useChatComposerInsets(!!channel, {
+    inBottomTabScene: inBottomTabChatScene,
+  });
   const [messages, setMessages] = useState<RavenMessageRow[]>([]);
   const [loadingBoot, setLoadingBoot] = useState(true);
   const [openingSuppliersChat, setOpeningSuppliersChat] = useState(false);

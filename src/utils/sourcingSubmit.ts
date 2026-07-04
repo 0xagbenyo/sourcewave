@@ -19,7 +19,6 @@ export type SourcingSalesOrderLine = {
   rate: number;
   amount: number;
   description: string;
-  custom_new_quantity: number;
   custom_new_image?: string;
 };
 
@@ -225,10 +224,9 @@ export async function buildSourcingSalesOrderLines(
     const rate = Number.isFinite(line.rate) ? line.rate : 0;
     result.push({
       item_code: itemCode,
-      qty: 1,
-      custom_new_quantity: requestedQty,
+      qty: requestedQty,
       rate,
-      amount: rate,
+      amount: requestedQty * rate,
       description: line.description,
     });
   }

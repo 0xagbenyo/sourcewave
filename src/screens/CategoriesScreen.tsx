@@ -21,13 +21,20 @@ import { Header } from '../components/Header';
 import { useTranslation } from 'react-i18next';
 import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 import { getERPNextClient } from '../services/erpnext';
-import { mapERPItemToProduct } from '../services/mappers';
-import { collectDescendantItemGroupIds, isItemGroupTopLevelParentRow, isReservedItemGroupRow } from '../utils/itemGroup';
+import { encodeErpFileUrl } from '../utils/erpImageUrl';
+import { isItemGroupTopLevelParentRow, isReservedItemGroupRow } from '../utils/itemGroup';
 
 const { width } = Dimensions.get('window');
+const SIDEBAR_WIDTH = width * 0.32;
+const MAIN_COLUMN_WIDTH = width - SIDEBAR_WIDTH;
+const GRID_COLUMNS = 2;
+const GRID_GAP = 10;
+const GRID_PAD = 12;
+const TILE_WIDTH =
+  (MAIN_COLUMN_WIDTH - GRID_PAD * 2 - GRID_GAP * (GRID_COLUMNS - 1)) / GRID_COLUMNS;
+const TILE_IMAGE_HEIGHT = Math.round(TILE_WIDTH * 0.92);
 
-// Subcategory row: flat horizontal image bar + title (no circles).
-const AnimatedCategoryItem: React.FC<{
+const AnimatedCategoryGridItem: React.FC<{
   category: any;
   image: string | undefined;
   categoryName: string;
@@ -35,14 +42,14 @@ const AnimatedCategoryItem: React.FC<{
   onPress: () => void;
 }> = ({ category, image, categoryName, index, onPress }) => {
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(16)).current;
+  const slideAnim = useRef(new Animated.Value(12)).current;
 
   useEffect(() => {
-    const delay = index * 45;
+    const delay = index * 40;
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
-        duration: 320,
+        duration: 300,
         delay,
         useNativeDriver: true,
       }),
@@ -59,40 +66,33 @@ const AnimatedCategoryItem: React.FC<{
   return (
     <Animated.View
       style={[
-        styles.categoryBarWrap,
+        styles.gridTile,
         {
           opacity: fadeAnim,
           transform: [{ translateY: slideAnim }],
         },
       ]}
     >
-      <TouchableOpacity
-        style={styles.categoryBarTouchable}
-        onPress={onPress}
-        activeOpacity={0.88}
-      >
-        <View style={styles.categoryBarImageZone}>
+      <TouchableOpacity style={styles.gridTileTouchable} onPress={onPress} activeOpacity={0.88}>
+        <View style={styles.gridImageWrap}>
           {image ? (
             <ErpAuthenticatedImage
               uri={image}
-              style={styles.categoryBarImage}
+              style={styles.gridImage}
               resizeMode="cover"
               onError={() => {
                 console.warn(`Failed to load image for category ${category.name}:`, image);
               }}
             />
           ) : (
-            <View style={styles.categoryBarPlaceholder}>
-              <Ionicons name="grid-outline" size={20} color={Colors.TEXT_SECONDARY} />
+            <View style={styles.gridPlaceholder}>
+              <Ionicons name="image-outline" size={28} color={Colors.TEXT_SECONDARY} />
             </View>
           )}
         </View>
-        <View style={styles.categoryBarMeta}>
-          <Text style={styles.categoryBarTitle} numberOfLines={2}>
-            {categoryName || 'Category'}
-          </Text>
-          <Ionicons name="chevron-forward" size={16} color={Colors.MEDIUM_GRAY} />
-        </View>
+        <Text style={styles.gridTitle} numberOfLines={2}>
+          {categoryName || 'Category'}
+        </Text>
       </TouchableOpacity>
     </Animated.View>
   );
@@ -174,42 +174,18 @@ export const CategoriesScreen: React.FC = () => {
       });
       setChildCategories(children);
 
-      // Thumbnails: random Item.image from Items in this group tree (Item doctype, not Website Item)
-      const images: Record<string, string> = {};
       const allCats = parentCategories || [];
+      const images: Record<string, string> = {};
       for (const child of children) {
-        try {
-          const groupIds = collectDescendantItemGroupIds(child.name, allCats);
-          const items = await client.getRawItemsByGroups(groupIds, 200);
-          const withImages = items.filter(
-            (row: any) => row.image && String(row.image).trim() !== ''
-          );
-          if (withImages.length > 0) {
-            const pick = withImages[Math.floor(Math.random() * withImages.length)];
-            const product = mapERPItemToProduct(pick);
-            if (product.images?.[0]) {
-              images[child.name] = product.images[0];
-              console.log(`✅ Item image for category ${child.name}: ${product.images[0]}`);
-            }
-          } else {
-            const catRow = allCats.find((c: any) => c.id === child.name);
-            if (catRow?.image) {
-              const p = mapERPItemToProduct({
-                name: child.name,
-                item_name: child.name,
-                disabled: 0,
-                image: catRow.image,
-              });
-              if (p.images?.[0]) {
-                images[child.name] = p.images[0];
-                console.log(`✅ Item Group image fallback for ${child.name}`);
-              }
-            } else {
-              console.log(`⚠️ No Item images for category ${child.name}`);
-            }
-          }
-        } catch (error) {
-          console.warn(`❌ Could not fetch Item image for category ${child.name}:`, error);
+        const fromGroup = encodeErpFileUrl(child.image);
+        if (fromGroup) {
+          images[child.name] = fromGroup;
+          continue;
+        }
+        const catRow = allCats.find((c) => c.id === child.name);
+        const fromCatalog = encodeErpFileUrl(catRow?.image);
+        if (fromCatalog) {
+          images[child.name] = fromCatalog;
         }
       }
       setChildImages(images);
@@ -294,20 +270,20 @@ export const CategoriesScreen: React.FC = () => {
             const categoryName = item.item_group_name || item.name || 'Category';
 
             return (
-              <AnimatedCategoryItem
+              <AnimatedCategoryGridItem
                 key={item.name || item.item_group_name || `category-${index}`}
                 category={item}
                 image={image}
                 categoryName={categoryName}
                 index={index}
-                  onPress={() => {
-                    (navigation as any).navigate('SourcingRequest', {
-                      parentCategoryId: selectedParentId || '',
-                      parentCategory: selectedParentName || '',
-                      subCategoryId: item.name || '',
-                      subCategory: item.item_group_name || item.name || '',
-                    });
-                  }}
+                onPress={() => {
+                  (navigation as any).navigate('SourcingRequest', {
+                    parentCategoryId: selectedParentId || '',
+                    parentCategory: selectedParentName || '',
+                    subCategoryId: item.name || '',
+                    subCategory: item.item_group_name || item.name || '',
+                  });
+                }}
               />
             );
           })}
@@ -419,11 +395,11 @@ const styles = StyleSheet.create({
   productSection: {
     paddingVertical: 16,
   },
-  /** Picks for You: edge-to-edge rows in the main column (divider meets sidebar rail). */
+  /** Picks for You: photo grid in the main column beside the sidebar. */
   productSectionFlush: {
     paddingVertical: 0,
-    marginTop: 8,
-    marginBottom: 8,
+    marginTop: 4,
+    marginBottom: 12,
   },
   sectionHeader: {
     paddingHorizontal: 16,
@@ -511,49 +487,46 @@ const styles = StyleSheet.create({
     marginVertical: 32,
   },
   childCategoriesList: {
-    paddingHorizontal: 0,
-    alignSelf: 'stretch',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: GRID_PAD,
+    paddingBottom: GRID_PAD,
+    gap: GRID_GAP,
+  },
+  gridTile: {
+    width: TILE_WIDTH,
+  },
+  gridTileTouchable: {
     width: '100%',
   },
-  categoryBarWrap: {
-    alignSelf: 'stretch',
+  gridImageWrap: {
     width: '100%',
-  },
-  categoryBarTouchable: {
-    width: '100%',
-    backgroundColor: Colors.WHITE,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.BORDER,
-  },
-  categoryBarImageZone: {
-    width: '100%',
-    height: 52,
+    height: TILE_IMAGE_HEIGHT,
+    borderRadius: 12,
+    overflow: 'hidden',
     backgroundColor: Colors.LIGHT_GRAY,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Colors.BORDER,
   },
-  categoryBarImage: {
+  gridImage: {
     width: '100%',
     height: '100%',
     backgroundColor: Colors.LIGHT_GRAY,
   },
-  categoryBarPlaceholder: {
+  gridPlaceholder: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  categoryBarMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    gap: 8,
-  },
-  categoryBarTitle: {
-    flex: 1,
-    fontSize: 14,
+  gridTitle: {
+    marginTop: 8,
+    fontSize: 12,
     fontWeight: '600',
     color: Colors.BLACK,
-    letterSpacing: -0.2,
+    textAlign: 'center',
+    lineHeight: 16,
+    minHeight: 32,
+    letterSpacing: -0.1,
   },
   backButton: {
     flexDirection: 'row',

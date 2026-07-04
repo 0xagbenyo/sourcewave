@@ -2708,7 +2708,7 @@ class ERPNextClient {
     po_no?: string;
     items: Array<{
       item_code: string;
-      qty: number;
+      qty?: number;
       rate?: number;
       amount?: number;
       description?: string;
@@ -2722,14 +2722,13 @@ class ERPNextClient {
         const row = line as Record<string, unknown>;
         const requestedQty = readSalesOrderLineRequestedQty(row);
         const rate = Number(line.rate);
-        const amount = Number.isFinite(Number(line.amount)) ? Number(line.amount) : rate;
+        const amount = requestedQty * (Number.isFinite(rate) ? rate : 0);
         const next: Record<string, unknown> = {
           item_code: String(line.item_code || '').trim(),
-          qty: 1,
+          qty: requestedQty,
           rate,
           amount,
           description: String(line.description || '').trim(),
-          [ERP_SO_LINE_REQUESTED_QTY_FIELD]: requestedQty,
         };
         const img = String(line.custom_new_image || '').trim();
         if (img) next[ERP_DOC_LINE_IMAGE_FIELD] = img;
@@ -2754,6 +2753,38 @@ class ERPNextClient {
           } catch {
             /* optional backfill */
           }
+        }
+      }
+
+      // Some sites still hydrate the legacy custom quantity field on insert; normalize the saved
+      // order so the customer-entered quantity lives on the ERP `qty` field instead.
+      if (created?.name) {
+        try {
+          const createdItems = Array.isArray(created.items) ? (created.items as Record<string, unknown>[]) : [];
+          const sourceRows = createdItems.length > 0 ? createdItems : normalizedItems;
+          const normalizedRows = sourceRows.map((row, idx) => {
+            const fallbackRequestedQty = Number(normalizedItems[idx]?.qty);
+            const requestedQty = readSalesOrderLineRequestedQty(row);
+            const rate = Number(row.rate);
+            const qty =
+              Number.isFinite(fallbackRequestedQty) && fallbackRequestedQty > 0
+                ? fallbackRequestedQty
+                : requestedQty;
+            return {
+              name: row.name,
+              item_code: row.item_code,
+              item_name: row.item_name,
+              qty,
+              rate,
+              amount: qty * (Number.isFinite(rate) ? rate : 0),
+              uom: row.uom,
+              description: row.description,
+              [ERP_SO_LINE_REQUESTED_QTY_FIELD]: null,
+            };
+          });
+          await this.updateSalesOrder(String(created.name), { items: normalizedRows });
+        } catch {
+          /* best-effort normalization only */
         }
       }
       return created;
@@ -4743,13 +4774,14 @@ class ERPNextClient {
   /** Build minimal child rows for Sales Order line patches without dropping buyer qty. */
   private salesOrderItemPatchRow(row: Record<string, unknown>, image?: string): Record<string, unknown> {
     const requestedQty = readSalesOrderLineRequestedQty(row);
+    const rate = Number(row.rate);
     const patch: Record<string, unknown> = {
       name: row.name,
       item_code: row.item_code,
       item_name: row.item_name,
-      qty: 1,
-      rate: row.rate,
-      amount: row.amount ?? row.rate,
+      qty: requestedQty,
+      rate,
+      amount: requestedQty * (Number.isFinite(rate) ? rate : 0),
       uom: row.uom,
       description: row.description,
       [ERP_SO_LINE_REQUESTED_QTY_FIELD]: requestedQty,
@@ -4951,12 +4983,12 @@ class ERPNextClient {
       po_no?: string;
       items: Array<{
         item_code: string;
-        qty: number;
+        qty?: number;
         rate: number;
         amount: number;
         description: string;
-        custom_new_quantity: number;
         custom_new_image?: string;
+        custom_new_quantity?: number;
       }>;
     }
   ): Promise<{ name: string }> {
@@ -4984,13 +5016,13 @@ class ERPNextClient {
 
     const itemRows: Record<string, unknown>[] = lines.map((l) => {
       const requestedQty = readSalesOrderLineRequestedQty(l as Record<string, unknown>);
+      const rate = Number(l.rate);
       const row: Record<string, unknown> = {
         item_code: String(l.item_code || '').trim(),
-        qty: 1,
-        rate: Number(l.rate),
-        amount: Number(l.amount),
+        qty: requestedQty,
+        rate,
+        amount: requestedQty * (Number.isFinite(rate) ? rate : 0),
         description: String(l.description || '').trim(),
-        [ERP_SO_LINE_REQUESTED_QTY_FIELD]: requestedQty,
       };
       const img = String(l.custom_new_image || '').trim();
       if (img) row[ERP_DOC_LINE_IMAGE_FIELD] = img;
