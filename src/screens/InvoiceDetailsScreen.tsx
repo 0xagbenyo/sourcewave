@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { Text, StyleSheet, TouchableOpacity, RefreshControl } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { appAlert as Alert } from '../services/appAlert';
@@ -19,7 +19,11 @@ import { InvoicePaystackPaymentSheet } from '../components/InvoicePaystackPaymen
 import { InvoiceShippingOptionSheet } from '../components/InvoiceShippingOptionSheet';
 import { shippingOptionById, type ShippingOptionId } from '../constants/shippingOptions';
 import { userFacingError } from '../utils/userFacingError';
-import { formatErpLineWeight } from '../utils/erpLineWeight';
+import {
+  erpDocTotalWeightDetailWithCbm,
+  erpLineMeasureDetailWithCbm,
+  sumErpDocItemsTotalWeight,
+} from '../utils/erpLineWeight';
 import { navigateToDeliveryNoteDetail } from '../utils/erpDocumentNavigation';
 import {
   ErpDocumentPreviewLayout,
@@ -60,7 +64,7 @@ export const InvoiceDetailsScreen: React.FC = () => {
   const [tab, setTab] = useState<InvoiceTab>('details');
   const { customerId: sessionCustomerId } = useSessionCustomerId();
 
-  const { data: invoice, loading, error } = useSalesInvoice(id);
+  const { data: invoice, loading, error, refreshing, refetch } = useSalesInvoice(id);
   const [outstanding, setOutstanding] = useState<number | null>(null);
   const [currency, setCurrency] = useState('GHS');
   const [paySheetOpen, setPaySheetOpen] = useState(false);
@@ -229,15 +233,23 @@ export const InvoiceDetailsScreen: React.FC = () => {
   const lineWeightDetail = (item: {
     weightPerUnit?: number;
     totalWeight?: number;
-  }): string | undefined => {
-    const total = item.totalWeight;
-    const perUnit = item.weightPerUnit;
-    if (total == null && perUnit == null) return undefined;
-    return t('invoiceDelivery.weightDetail', {
-      weight: formatErpLineWeight(total ?? 0),
-      perUnit: formatErpLineWeight(perUnit ?? 0),
+  }): string | undefined =>
+    erpLineMeasureDetailWithCbm(t, {
+      weight_per_unit: item.weightPerUnit,
+      total_weight: item.totalWeight,
     });
-  };
+
+  const totalWeightKg = React.useMemo(() => {
+    if (!invoice?.items?.length) return 0;
+    return sumErpDocItemsTotalWeight({
+      items: invoice.items.map((item) => ({
+        qty: item.quantity,
+        total_weight: item.totalWeight,
+        weight_per_unit: item.weightPerUnit,
+      })),
+    });
+  }, [invoice?.items]);
+  const totalWeightDetail = erpDocTotalWeightDetailWithCbm(t, totalWeightKg);
 
   return (
     <>
@@ -252,6 +264,19 @@ export const InvoiceDetailsScreen: React.FC = () => {
             : null
         }
         onBack={() => (navigation as { goBack: () => void }).goBack()}
+        refreshControl={
+          invoice ? (
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => {
+                void refetch();
+                void loadOutstanding();
+                void loadDeliveryNotes();
+              }}
+              tintColor={Colors.TEXT_SECONDARY}
+            />
+          ) : undefined
+        }
       >
         {invoice ? (
           <ErpDocSheet>
@@ -326,6 +351,11 @@ export const InvoiceDetailsScreen: React.FC = () => {
                       label={t('erpDocumentParty.supplierField')}
                       value={supplierLabel}
                     />
+                  </ErpDocSection>
+                ) : null}
+                {totalWeightDetail ? (
+                  <ErpDocSection title={t('invoiceDetails.totalWeight')}>
+                    <ErpDocMetaRow label={t('invoiceDetails.totalWeight')} value={totalWeightDetail} />
                   </ErpDocSection>
                 ) : null}
                 <ErpDocSection title={t('common.itemsCount', { count: invoice.items?.length ?? 0 })}>

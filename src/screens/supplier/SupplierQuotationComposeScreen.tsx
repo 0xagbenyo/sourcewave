@@ -45,7 +45,13 @@ import {
   quotationLinesFromSalesOrder,
   quotationLinesFromSupplierQuotation,
 } from '../../utils/salesOrderToQuotationLines';
-import { calcErpLineTotalWeight, formatErpLineWeight, parseErpWeightInput } from '../../utils/erpLineWeight';
+import {
+  calcErpLineTotalWeight,
+  cbmToKg,
+  formatErpLineWeight,
+  kgToCbm,
+  parseErpWeightInput,
+} from '../../utils/erpLineWeight';
 import { formatErpDocDate } from '../../components/ErpDocumentPreviewLayout';
 import {
   defaultQuotationValidTillDate,
@@ -76,6 +82,7 @@ type QuotationLine = {
   /** Buyer budget from linked Sales Order (hint only). */
   buyer_budget?: string;
   weight_per_unit: string;
+  weight_per_unit_cbm: string;
   total_weight: string;
   /** UI-only: whether the editable fields for this line are shown. */
   expanded: boolean;
@@ -89,14 +96,33 @@ function newLine(): QuotationLine {
     stock_uom: undefined,
     qty: '1',
     rate: '',
-    weight_per_unit: '0.000',
-    total_weight: '0',
+    weight_per_unit: '',
+    weight_per_unit_cbm: '',
+    total_weight: '',
     expanded: true,
   };
 }
 
 function isDmChannel(c: RavenChannelRow): boolean {
   return !!c.is_direct_message || String(c.type || '').trim().toLowerCase() === 'direct';
+}
+
+function derivedLineWeights(ln: Pick<QuotationLine, 'qty' | 'weight_per_unit' | 'weight_per_unit_cbm'>): {
+  weightPerUnitKg: number;
+  weightPerUnitCbm: number;
+  totalWeightKg: number;
+  totalWeightCbm: number;
+} {
+  const kgEntered = parseErpWeightInput(ln.weight_per_unit);
+  const cbmEntered = parseErpWeightInput(ln.weight_per_unit_cbm);
+  const weightPerUnitKg = kgEntered ?? (cbmEntered != null ? cbmToKg(cbmEntered) : 0);
+  const weightPerUnitCbm = cbmEntered ?? (kgEntered != null ? kgToCbm(kgEntered) : 0);
+  const qty = parseErpWeightInput(ln.qty) ?? 0;
+  const totalWeightKg =
+    qty > 0 && weightPerUnitKg > 0 ? Math.round(weightPerUnitKg * qty * 1000) / 1000 : 0;
+  const totalWeightCbm =
+    qty > 0 && weightPerUnitCbm > 0 ? Math.round(weightPerUnitCbm * qty * 1000) / 1000 : 0;
+  return { weightPerUnitKg, weightPerUnitCbm, totalWeightKg, totalWeightCbm };
 }
 
 export const SupplierQuotationComposeScreen: React.FC = () => {
@@ -344,7 +370,10 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
   const updateLine = (
     key: string,
     patch: Partial<
-      Pick<QuotationLine, 'qty' | 'rate' | 'item_name' | 'supplier_image_uri' | 'weight_per_unit' | 'total_weight'>
+      Pick<
+        QuotationLine,
+        'qty' | 'rate' | 'item_name' | 'supplier_image_uri' | 'weight_per_unit' | 'weight_per_unit_cbm' | 'total_weight'
+      >
     >
   ) => {
     setLines((prev) =>
@@ -352,10 +381,44 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
         if (l.key !== key) return l;
         const next = { ...l, ...patch };
         if ('qty' in patch || 'weight_per_unit' in patch) {
-          next.total_weight = formatErpLineWeight(
-            calcErpLineTotalWeight(next.qty, next.weight_per_unit)
-          );
+          const { totalWeightKg } = derivedLineWeights(next);
+          next.total_weight = totalWeightKg > 0 ? formatErpLineWeight(totalWeightKg) : '';
         }
+        return next;
+      })
+    );
+  };
+
+  const updateLineWeightKg = (key: string, rawValue: string) => {
+    setLines((prev) =>
+      prev.map((l) => {
+        if (l.key !== key) return l;
+        const next = { ...l };
+        const canonicalWeightPerUnit = parseErpWeightInput(rawValue);
+        next.weight_per_unit = rawValue;
+        if (!String(next.weight_per_unit_cbm || '').trim() && canonicalWeightPerUnit != null) {
+          next.weight_per_unit_cbm = formatErpLineWeight(kgToCbm(canonicalWeightPerUnit));
+        }
+        const { totalWeightKg } = derivedLineWeights(next);
+        next.total_weight = totalWeightKg > 0 ? formatErpLineWeight(totalWeightKg) : '';
+        return next;
+      })
+    );
+  };
+
+  const updateLineWeightCbm = (key: string, rawValue: string) => {
+    setLines((prev) =>
+      prev.map((l) => {
+        if (l.key !== key) return l;
+        const next = { ...l };
+        const cbmValue = parseErpWeightInput(rawValue);
+        const canonicalWeightPerUnit = cbmValue == null ? null : cbmToKg(cbmValue);
+        next.weight_per_unit_cbm = rawValue;
+        if (!String(next.weight_per_unit || '').trim() && canonicalWeightPerUnit != null) {
+          next.weight_per_unit = formatErpLineWeight(canonicalWeightPerUnit);
+        }
+        const { totalWeightKg } = derivedLineWeights(next);
+        next.total_weight = totalWeightKg > 0 ? formatErpLineWeight(totalWeightKg) : '';
         return next;
       })
     );
@@ -413,6 +476,10 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
       custom_new_image?: string | null;
       weight_per_unit?: number | null;
       total_weight?: number | null;
+      custom_weight_kg?: number | null;
+      custom_total_weight_kg?: number | null;
+      custom_weight_cbm?: number | null;
+      custom_total_weight_cbm?: number | null;
     }> = [];
     for (const ln of lines) {
       const code = ln.item_code.trim();
@@ -430,8 +497,11 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
       const description = ln.item_name.trim() || undefined;
       const persistedImage = String(ln.supplier_image || '').trim() || null;
       const weightPerUnit = parseErpWeightInput(ln.weight_per_unit);
-      const totalWeight =
-        parseErpWeightInput(ln.total_weight) ?? calcErpLineTotalWeight(qty, weightPerUnit ?? 0);
+      const weightPerUnitCbm = parseErpWeightInput(ln.weight_per_unit_cbm);
+      const derived = derivedLineWeights(ln);
+      const resolvedWeightPerUnitKg =
+        weightPerUnit != null ? weightPerUnit : derived.weightPerUnitKg > 0 ? derived.weightPerUnitKg : null;
+      const resolvedTotalWeightKg = derived.totalWeightKg > 0 ? derived.totalWeightKg : null;
       payloadLines.push({
         item_code: code,
         qty,
@@ -439,8 +509,12 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
         uom: ln.stock_uom?.trim() || null,
         description: description || null,
         custom_new_image: persistedImage,
-        weight_per_unit: weightPerUnit,
-        total_weight: totalWeight,
+        weight_per_unit: resolvedWeightPerUnitKg,
+        total_weight: resolvedTotalWeightKg,
+        custom_weight_kg: resolvedWeightPerUnitKg,
+        custom_total_weight_kg: resolvedTotalWeightKg,
+        custom_weight_cbm: weightPerUnitCbm,
+        custom_total_weight_cbm: derived.totalWeightCbm > 0 ? derived.totalWeightCbm : null,
       });
     }
 
@@ -839,6 +913,7 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
             </View>
 
             {lines.map((ln, lineIdx) => {
+              const { totalWeightKg, totalWeightCbm } = derivedLineWeights(ln);
               const lineImageUri = pickLineDisplayImageUri(
                 ln.supplier_image_uri || ln.supplier_image,
                 ln.item_image
@@ -977,29 +1052,52 @@ export const SupplierQuotationComposeScreen: React.FC = () => {
                 </View>
                 <View style={styles.qtyRateRow}>
                   <View style={styles.qtyRateCell}>
-                    <Text style={styles.qtyRateLabel}>Weight per unit</Text>
+                    <Text style={styles.qtyRateLabel}>Weight per unit (KG)</Text>
                     <TextInput
                       style={styles.qtyRateInput}
                       value={ln.weight_per_unit}
-                      onChangeText={(t) => updateLine(ln.key, { weight_per_unit: t })}
+                      onChangeText={(t) => updateLineWeightKg(ln.key, t)}
                       keyboardType="decimal-pad"
-                      placeholder="0.000"
+                      placeholder="KG"
                       placeholderTextColor="#AEAEB2"
                     />
                   </View>
                   <View style={styles.qtyRateGap} />
                   <View style={styles.qtyRateCell}>
-                    <Text style={styles.qtyRateLabel}>Total weight</Text>
+                    <Text style={styles.qtyRateLabel}>Total weight (KG)</Text>
                     <TextInput
                       style={[styles.qtyRateInput, styles.readOnlyWeightInput]}
-                      value={ln.total_weight}
+                      value={totalWeightKg > 0 ? formatErpLineWeight(totalWeightKg) : ''}
                       editable={false}
-                      placeholder="0"
+                      placeholder="Auto"
                       placeholderTextColor="#AEAEB2"
                     />
                   </View>
                 </View>
-                {ln.stock_uom ? <Text style={styles.uomText}>Unit of measure: {ln.stock_uom}</Text> : null}
+                <View style={styles.qtyRateRow}>
+                  <View style={styles.qtyRateCell}>
+                    <Text style={styles.qtyRateLabel}>Per unit (CBM)</Text>
+                    <TextInput
+                      style={styles.qtyRateInput}
+                      value={ln.weight_per_unit_cbm}
+                      onChangeText={(t) => updateLineWeightCbm(ln.key, t)}
+                      keyboardType="decimal-pad"
+                      placeholder="CBM"
+                      placeholderTextColor="#AEAEB2"
+                    />
+                  </View>
+                  <View style={styles.qtyRateGap} />
+                  <View style={styles.qtyRateCell}>
+                    <Text style={styles.qtyRateLabel}>Total (CBM)</Text>
+                    <TextInput
+                      style={[styles.qtyRateInput, styles.readOnlyWeightInput]}
+                      value={totalWeightCbm > 0 ? formatErpLineWeight(totalWeightCbm) : ''}
+                      editable={false}
+                      placeholder="Auto"
+                      placeholderTextColor="#AEAEB2"
+                    />
+                  </View>
+                </View>
                 <View style={styles.lineSubtotal}>
                   <Text style={styles.lineSubtotalLabel}>Amount</Text>
                   <Text style={styles.lineSubtotalValue}>

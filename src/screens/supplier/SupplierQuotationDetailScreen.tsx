@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { RefreshControl } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { getERPNextClient } from '../../services/erpnext';
@@ -13,12 +14,16 @@ import {
 import { Colors } from '../../constants/colors';
 import { pickLineDisplayImageUri } from '../../utils/erpLineItemImages';
 import { erpLineItemTitle } from '../../utils/erpLineItemDisplay';
-import { formatErpLineWeight, readErpLineWeightFromRow } from '../../utils/erpLineWeight';
+import {
+  erpDocTotalWeightDetailWithCbm,
+  sumErpDocItemsTotalWeight,
+} from '../../utils/erpLineWeight';
 import { QuotationBuyerActionBar } from '../../components/QuotationBuyerActionBar';
 import {
   ErpDocumentPreviewLayout,
   ErpDocSheet,
   ErpDocHero,
+  type ErpDocHeroFactPair,
   ErpDocHeroActionButton,
   ErpDocSection,
   ErpDocLineItem,
@@ -61,6 +66,7 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
   const [linkedInvoices, setLinkedInvoices] = useState<Record<string, unknown>[]>([]);
   const [linksLoading, setLinksLoading] = useState(false);
   const [lineImages, setLineImages] = useState<Record<string, string>>({});
+  const [refreshing, setRefreshing] = useState(false);
 
   const reloadDoc = useCallback(async () => {
     try {
@@ -91,26 +97,30 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
     };
   }, [name]);
 
+  const loadLinkedInvoices = useCallback(async () => {
+    try {
+      setLinksLoading(true);
+      const rows = await getERPNextClient().listSalesInvoicesByCustomQuotation(name, {
+        limit: 10,
+      });
+      const nonCancelled = (Array.isArray(rows) ? rows : []).filter((r) => Number(r?.docstatus) !== 2);
+      setLinkedInvoices(nonCancelled);
+    } catch {
+      setLinkedInvoices([]);
+    } finally {
+      setLinksLoading(false);
+    }
+  }, [name]);
+
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      setLinksLoading(true);
-      try {
-        const rows = await getERPNextClient().listSalesInvoicesByCustomQuotation(name, {
-          limit: 10,
-        });
-        const nonCancelled = (Array.isArray(rows) ? rows : []).filter((r) => Number(r?.docstatus) !== 2);
-        if (!cancelled) setLinkedInvoices(nonCancelled);
-      } catch {
-        if (!cancelled) setLinkedInvoices([]);
-      } finally {
-        if (!cancelled) setLinksLoading(false);
-      }
-    })();
+    void loadLinkedInvoices().catch(() => {
+      if (!cancelled) setLinkedInvoices([]);
+    });
     return () => {
       cancelled = true;
     };
-  }, [name]);
+  }, [loadLinkedInvoices]);
 
   const items = useMemo(
     () => (Array.isArray(doc?.items) ? (doc!.items as Record<string, unknown>[]) : []),
@@ -167,22 +177,47 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
   );
   const grandTotal = formatErpDocMoney(doc?.grand_total, currency);
   const supplierLabel = String(doc?.supplier_name || doc?.supplier || '—');
+  const customerLabel = String(
+    doc?.customer_name || doc?.custom_bill_to_customer || doc?.customer || '—'
+  );
+  const totalWeightKg = useMemo(() => sumErpDocItemsTotalWeight(doc), [doc]);
+  const totalWeightDetail = erpDocTotalWeightDetailWithCbm(t, totalWeightKg);
 
-  const facts = useMemo(() => {
-    const rows: { label: string; value: string }[] = [];
+  const heroFactPairs = useMemo((): ErpDocHeroFactPair[] => {
+    const rows: ErpDocHeroFactPair[] = [
+      {
+        left: { label: t('invoiceDetails.customer'), value: customerLabel },
+        right: totalWeightDetail
+          ? { label: t('invoiceDetails.totalWeight'), value: totalWeightDetail }
+          : undefined,
+      },
+    ];
     if (!isSupplierPortal) {
-      rows.push({ label: t('quotationDetails.supplier'), value: supplierLabel });
+      rows.push({ left: { label: t('quotationDetails.supplier'), value: supplierLabel } });
     }
     const valid = formatErpDocDate(doc?.valid_till);
-    if (valid) rows.push({ label: t('quotationDetails.validTo'), value: valid });
+    if (valid) {
+      rows.push({ left: { label: t('quotationDetails.validTo'), value: valid } });
+    }
     return rows;
-  }, [doc?.valid_till, isSupplierPortal, supplierLabel, t]);
+  }, [customerLabel, doc?.valid_till, isSupplierPortal, supplierLabel, t, totalWeightDetail]);
 
   const primaryInvoice = linkedInvoices[0];
   const primaryInvoiceName = String(primaryInvoice?.name || '').trim();
   const canEdit = isSupplierPortal && supplierQuotationAllowsSupplierEdit(doc);
   const canResend = isSupplierPortal && supplierQuotationAllowsSupplierResend(doc);
   const showBuyerActions = !isSupplierPortal && buyerReview.canReviewDoc(doc);
+  const buyerAcceptedAwaitingInvoice =
+    !isSupplierPortal && buyerReview.outcome === 'accepted' && !primaryInvoiceName;
+  const canBuyerPayInvoice = !isSupplierPortal && !!primaryInvoiceName;
+
+  useEffect(() => {
+    if (!buyerAcceptedAwaitingInvoice) return;
+    const timer = setInterval(() => {
+      void loadLinkedInvoices();
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [buyerAcceptedAwaitingInvoice, loadLinkedInvoices]);
 
   const onEditQuotation = () => {
     (navigation as { navigate: (n: string, p?: object) => void }).navigate('SupplierQuotationCompose', {
@@ -202,7 +237,22 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
     });
   };
 
+  const onViewInvoiceAndPay = () => {
+    if (!primaryInvoiceName) return;
+    navigateToSalesInvoiceDetail(
+      navigation as { navigate: (n: string, p?: object) => void },
+      primaryInvoiceName,
+      isSupplierPortal
+    );
+  };
+
   const canShare = isSupplierPortal && Number(doc?.docstatus) !== 2;
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    void Promise.all([reloadDoc(), loadLinkedInvoices()]).finally(() => {
+      setRefreshing(false);
+    });
+  }, [reloadDoc, loadLinkedInvoices]);
 
   return (
     <ErpDocumentPreviewLayout
@@ -214,6 +264,15 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
       onBack={() => navigation.goBack()}
       onShare={canShare ? onShareQuotation : undefined}
       shareAccessibilityLabel={t('quotationDetails.shareInChat')}
+      refreshControl={
+        doc ? (
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Colors.TEXT_SECONDARY}
+          />
+        ) : undefined
+      }
     >
       {doc ? (
         <ErpDocSheet>
@@ -228,7 +287,7 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
                 ? t('quotationDetails.submitted', { date: formatErpDocDate(doc.transaction_date) })
                 : undefined
             }
-            facts={facts}
+            factPairs={heroFactPairs}
             statusTrailing={
               showBuyerActions ? (
                 <QuotationBuyerActionBar
@@ -236,6 +295,22 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
                   busy={buyerReview.busy}
                   onAccept={() => void buyerReview.accept()}
                   onReject={() => void buyerReview.reject()}
+                />
+              ) : buyerAcceptedAwaitingInvoice ? (
+                <ErpDocHeroActionButton
+                  label={t('quotationDetails.processingInvoice')}
+                  onPress={() => {}}
+                  variant="outline"
+                  size="compact"
+                  accessibilityLabel={t('quotationDetails.processingInvoice')}
+                />
+              ) : canBuyerPayInvoice ? (
+                <ErpDocHeroActionButton
+                  label={t('quotationDetails.viewInvoiceAndMakePayment')}
+                  onPress={onViewInvoiceAndPay}
+                  variant="primary"
+                  size="compact"
+                  accessibilityLabel={t('quotationDetails.viewInvoiceAndMakePayment')}
                 />
               ) : canEdit ? (
                 <ErpDocHeroActionButton label={t('quotationDetails.edit')} onPress={onEditQuotation} variant="outline" />
@@ -302,14 +377,6 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
               <ErpDocItemsList>
                 {items.map((line, idx) => {
                   const code = String(line.item_code || '').trim();
-                  const weights = readErpLineWeightFromRow(line as Record<string, unknown>);
-                  const weightDetail =
-                    weights.total_weight != null || weights.weight_per_unit != null
-                      ? t('invoiceDelivery.weightDetail', {
-                          weight: formatErpLineWeight(weights.total_weight ?? 0),
-                          perUnit: formatErpLineWeight(weights.weight_per_unit ?? 0),
-                        })
-                      : undefined;
                   return (
                   <ErpDocLineItem
                     key={String(line.name || idx)}
@@ -317,7 +384,7 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
                       description: line.description,
                       itemCode: line.item_code,
                     })}
-                    detail={weightDetail}
+                    detail={undefined}
                     qty={line.qty}
                     rate={line.rate}
                     amount={line.amount}

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { DefaultTheme, NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 
 // Screens
@@ -58,6 +58,21 @@ import { rootNavigationRef } from './rootNavigation';
 
 const Stack = createStackNavigator<RootStackParamList>();
 const AuthStack = createStackNavigator<AuthStackParamList>();
+
+const navigationTheme = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    background: Colors.BACKGROUND,
+    card: Colors.WHITE,
+  },
+};
+
+const stackScreenOptions = {
+  headerShown: false,
+  cardStyle: { backgroundColor: Colors.WHITE },
+  contentStyle: { backgroundColor: Colors.BACKGROUND },
+} as const;
 
 // Auth Navigator
 const AuthNavigator = () => {
@@ -128,12 +143,10 @@ export const AppNavigator = () => {
   }
 
   return (
-    <NavigationContainer ref={rootNavigationRef}>
+    <NavigationContainer ref={rootNavigationRef} theme={navigationTheme}>
       <Stack.Navigator
         initialRouteName={initialRouteName}
-        screenOptions={{
-          headerShown: false,
-        }}
+        screenOptions={stackScreenOptions}
       >
         <Stack.Screen name="LanguageSelect" component={LanguageSelectScreen} />
         <Stack.Screen name="Onboarding" component={OnboardingScreen} />

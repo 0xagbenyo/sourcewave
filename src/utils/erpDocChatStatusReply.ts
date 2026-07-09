@@ -7,6 +7,7 @@ import {
 } from '../services/ravenNativeApi';
 import { setPendingRavenDocLinkMessageMerge } from './ravenDocLinkMessageMergeBridge';
 import { getERPNextClient } from '../services/erpnext';
+import { shippingOptionByErpValue } from '../constants/shippingOptions';
 
 function supplierQuotationOrderLinkField(): string {
   return String(process.env.EXPO_PUBLIC_ERPNEXT_SQ_ORDER_LINK_FIELD || 'custom_order').trim() || 'custom_order';
@@ -20,6 +21,7 @@ export type ErpDocChatContext = {
 
 export const QUOTATION_EDITED_CHAT_REPLY = 'Edited — please review.';
 export const SALES_ORDER_EDITED_CHAT_REPLY = 'Edited — please review.';
+export const DELIVERY_NOTE_EDITED_CHAT_REPLY = 'Edited — please review.';
 export const QUOTATION_ACCEPTED_CHAT_REPLY = 'Quotation accepted.';
 export const QUOTATION_REJECTED_CHAT_REPLY = 'Quotation rejected.';
 export const SOURCING_REQUEST_ACCEPTED_CHAT_REPLY = 'Sourcing request accepted.';
@@ -46,6 +48,36 @@ export function notifySalesOrderEditedInChat(orderName: string, chat?: ErpDocCha
     linkDoctype: 'Sales Order',
     linkDocument: n,
     text: SALES_ORDER_EDITED_CHAT_REPLY,
+    ravenChannelId: chat?.ravenChannelId,
+    linkMessageId: chat?.linkMessageId,
+    sessionEmail: chat?.sessionEmail ?? null,
+  });
+}
+
+/** Delivery note saved — text reply on the delivery note thread. Buyers may include the chosen shipping option. */
+export function notifyDeliveryNoteEditedInChat(
+  deliveryNoteName: string,
+  chat?: ErpDocChatContext & {
+    editorIsSupplier?: boolean;
+    shippingOptionErpValue?: string | null;
+  }
+): void {
+  const n = String(deliveryNoteName || '').trim();
+  if (!n) return;
+
+  let text = DELIVERY_NOTE_EDITED_CHAT_REPLY;
+  if (!chat?.editorIsSupplier) {
+    const optionValue = String(chat?.shippingOptionErpValue || '').trim();
+    if (optionValue) {
+      const label = shippingOptionByErpValue(optionValue)?.label || optionValue;
+      text = `${DELIVERY_NOTE_EDITED_CHAT_REPLY}\nShipping option: ${label}`;
+    }
+  }
+
+  notifyTextReplyOnErpDocThread({
+    linkDoctype: 'Delivery Note',
+    linkDocument: n,
+    text,
     ravenChannelId: chat?.ravenChannelId,
     linkMessageId: chat?.linkMessageId,
     sessionEmail: chat?.sessionEmail ?? null,

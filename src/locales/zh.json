@@ -593,6 +593,8 @@
     "supplier": "供应商",
     "quoteBudget": "报价预算",
     "submitted": "提交于 {{date}}",
+    "processingInvoice": "处理中...",
+    "viewInvoiceAndMakePayment": "查看发票以付款 / 安排配送",
     "edit": "编辑",
     "reviseResend": "修改并重新发送",
     "reviseResendA11y": "修改并发送新报价"
@@ -620,14 +622,16 @@
     "posted": "过账于 {{date}}",
     "shareInChat": "在聊天中分享发票",
     "statusDraft": "草稿",
-    "statusSubmitted": "已提交"
+    "statusSubmitted": "已提交",
+    "totalWeight": "总重量",
+    "totalWeightValue": "{{weightKg}} 公斤（≈ {{weightCbm}} CBM）"
   },
   "invoiceDelivery": {
     "shippingTitle": "选择运输方式",
     "shippingSubtitle": "在我们创建送货单之前，请选择此订单的运输方式。",
     "createDeliveryNote": "保存送货单",
     "arrangeDelivery": "安排配送",
-    "arrangeDeliverySub": "选择空运或海运货物并保存送货单草稿",
+    "arrangeDeliverySub": "选择空运（KG）或海运（CBM）并保存送货单草稿",
     "linkedDeliveryNote": "送货单 {{name}}",
     "linkedDeliveryNoteSub": "您的货物已安排发运",
     "linkedDeliveryNoteDraftSub": "",
@@ -635,7 +639,8 @@
     "successBody": "送货单草稿 {{name}} 已保存，运输方式为 {{shipping}}。",
     "failedTitle": "配送",
     "failedBody": "无法创建送货单。",
-    "weightDetail": "共 {{weight}} 公斤 · {{perUnit}} 公斤/件"
+    "weightDetail": "共 {{weight}} {{unit}} · {{perUnit}} {{unit}}/件",
+    "weightDetailWithCbm": "共 {{weight}} 公斤 · {{perUnit}} 公斤/件（≈ {{weightCbm}} CBM · {{perUnitCbm}} CBM/件）"
   },
   "deliveryNoteDetails": {
     "screenTitle": "送货单",
@@ -646,6 +651,9 @@
     "invoiceFeeShort": "发票",
     "downloadPdf": "下载 PDF",
     "downloadHint": "此处仅收取配送费。点击顶部的“下载 PDF”以查看完整送货单、发票明细和所有金额。",
+    "shareWithLogistics": "分享给物流",
+    "sendToLogisticsCta": "发送给物流",
+    "sendToLogisticsHint": "在聊天中将此送货单分享给物流公司。",
     "deliveryAmount": "配送金额",
     "posted": "已过账",
     "customer": "客户",
@@ -670,8 +678,13 @@
     "tabItems": "商品",
     "nextViewItems": "下一步 — 查看商品",
     "invoiceTotalWeight": "发票总重量",
-    "invoiceTotalWeightValue": "{{weight}} 公斤",
+    "invoiceTotalWeightValue": "{{weight}} {{unit}}",
     "invoiceTotalWeightSub": "来自关联销售发票明细项的总重量。",
+    "totalWeight": "总重量",
+    "ratePerUnit": "每 {{unit}} 费率",
+    "ratePerUnitValue": "{{amount}} / {{unit}}",
+    "estimatedDeliveryFee": "预估配送费",
+    "estimatedDeliveryHint": "保存以应用此运输选项并在 ERPNext 中重新计算总额。",
     "tapToChangeShippingOption": "点击更改运输选项",
     "tapToChangeShippingRule": "点击更改运费规则",
     "supplierEditHint": "送货单草稿 — 在下方编辑运输和配送详情。明细项仍与发票关联。",

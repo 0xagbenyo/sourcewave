@@ -27,8 +27,6 @@ export const DeliveryNoteSupplierHeaderForm: React.FC<Props> = ({
   };
 
   const fields: { key: FieldKey; label: string; multiline?: boolean }[] = [
-    { key: 'posting_date', label: t('deliveryNoteDetails.fieldPostingDate') },
-    { key: 'shipping_address_name', label: t('deliveryNoteDetails.fieldShippingAddress') },
     { key: 'instructions', label: t('deliveryNoteDetails.fieldInstructions'), multiline: true },
   ];
 

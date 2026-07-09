@@ -1,6 +1,6 @@
 import { readSalesOrderLineRequestedQty } from './erpSalesOrderLineFields';
 import { readErpDocLineImage } from './erpDocLineImageField';
-import { formatErpLineWeight, parseErpWeightInput } from './erpLineWeight';
+import { formatErpLineWeight, parseErpWeightInput, readErpLineWeightFromRow } from './erpLineWeight';
 import { defaultQuotationValidTillIso, readErpDateField } from './erpDateInput';
 export type SalesOrderQuotationLineSeed = {
   key: string;
@@ -16,6 +16,7 @@ export type SalesOrderQuotationLineSeed = {
   /** Supplier-attached image URL (persisted). */
   supplier_image?: string;
   weight_per_unit?: string;
+  weight_per_unit_cbm?: string;
   total_weight?: string;
 };
 
@@ -46,8 +47,9 @@ export function quotationLinesFromSalesOrder(raw: Record<string, unknown> | null
       rate: String(rate),
       buyer_budget: String(rate),
       item_image: readErpDocLineImage(it) || undefined,
-      weight_per_unit: '0.000',
-      total_weight: '0',
+      weight_per_unit: '',
+      weight_per_unit_cbm: '',
+      total_weight: '',
     });
   }
 
@@ -86,8 +88,8 @@ export function quotationLinesFromSupplierQuotation(
     const rateN = Number(it.rate);
     const qty = Number.isFinite(qtyN) && qtyN > 0 ? qtyN : 1;
     const rate = Number.isFinite(rateN) && rateN >= 0 ? rateN : 0;
-    const wpu = parseErpWeightInput(it.weight_per_unit);
-    const tw = parseErpWeightInput(it.total_weight);
+    const wpuCbm = parseErpWeightInput(it.custom_weight_cbm);
+    const weights = readErpLineWeightFromRow(it);
     lines.push({
       key: `sq-${sqName || 'q'}-${i}`,
       item_code: code,
@@ -96,8 +98,15 @@ export function quotationLinesFromSupplierQuotation(
       qty: String(qty),
       rate: String(rate),
       supplier_image: readErpDocLineImage(it) || undefined,
-      weight_per_unit: wpu != null ? formatErpLineWeight(wpu) : '0.000',
-      total_weight: tw != null ? formatErpLineWeight(tw) : '0',
+      weight_per_unit:
+        weights.weight_per_unit != null ? formatErpLineWeight(weights.weight_per_unit) : '',
+      weight_per_unit_cbm:
+        wpuCbm != null
+          ? formatErpLineWeight(wpuCbm)
+          : weights.weight_per_unit != null
+            ? formatErpLineWeight(weights.weight_per_unit / 100)
+            : '',
+      total_weight: weights.total_weight != null ? formatErpLineWeight(weights.total_weight) : '',
     });
   }
 

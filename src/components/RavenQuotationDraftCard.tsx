@@ -146,6 +146,7 @@ export const RavenQuotationDraftCard: React.FC<Props> = ({
         <View style={styles.buyerActions}>
           <QuotationBuyerActionBar
             busy={busy}
+            compact
             onAccept={() => onAccept?.()}
             onReject={() => onReject?.()}
           />
@@ -184,5 +185,5 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
   },
   chipText: { fontSize: 12, fontWeight: '800' },
-  buyerActions: { marginTop: 10 },
+  buyerActions: { marginTop: 8 },
 });

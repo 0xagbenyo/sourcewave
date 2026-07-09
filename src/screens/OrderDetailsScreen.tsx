@@ -523,21 +523,6 @@ export const OrderDetailsScreen: React.FC = () => {
               </TouchableOpacity>
             ) : null}
           </ErpDocCard>
-
-          {showSendToSupplier ? (
-            <View style={styles.sendSection}>
-              <Text style={styles.sendHint}>{t('orderDetails.sendToSupplierHint')}</Text>
-              <TouchableOpacity
-                style={styles.sendButton}
-                onPress={onShareOrder}
-                activeOpacity={0.85}
-                accessibilityRole="button"
-              >
-                <Ionicons name="paper-plane-outline" size={20} color={Colors.WHITE} />
-                <Text style={styles.sendButtonText}>{t('orderDetails.sendToSupplierCta')}</Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
         </>
       ) : null}
 
@@ -733,29 +718,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: Colors.WINE,
-  },
-  sendSection: {
-    marginTop: 20,
-    paddingHorizontal: 4,
-  },
-  sendHint: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: Colors.TEXT_SECONDARY,
-    marginBottom: 12,
-    fontWeight: '500',
-  },
-  sendButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    backgroundColor: ERP_DOC_FLAT.accent,
-    paddingVertical: 16,
-  },
-  sendButtonText: {
-    color: Colors.WHITE,
-    fontSize: 16,
-    fontWeight: '700',
   },
 });

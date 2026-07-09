@@ -99,6 +99,24 @@ export function computeDeliveryNoteAmountBreakdown(
   };
 }
 
+/** Document **total_net_weight** from ERPNext (no client-side conversion). */
+export function readDeliveryNoteTotalNetWeight(
+  doc: Record<string, unknown> | null | undefined
+): number {
+  const n = Number(doc?.total_net_weight);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+/** Delivery fee ÷ billable weight (KG or CBM) for per-unit rate display. */
+export function shippingRatePerMeasureUnit(
+  shippingAmount: number,
+  weightInUnit: number
+): number | null {
+  if (!Number.isFinite(shippingAmount) || shippingAmount <= 0) return null;
+  if (!Number.isFinite(weightInUnit) || weightInUnit <= 0.0001) return null;
+  return Math.round((shippingAmount / weightInUnit) * 100) / 100;
+}
+
 /** Delivery fee only — use for chat captions and list previews (not combined DN grand total). */
 export function deliveryNoteShippingFeeAmount(
   doc: Record<string, unknown>,

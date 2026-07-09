@@ -36,6 +36,8 @@ type LayoutProps = {
   /** Optional header action (e.g. share to supplier chat). Shown beside print when both exist. */
   onShare?: () => void;
   shareAccessibilityLabel?: string;
+  /** Custom header control rendered instead of the default share icon. */
+  headerTrailing?: React.ReactNode;
   children?: React.ReactNode;
   refreshControl?: React.ReactElement<RefreshControlProps>;
 };
@@ -93,6 +95,27 @@ export function erpDocPrimaryPaymentAmount(doc: Record<string, unknown>, currenc
   return formatErpDocMoney(raw, currency);
 }
 
+/** Compact send/share control for ERP document preview headers. */
+export const ErpDocHeaderSendButton: React.FC<{
+  label: string;
+  onPress: () => void;
+  icon?: keyof typeof Ionicons.glyphMap;
+  accessibilityLabel?: string;
+}> = ({ label, onPress, icon = 'paper-plane-outline', accessibilityLabel }) => (
+  <TouchableOpacity
+    style={styles.headerSendButton}
+    onPress={onPress}
+    activeOpacity={0.85}
+    accessibilityRole="button"
+    accessibilityLabel={accessibilityLabel || label}
+  >
+    <Ionicons name={icon} size={14} color={Colors.WHITE} />
+    <Text style={styles.headerSendButtonText} numberOfLines={1}>
+      {label}
+    </Text>
+  </TouchableOpacity>
+);
+
 /** Shared shell for ERP document preview screens. */
 export const ErpDocumentPreviewLayout: React.FC<LayoutProps> = ({
   screenTitle,
@@ -104,13 +127,14 @@ export const ErpDocumentPreviewLayout: React.FC<LayoutProps> = ({
   onBack,
   onShare,
   shareAccessibilityLabel = 'Share',
+  headerTrailing,
   children,
   refreshControl,
 }) => {
   const printName = String(printDocName || '').trim();
   const printType = String(printDoctype || '').trim();
   const showPrint = !!printName && !!printType;
-  const showShare = typeof onShare === 'function';
+  const showShare = !headerTrailing && typeof onShare === 'function';
 
   const body = loading ? (
     <View style={styles.center}>
@@ -147,7 +171,9 @@ export const ErpDocumentPreviewLayout: React.FC<LayoutProps> = ({
           {screenTitle}
         </Text>
         <View style={styles.topRight}>
-          {showShare ? (
+          {headerTrailing ? (
+            <View style={styles.headerTrailingWrap}>{headerTrailing}</View>
+          ) : showShare ? (
             <TouchableOpacity
               onPress={onShare}
               hitSlop={12}
@@ -165,7 +191,7 @@ export const ErpDocumentPreviewLayout: React.FC<LayoutProps> = ({
               variant="icon"
               label={printLabel}
             />
-          ) : !showShare ? (
+          ) : !showShare && !headerTrailing ? (
             <View style={styles.topSpacer} />
           ) : null}
         </View>
@@ -197,6 +223,11 @@ export const ErpDocStatusBadge: React.FC<StatusBadgeProps> = ({ label, color }) 
   </View>
 );
 
+export type ErpDocHeroFactPair = {
+  left: { label: string; value: string };
+  right?: { label: string; value: string };
+};
+
 type HeroProps = {
   docId: string;
   statusLabel: string;
@@ -208,8 +239,12 @@ type HeroProps = {
   secondaryAmount?: string;
   secondaryAmountLabel?: string;
   facts?: { label: string; value: string }[];
+  /** Two-column rows (e.g. customer + weight, rule + rate). */
+  factPairs?: ErpDocHeroFactPair[];
   /** Renders on the right of the status badge (e.g. Accept/Reject, Pay). */
   statusTrailing?: React.ReactNode;
+  /** Renders directly below the status badge row. */
+  belowStatusRow?: React.ReactNode;
 };
 
 export const ErpDocHero: React.FC<HeroProps> = ({
@@ -222,13 +257,16 @@ export const ErpDocHero: React.FC<HeroProps> = ({
   secondaryAmount,
   secondaryAmountLabel,
   facts,
+  factPairs,
   statusTrailing,
+  belowStatusRow,
 }) => (
   <View style={styles.hero}>
     <View style={styles.heroBadgeRow}>
       <ErpDocStatusBadge label={statusLabel} color={statusColor} />
       {statusTrailing ? <View style={styles.heroTrailingRow}>{statusTrailing}</View> : null}
     </View>
+    {belowStatusRow ? <View style={styles.belowStatusRow}>{belowStatusRow}</View> : null}
     <Text style={styles.docId} numberOfLines={1} ellipsizeMode="middle">
       {docId}
     </Text>
@@ -264,7 +302,33 @@ export const ErpDocHero: React.FC<HeroProps> = ({
         {subtitle}
       </Text>
     ) : null}
-    {facts?.length ? (
+    {factPairs?.length ? (
+      <View style={styles.factsWrap}>
+        {factPairs.map((row, idx) => (
+          <View key={`${row.left.label}-${idx}`} style={styles.factPairRow}>
+            <View style={styles.factPairCol}>
+              <Text style={styles.factChipLabel} numberOfLines={1}>
+                {row.left.label}
+              </Text>
+              <Text style={styles.factChipValue} numberOfLines={2}>
+                {row.left.value || '—'}
+              </Text>
+            </View>
+            {row.right ? (
+              <View style={[styles.factPairCol, styles.factPairColRight]}>
+                <Text style={[styles.factChipLabel, styles.factPairLabelRight]} numberOfLines={1}>
+                  {row.right.label}
+                </Text>
+                <Text style={[styles.factChipValue, styles.factPairValueRight]} numberOfLines={2}>
+                  {row.right.value || '—'}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        ))}
+      </View>
+    ) : null}
+    {!factPairs?.length && facts?.length ? (
       <View style={styles.factsWrap}>
         {facts.map((f) => (
           <View key={f.label} style={styles.factChip}>
@@ -286,6 +350,7 @@ type HeroActionButtonProps = {
   onPress: () => void;
   variant?: 'primary' | 'outline';
   accessibilityLabel?: string;
+  size?: 'default' | 'compact';
 };
 
 /** Compact action beside the status badge (Edit, Pay, etc.). */
@@ -294,15 +359,26 @@ export const ErpDocHeroActionButton: React.FC<HeroActionButtonProps> = ({
   onPress,
   variant = 'primary',
   accessibilityLabel,
+  size = 'default',
 }) => (
   <TouchableOpacity
-    style={[styles.heroActionBtn, variant === 'outline' && styles.heroActionBtnOutline]}
+    style={[
+      styles.heroActionBtn,
+      size === 'compact' && styles.heroActionBtnCompact,
+      variant === 'outline' && styles.heroActionBtnOutline,
+    ]}
     onPress={onPress}
     activeOpacity={0.85}
     accessibilityRole="button"
     accessibilityLabel={accessibilityLabel || label}
   >
-    <Text style={[styles.heroActionBtnText, variant === 'outline' && styles.heroActionBtnTextOutline]}>
+    <Text
+      style={[
+        styles.heroActionBtnText,
+        size === 'compact' && styles.heroActionBtnTextCompact,
+        variant === 'outline' && styles.heroActionBtnTextOutline,
+      ]}
+    >
       {label}
     </Text>
   </TouchableOpacity>
@@ -406,11 +482,12 @@ export const ErpDocLineItem: React.FC<LineProps> = ({
             {title}
           </Text>
           {detail ? (
-            <Text style={styles.lineDetail} numberOfLines={1}>
+            <Text style={styles.lineDetail} numberOfLines={2}>
               {detail}
             </Text>
-          ) : qtyLine ? (
-            <Text style={styles.lineDetail}>{qtyLine}</Text>
+          ) : null}
+          {qtyLine ? (
+            <Text style={styles.lineMeta}>{qtyLine}</Text>
           ) : null}
         </View>
         {lineTotal || secondaryTotal ? (
@@ -663,6 +740,28 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   headerIconHit: { padding: 6 },
+  headerTrailingWrap: {
+    flexShrink: 1,
+    minWidth: 0,
+    maxWidth: 148,
+    marginRight: 2,
+  },
+  headerSendButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: flatAccent,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    minHeight: 30,
+    maxWidth: '100%',
+  },
+  headerSendButtonText: {
+    flexShrink: 1,
+    color: Colors.WHITE,
+    fontSize: 12,
+    fontWeight: '600',
+  },
   scroll: { flex: 1, width: '100%' },
   scrollInner: { paddingTop: 0, paddingBottom: Spacing.XL },
   scrollContent: { width: '100%', minWidth: 0, maxWidth: '100%', alignSelf: 'stretch' },
@@ -719,6 +818,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
+  belowStatusRow: {
+    width: '100%',
+    minWidth: 0,
+    marginTop: 8,
+  },
   heroActionBtn: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -726,6 +830,12 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 14,
     minHeight: 36,
+  },
+  heroActionBtnCompact: {
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    minHeight: 28,
+    borderRadius: 999,
   },
   heroActionBtnOutline: {
     backgroundColor: ERP_DOC_FLAT.surface,
@@ -736,6 +846,10 @@ const styles = StyleSheet.create({
     color: Colors.WHITE,
     fontSize: 14,
     fontWeight: '600',
+  },
+  heroActionBtnTextCompact: {
+    fontSize: 12,
+    fontWeight: '700',
   },
   heroActionBtnTextOutline: {
     color: flatInk,
@@ -831,6 +945,29 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     backgroundColor: 'transparent',
   },
+  factPairRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 16,
+    width: '100%',
+    minWidth: 0,
+  },
+  factPairCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  factPairColRight: {
+    flexShrink: 0,
+    maxWidth: '48%',
+    alignItems: 'flex-end',
+  },
+  factPairLabelRight: {
+    textAlign: 'right',
+  },
+  factPairValueRight: {
+    textAlign: 'right',
+  },
   factChipLabel: {
     fontSize: 11,
     fontWeight: '600',
@@ -915,9 +1052,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  lineTextCol: { flex: 1, minWidth: 0 },
+  lineTextCol: { flex: 1, minWidth: 0, paddingRight: 10 },
   lineTitle: { fontSize: 15, fontWeight: '600', color: flatInk, lineHeight: 20 },
-  lineDetail: { fontSize: 13, color: flatMuted, marginTop: 2 },
+  lineDetail: { fontSize: 13, color: flatInk, marginTop: 4, lineHeight: 18, fontWeight: '500' },
+  lineMeta: { fontSize: 12, color: flatMuted, marginTop: 4, lineHeight: 17 },
   lineAmount: {
     fontSize: 14,
     fontWeight: '600',

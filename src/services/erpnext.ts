@@ -20,7 +20,19 @@ import {
   isPricingRuleValidForPromo,
 } from '../utils/subscriptionPromoCode';
 import { ERP_DOC_LINE_IMAGE_FIELD, applyErpDocLineImage, readErpDocLineImage } from '../utils/erpDocLineImageField';
-import { applyErpLineWeightToRow, readErpLineWeightFromRow } from '../utils/erpLineWeight';
+import {
+  applyErpLineWeightToRow,
+  erpLineWeightsFromCanonicalKg,
+  cbmToKg,
+  readErpLineWeightFromRow,
+} from '../utils/erpLineWeight';
+import {
+  shippingOptionErpValueForRuleName,
+  shippingMeasureUnitForContext,
+  shippingMeasureUnitForErpValue,
+  type ShippingMeasureUnit,
+} from '../constants/shippingOptions';
+import { parseShippingRuleDetail, type ErpShippingRuleDetail } from '../utils/shippingRuleEstimate';
 import {
   ERP_SO_LINE_REQUESTED_QTY_FIELD,
   ERP_SO_SERIES_COPY_FIELD,
@@ -2986,6 +2998,53 @@ class ERPNextClient {
     });
   }
 
+  private normalizeDeliveryNoteItemsForShippingUnit(
+    items: Record<string, unknown>[],
+    unit: ShippingMeasureUnit,
+    previousUnit: ShippingMeasureUnit = unit
+  ): Record<string, unknown>[] {
+    return items.map((row) => {
+      const next = { ...row };
+      const readNonNegative = (value: unknown): number | null => {
+        const n = Number(value);
+        return Number.isFinite(n) && n >= 0 ? n : null;
+      };
+      const parsed = readErpLineWeightFromRow(next);
+      const rawPerUnit = readNonNegative(next.weight_per_unit);
+      const rawTotal = readNonNegative(next.total_weight);
+      const canonicalPerUnit =
+        readNonNegative(next.custom_weight_kg) ??
+        parsed.custom_weight_kg ??
+        (rawPerUnit != null ? (previousUnit === 'cbm' ? cbmToKg(rawPerUnit) : rawPerUnit) : null) ??
+        parsed.weight_per_unit ??
+        null;
+      const canonicalTotal =
+        readNonNegative(next.custom_total_weight_kg) ??
+        parsed.custom_total_weight_kg ??
+        (rawTotal != null ? (previousUnit === 'cbm' ? cbmToKg(rawTotal) : rawTotal) : null) ??
+        parsed.total_weight ??
+        null;
+      const canonical = {
+        weight_per_unit: canonicalPerUnit,
+        total_weight: canonicalTotal,
+      };
+      const mainWeights = erpLineWeightsFromCanonicalKg(canonical, unit);
+      const kgWeights = erpLineWeightsFromCanonicalKg(canonical, 'kg');
+      const cbmWeights = erpLineWeightsFromCanonicalKg(canonical, 'cbm');
+      applyErpLineWeightToRow(next, {
+        // Main ERP fields follow currently selected shipping unit.
+        weight_per_unit: mainWeights.weight_per_unit,
+        total_weight: mainWeights.total_weight,
+        // Keep both representations synchronized for stable toggling.
+        custom_weight_kg: kgWeights.weight_per_unit,
+        custom_total_weight_kg: kgWeights.total_weight,
+        custom_weight_cbm: cbmWeights.weight_per_unit,
+        custom_total_weight_cbm: cbmWeights.total_weight,
+      });
+      return next;
+    });
+  }
+
   /** List non-cancelled Delivery Notes created from a Sales Invoice. */
   async listDeliveryNotesForSalesInvoice(invoiceName: string): Promise<any[]> {
     const n = String(invoiceName || '').trim();
@@ -3115,6 +3174,7 @@ class ERPNextClient {
 
     const shipField = this.deliveryNoteShippingOptionField();
     draft[shipField] = shippingLabel;
+    draft.shipping_rule = shippingLabel;
     const shippingNote =
       String(opts.shippingInstructions || '').trim() || shippingLabel;
     draft.instructions = String(draft.instructions || '').trim()
@@ -3122,6 +3182,9 @@ class ERPNextClient {
       : `Shipping: ${shippingNote}`;
 
     this.patchDeliveryNoteItemsFromInvoice(draft, inv as Record<string, unknown>);
+    const createUnit = shippingMeasureUnitForErpValue(shippingLabel);
+    const draftItems = Array.isArray(draft.items) ? (draft.items as Record<string, unknown>[]) : [];
+    draft.items = this.normalizeDeliveryNoteItemsForShippingUnit(draftItems, createUnit, 'kg');
 
     const invoiceSupplier = readSalesInvoiceSupplier(inv as Record<string, unknown>);
     if (invoiceSupplier) {
@@ -3194,8 +3257,22 @@ class ERPNextClient {
     }
   }
 
+  /** Full Shipping Rule doc (conditions for fee preview). */
+  async getShippingRuleDetail(name: string): Promise<ErpShippingRuleDetail | null> {
+    const n = String(name || '').trim();
+    if (!n) return null;
+    try {
+      const res = await this.client.get(`${API_VERSION}/Shipping Rule/${encodeURIComponent(n)}`);
+      return parseShippingRuleDetail(res.data?.data as Record<string, unknown>);
+    } catch (e) {
+      console.warn('[ERPNext] getShippingRuleDetail failed', e);
+      return null;
+    }
+  }
+
   /**
-   * Supplier edits a **draft** Delivery Note — header fields (not items), shipping, and flags.
+   * Edit a **draft** Delivery Note — shipping, flags, and supplier header fields.
+   * Weights stay in **KG** on ERP rows; CBM is display-only in the app.
    */
   async updateDeliveryNoteForSupplier(
     name: string,
@@ -3203,8 +3280,6 @@ class ERPNextClient {
       shipping_rule?: string | null;
       shipping_option_label?: string | null;
       is_supplier?: boolean;
-      posting_date?: string | null;
-      shipping_address_name?: string | null;
       contact_person?: string | null;
       contact_mobile?: string | null;
       contact_email?: string | null;
@@ -3231,6 +3306,16 @@ class ERPNextClient {
     const doc: Record<string, unknown> = { ...fresh };
     const valuationRate = this.deliveryNoteDefaultValuationRate();
     const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
+
+    const savedOption = this.readDeliveryNoteShippingOption(fresh);
+    const savedRule = String(fresh.shipping_rule || '').trim();
+    const nextOption =
+      patch.shipping_option_label !== undefined
+        ? String(patch.shipping_option_label || '').trim()
+        : savedOption;
+    const nextRule =
+      patch.shipping_rule !== undefined ? String(patch.shipping_rule || '').trim() : savedRule;
+
     doc.items = items.map((row) => {
       const next = { ...row };
       const vr = Number(next.valuation_rate);
@@ -3238,20 +3323,40 @@ class ERPNextClient {
       return next;
     });
 
-    if (patch.shipping_rule !== undefined) {
-      doc.shipping_rule = patch.shipping_rule ? String(patch.shipping_rule).trim() : '';
-    }
-    if (patch.shipping_option_label !== undefined) {
+    if (patch.shipping_option_label !== undefined && patch.shipping_rule === undefined) {
       doc[this.deliveryNoteShippingOptionField()] = String(patch.shipping_option_label || '').trim();
+    } else if (patch.shipping_rule !== undefined || patch.shipping_option_label !== undefined) {
+      const syncedOption =
+        nextOption ||
+        shippingOptionErpValueForRuleName(nextRule) ||
+        savedOption;
+      const syncedRule = nextRule || nextOption || savedRule;
+      doc.shipping_rule = syncedRule;
+      doc[this.deliveryNoteShippingOptionField()] = syncedOption;
     }
+
+    const optionOnlyPatch =
+      patch.shipping_option_label !== undefined &&
+      patch.shipping_rule === undefined &&
+      patch.is_supplier === undefined;
+
+    if (!optionOnlyPatch) {
+      const currentOption = String(doc[this.deliveryNoteShippingOptionField()] || '').trim();
+      const saveUnit = shippingMeasureUnitForErpValue(currentOption);
+      const previousUnit = shippingMeasureUnitForContext(savedOption, savedRule);
+      doc.items = this.normalizeDeliveryNoteItemsForShippingUnit(
+        Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [],
+        saveUnit,
+        previousUnit
+      );
+    }
+
     if (patch.is_supplier !== undefined) {
       const supplierField = this.deliveryNoteIsSupplierField();
       doc[supplierField] = deliveryNoteIsSupplierErpValue(patch.is_supplier, fresh[supplierField]);
     }
 
     const headerKeys = [
-      'posting_date',
-      'shipping_address_name',
       'contact_person',
       'contact_mobile',
       'contact_email',
@@ -6693,6 +6798,10 @@ class ERPNextClient {
       custom_new_image?: string | null;
       weight_per_unit?: number | null;
       total_weight?: number | null;
+      custom_weight_kg?: number | null;
+      custom_total_weight_kg?: number | null;
+      custom_weight_cbm?: number | null;
+      custom_total_weight_cbm?: number | null;
     }>;
   }): Promise<{ name: string; grand_total: number; currency: string }> {
     const supplier = String(args.supplier || '').trim();
@@ -6709,6 +6818,12 @@ class ERPNextClient {
         custom_new_image: l.custom_new_image != null ? String(l.custom_new_image).trim() : '',
         weight_per_unit: l.weight_per_unit != null ? Number(l.weight_per_unit) : null,
         total_weight: l.total_weight != null ? Number(l.total_weight) : null,
+        custom_weight_kg: l.custom_weight_kg != null ? Number(l.custom_weight_kg) : null,
+        custom_total_weight_kg:
+          l.custom_total_weight_kg != null ? Number(l.custom_total_weight_kg) : null,
+        custom_weight_cbm: l.custom_weight_cbm != null ? Number(l.custom_weight_cbm) : null,
+        custom_total_weight_cbm:
+          l.custom_total_weight_cbm != null ? Number(l.custom_total_weight_cbm) : null,
       }))
       .filter((l) => l.item_code.length > 0 && Number.isFinite(l.qty) && l.qty > 0 && Number.isFinite(l.rate) && l.rate >= 0);
 
@@ -6737,6 +6852,10 @@ class ERPNextClient {
       applyErpLineWeightToRow(row, {
         weight_per_unit: l.weight_per_unit,
         total_weight: l.total_weight,
+        custom_weight_kg: l.custom_weight_kg,
+        custom_total_weight_kg: l.custom_total_weight_kg,
+        custom_weight_cbm: l.custom_weight_cbm,
+        custom_total_weight_cbm: l.custom_total_weight_cbm,
       });
       return row;
     });
@@ -6860,6 +6979,10 @@ class ERPNextClient {
       custom_new_image?: string | null;
       weight_per_unit?: number | null;
       total_weight?: number | null;
+      custom_weight_kg?: number | null;
+      custom_total_weight_kg?: number | null;
+      custom_weight_cbm?: number | null;
+      custom_total_weight_cbm?: number | null;
     }>;
     }
   ): Promise<{ name: string; grand_total: number; currency: string }> {
@@ -6882,6 +7005,12 @@ class ERPNextClient {
         custom_new_image: l.custom_new_image != null ? String(l.custom_new_image).trim() : '',
         weight_per_unit: l.weight_per_unit != null ? Number(l.weight_per_unit) : null,
         total_weight: l.total_weight != null ? Number(l.total_weight) : null,
+        custom_weight_kg: l.custom_weight_kg != null ? Number(l.custom_weight_kg) : null,
+        custom_total_weight_kg:
+          l.custom_total_weight_kg != null ? Number(l.custom_total_weight_kg) : null,
+        custom_weight_cbm: l.custom_weight_cbm != null ? Number(l.custom_weight_cbm) : null,
+        custom_total_weight_cbm:
+          l.custom_total_weight_cbm != null ? Number(l.custom_total_weight_cbm) : null,
       }))
       .filter((l) => l.item_code.length > 0 && Number.isFinite(l.qty) && l.qty > 0 && Number.isFinite(l.rate) && l.rate >= 0);
 
@@ -6901,6 +7030,10 @@ class ERPNextClient {
       applyErpLineWeightToRow(row, {
         weight_per_unit: l.weight_per_unit,
         total_weight: l.total_weight,
+        custom_weight_kg: l.custom_weight_kg,
+        custom_total_weight_kg: l.custom_total_weight_kg,
+        custom_weight_cbm: l.custom_weight_cbm,
+        custom_total_weight_cbm: l.custom_total_weight_cbm,
       });
       return row;
     });
@@ -7187,16 +7320,13 @@ class ERPNextClient {
       (err as { code?: string }).code = 'SALES_ORDER_CANCELLED';
       throw err;
     }
-    if (ds === 1) {
-      const err = new Error('SALES_ORDER_ALREADY_SUBMITTED');
-      (err as { code?: string }).code = 'SALES_ORDER_ALREADY_SUBMITTED';
-      throw err;
-    }
-    const shipTo = String(raw?.shipping_address_name || '').trim();
-    if (!shipTo) {
-      const err = new Error('SALES_ORDER_MISSING_SHIP_TO');
-      (err as { code?: string }).code = 'SALES_ORDER_MISSING_SHIP_TO';
-      throw err;
+    if (ds === 0) {
+      const shipTo = String(raw?.shipping_address_name || '').trim();
+      if (!shipTo) {
+        const err = new Error('SALES_ORDER_MISSING_SHIP_TO');
+        (err as { code?: string }).code = 'SALES_ORDER_MISSING_SHIP_TO';
+        throw err;
+      }
     }
   }
 

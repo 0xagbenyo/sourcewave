@@ -668,16 +668,21 @@ export const useSalesInvoice = (invoiceName: string) => {
     loading: true,
     error: null,
   });
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    const fetchInvoice = async () => {
+  const load = useCallback(
+    async (mode: 'initial' | 'refresh') => {
       if (!invoiceName) {
         setState({ data: null, loading: false, error: null });
         return;
       }
 
       try {
-        setState((prev) => ({ ...prev, loading: true, error: null }));
+        if (mode === 'initial') {
+          setState((prev) => ({ ...prev, loading: true, error: null }));
+        } else {
+          setRefreshing(true);
+        }
         const client = getERPNextClient();
         const erpInvoice = await client.getSalesInvoice(invoiceName);
         if (erpInvoice) {
@@ -692,13 +697,22 @@ export const useSalesInvoice = (invoiceName: string) => {
           loading: false,
           error: error instanceof Error ? error : new Error('Unknown error'),
         });
+      } finally {
+        if (mode === 'refresh') setRefreshing(false);
       }
-    };
+    },
+    [invoiceName]
+  );
 
-    fetchInvoice();
-  }, [invoiceName]);
+  useEffect(() => {
+    void load('initial');
+  }, [load]);
 
-  return state;
+  const refetch = useCallback(async () => {
+    await load('refresh');
+  }, [load]);
+
+  return { ...state, refreshing, refetch };
 };
 
 /**

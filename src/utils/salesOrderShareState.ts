@@ -29,11 +29,10 @@ export async function getSalesOrderShareUiState(
   const docstatus = Number(raw?.docstatus ?? 0);
   const quotation = String(raw?.[salesOrderQuotationLinkField()] || '').trim();
 
-  // Match assertSalesOrderShareable: draft orders stay shareable until submitted or quoted.
-  // Chat shares alone do not lock the order — only ERP submission / quotation linkage does.
+  // Draft and submitted orders can be shared in chat; cancelled orders cannot.
   const sharedWithSupplier = docstatus !== 0 || !!quotation;
-  const canShare = docstatus === 0 && !quotation;
-  const canEdit = canShare && !options?.viewerIsSupplier;
+  const canShare = docstatus !== 2 && !options?.viewerIsSupplier;
+  const canEdit = docstatus === 0 && !quotation && !options?.viewerIsSupplier;
 
   return { canShare, sharedWithSupplier, canEdit };
 }

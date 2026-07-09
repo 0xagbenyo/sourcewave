@@ -141,6 +141,7 @@ import { consumePendingSuppliersChatOpen } from '../utils/ravenPendingSuppliersC
 import { resolveWorkspaceIdForSuppliersChat } from '../utils/openRavenChatAfterShare';
 import { resetToAuthScreen } from '../navigation/rootNavigation';
 import { getMainTabBarStyle } from '../navigation/mainTabBarStyle';
+import { safeGoBack } from '../navigation/safeGoBack';
 import { RavenGlobalSearchModal } from '../components/RavenGlobalSearchModal';
 import { ChatImageGalleryModal } from '../components/ChatImageGalleryModal';
 import { RavenMessageReactionsRow } from '../components/RavenMessageReactionsRow';
@@ -962,12 +963,19 @@ export const RavenUIMessagesScreen: React.FC = () => {
       suppliersTabWasBlurredRef.current = false;
       return () => {
         suppliersTabWasBlurredRef.current = true;
-        if (!skipSuppliersFocusResetRef.current) {
-          clearSuppliersShareRouteParams();
-        }
       };
-    }, [isSuppliersBuyerTab, resetSuppliersTabToRoot, route.params, clearSuppliersShareRouteParams])
+    }, [isSuppliersBuyerTab, resetSuppliersTabToRoot])
   );
+
+  useEffect(() => {
+    if (!isSuppliersBuyerTab) return;
+    const unsub = navigation.addListener('blur', () => {
+      if (!skipSuppliersFocusResetRef.current) {
+        clearSuppliersShareRouteParams();
+      }
+    });
+    return unsub;
+  }, [isSuppliersBuyerTab, navigation, clearSuppliersShareRouteParams]);
 
   /** Buyer Suppliers tab only — supplier portal Chat has no “suggested suppliers” block. */
   const showSuggestedSuppliersInMenu = route.name === 'Suppliers';
@@ -1535,6 +1543,22 @@ export const RavenUIMessagesScreen: React.FC = () => {
     setDraft((d) => d + emoji);
     setComposerEmojiOpen(false);
   }, []);
+
+  const dismissTransientChatUi = useCallback(() => {
+    setHubInfoModal(null);
+    setSearchOpen(false);
+    setDrawerOpen(false);
+    setImageGalleryOpen(false);
+    setComposerEmojiOpen(false);
+    closeMessageActions();
+    setForwardMessage(null);
+  }, [closeMessageActions, setForwardMessage]);
+
+  useFocusEffect(
+    useCallback(() => {
+      return () => dismissTransientChatUi();
+    }, [dismissTransientChatUi])
+  );
 
   const openMessageActionsForItem = useCallback(
     (item: RavenMessageRow, sqLink?: string | null) => {
@@ -2527,9 +2551,10 @@ export const RavenUIMessagesScreen: React.FC = () => {
   /** Header chevron + Android hardware back: also pops the stack when at hierarchy root. */
   const performRavenMessagesBackAction = useCallback((): boolean => {
     if (consumeRavenMessagesInternalBack()) return true;
-    (navigation as { goBack: () => void }).goBack();
+    dismissTransientChatUi();
+    safeGoBack(navigation as { canGoBack?: () => boolean; goBack: () => void });
     return true;
-  }, [consumeRavenMessagesInternalBack, navigation]);
+  }, [consumeRavenMessagesInternalBack, dismissTransientChatUi, navigation]);
 
   const onPreventRemoveSwipe = useCallback(() => {
     consumeRavenMessagesInternalBack();

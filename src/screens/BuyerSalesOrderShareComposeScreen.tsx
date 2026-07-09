@@ -118,7 +118,7 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
           grand_total: r?.grand_total != null ? Number(r.grand_total) : undefined,
           transaction_date: r?.transaction_date != null ? String(r.transaction_date) : undefined,
         }))
-        .filter((r) => r.name.length > 0 && Number(r.docstatus) !== 1 && Number(r.docstatus) !== 2);
+        .filter((r) => r.name.length > 0 && Number(r.docstatus) !== 2);
       setOrders(list);
     } catch (e: unknown) {
       setOrders([]);

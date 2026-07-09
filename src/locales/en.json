@@ -593,6 +593,8 @@
     "supplier": "Supplier",
     "quoteBudget": "Quote budget",
     "submitted": "Submitted {{date}}",
+    "processingInvoice": "Processing...",
+    "viewInvoiceAndMakePayment": "View invoice to make payment / delivery",
     "edit": "Edit",
     "reviseResend": "Revise & resend",
     "reviseResendA11y": "Revise and send a new quotation"
@@ -620,14 +622,16 @@
     "posted": "Posted {{date}}",
     "shareInChat": "Share invoice in chat",
     "statusDraft": "Draft",
-    "statusSubmitted": "Submitted"
+    "statusSubmitted": "Submitted",
+    "totalWeight": "Total weight",
+    "totalWeightValue": "{{weightKg}} KG (≈ {{weightCbm}} CBM)"
   },
   "invoiceDelivery": {
     "shippingTitle": "Choose shipping",
     "shippingSubtitle": "Select how you want this order shipped before we create your delivery note.",
     "createDeliveryNote": "Save delivery note",
     "arrangeDelivery": "Arrange delivery",
-    "arrangeDeliverySub": "Pick Air or Freight cargo and save a draft delivery note",
+    "arrangeDeliverySub": "Pick Air Cargo (KG) or Freight Cargo (CBM) and save a draft delivery note",
     "linkedDeliveryNote": "Delivery note {{name}}",
     "linkedDeliveryNoteSub": "Your shipment has been scheduled",
     "linkedDeliveryNoteDraftSub": "",
@@ -635,7 +639,8 @@
     "successBody": "Draft delivery note {{name}} was saved with {{shipping}}.",
     "failedTitle": "Delivery",
     "failedBody": "Could not create the delivery note.",
-    "weightDetail": "{{weight}} kg total · {{perUnit}} kg/unit"
+    "weightDetail": "{{weight}} {{unit}} total · {{perUnit}} {{unit}}/unit",
+    "weightDetailWithCbm": "{{weight}} KG total · {{perUnit}} KG/unit (≈ {{weightCbm}} CBM · {{perUnitCbm}} CBM/unit)"
   },
   "deliveryNoteDetails": {
     "screenTitle": "Delivery note",
@@ -646,6 +651,9 @@
     "invoiceFeeShort": "Invoice",
     "downloadPdf": "Download PDF",
     "downloadHint": "Only the delivery fee is collected here. Tap Download PDF at the top to view the full delivery note, invoice lines, and all amounts.",
+    "shareWithLogistics": "Share with logistics",
+    "sendToLogisticsCta": "Send to Logistics",
+    "sendToLogisticsHint": "Share this delivery note with a logistics company in chat.",
     "deliveryAmount": "Delivery amount",
     "posted": "Posted",
     "customer": "Customer",
@@ -670,8 +678,13 @@
     "tabItems": "Items",
     "nextViewItems": "Next — view items",
     "invoiceTotalWeight": "Invoice total weight",
-    "invoiceTotalWeightValue": "{{weight}} kg",
+    "invoiceTotalWeightValue": "{{weight}} {{unit}}",
     "invoiceTotalWeightSub": "Total weight from the linked sales invoice line items.",
+    "totalWeight": "Total weight",
+    "ratePerUnit": "Rate per {{unit}}",
+    "ratePerUnitValue": "{{amount}} / {{unit}}",
+    "estimatedDeliveryFee": "Estimated delivery fee",
+    "estimatedDeliveryHint": "Save to apply this shipping option and recalculate totals in ERPNext.",
     "tapToChangeShippingOption": "Tap to change shipping option",
     "tapToChangeShippingRule": "Tap to change shipping rule",
     "supplierEditHint": "Draft delivery note — edit shipping and delivery details below. Line items stay linked to the invoice.",

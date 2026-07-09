@@ -1,7 +1,5 @@
 /** Shown in the supplier app — contact & transport fields stay on ERP, not in this UI. */
 export const SUPPLIER_VISIBLE_DN_HEADER_KEYS = [
-  'posting_date',
-  'shipping_address_name',
   'instructions',
 ] as const;
 

@@ -2,7 +2,12 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { getERPNextClient } from '../../services/erpnext';
 import { navigateToDeliveryNoteDetail } from '../../utils/erpDocumentNavigation';
-import { readErpLineWeightFromRow, formatErpLineWeight } from '../../utils/erpLineWeight';
+import {
+  erpDocTotalWeightDetailWithCbm,
+  erpLineMeasureDetailWithCbm,
+  readErpLineWeightFromRow,
+  sumErpDocItemsTotalWeight,
+} from '../../utils/erpLineWeight';
 import { useUserSession } from '../../context/UserContext';
 import { useSupplierDocumentId } from '../../hooks/useSupplierDocumentId';
 import { isSupplierPortalUser } from '../../utils/isSupplierPortalUser';
@@ -19,6 +24,7 @@ import {
   ErpDocSheet,
   ErpDocHero,
   ErpDocSection,
+  ErpDocMetaRow,
   ErpDocNotice,
   ErpDocLineItem,
   ErpDocItemsList,
@@ -178,6 +184,9 @@ export const SupplierSalesInvoiceDetailScreen: React.FC = () => {
 
   const canShare = doc != null && Number(doc.docstatus) !== 2;
 
+  const totalWeightKg = useMemo(() => sumErpDocItemsTotalWeight(doc), [doc]);
+  const totalWeightDetail = erpDocTotalWeightDetailWithCbm(t, totalWeightKg);
+
   const canRecordPayment =
     isSupplierPortal &&
     !invoiceOwnedByOther &&
@@ -259,6 +268,11 @@ export const SupplierSalesInvoiceDetailScreen: React.FC = () => {
                   }
                 />
               ) : deliveryNotesLoading ? null : null}
+              {totalWeightDetail ? (
+                <ErpDocSection title={t('invoiceDetails.totalWeight')}>
+                  <ErpDocMetaRow label={t('invoiceDetails.totalWeight')} value={totalWeightDetail} />
+                </ErpDocSection>
+              ) : null}
               <ErpDocSection title={t('common.itemsCount', { count: items.length })}>
               {items.length === 0 ? (
                 <ErpDocEmptyState title={t('common.noLineItems')} />
@@ -267,13 +281,7 @@ export const SupplierSalesInvoiceDetailScreen: React.FC = () => {
                   {items.map((line, idx) => {
                     const code = String(line.item_code || '').trim();
                     const weights = readErpLineWeightFromRow(line);
-                    const weightDetail =
-                      weights.total_weight != null || weights.weight_per_unit != null
-                        ? t('invoiceDelivery.weightDetail', {
-                            weight: formatErpLineWeight(weights.total_weight ?? 0),
-                            perUnit: formatErpLineWeight(weights.weight_per_unit ?? 0),
-                          })
-                        : undefined;
+                    const weightDetail = erpLineMeasureDetailWithCbm(t, weights);
                     return (
                     <ErpDocLineItem
                       key={String(line.name || idx)}

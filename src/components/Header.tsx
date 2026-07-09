@@ -11,6 +11,7 @@ import {
   Dimensions,
   LayoutAnimation,
   UIManager,
+  BackHandler,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -21,8 +22,8 @@ import { useUserSession } from '../context/UserContext';
 import { useSubscription } from '../context/SubscriptionContext';
 import { useRavenUnread } from '../context/RavenUnreadContext';
 import { useTranslation } from 'react-i18next';
-import { requestSuppliersTabReset } from '../utils/suppliersTabReset';
 import { appAlert as Alert } from '../services/appAlert';
+import { safeGoBack } from '../navigation/safeGoBack';
 
 const BAR_ROW_HEIGHT = 44;
 const DEFAULT_EXPANDED_SECTIONS = ['group-browse'];
@@ -113,6 +114,21 @@ export const Header: React.FC<HeaderProps> = ({
   const closeMenu = useCallback(() => {
     setMenuOpen(false);
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      return () => setMenuOpen(false);
+    }, [])
+  );
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      closeMenu();
+      return true;
+    });
+    return () => sub.remove();
+  }, [menuOpen, closeMenu]);
 
   const closeMenuThen = useCallback(
     (fn: () => void) => {
@@ -216,8 +232,7 @@ export const Header: React.FC<HeaderProps> = ({
             icon: 'storefront-outline',
             onPress: () => {
               premiumSuppliersAction(() => {
-                requestSuppliersTabReset();
-                nav.navigate('Main', { screen: 'Suppliers' });
+                nav.navigate('Suppliers');
               });
             },
           },
@@ -302,12 +317,14 @@ export const Header: React.FC<HeaderProps> = ({
   const handleBackPress = () => {
     if (onBackPress) {
       onBackPress();
-    } else {
-      if (nav.canGoBack?.()) {
-        nav.goBack();
-      } else {
-        nav.navigate('Main', { screen: 'Home' });
-      }
+      return;
+    }
+    if (menuOpen) {
+      closeMenu();
+      return;
+    }
+    if (!safeGoBack(nav)) {
+      nav.navigate('Main', { screen: 'Home' });
     }
   };
 

@@ -13,7 +13,7 @@ type Props = {
 export const QuotationBuyerActionBar: React.FC<Props> = ({ busy, compact, onAccept, onReject }) => (
   <View style={[styles.row, compact && styles.rowCompact]}>
     <TouchableOpacity
-      style={[styles.btn, compact && styles.btnCompact, styles.rejectBtn]}
+      style={[styles.btn, compact && styles.btnCompact, styles.rejectBtn, compact && styles.rejectBtnCompact]}
       onPress={onReject}
       disabled={busy}
       activeOpacity={0.82}
@@ -22,7 +22,7 @@ export const QuotationBuyerActionBar: React.FC<Props> = ({ busy, compact, onAcce
       <Text style={[styles.rejectText, compact && styles.btnTextCompact]}>Reject</Text>
     </TouchableOpacity>
     <TouchableOpacity
-      style={[styles.btn, compact && styles.btnCompact, styles.acceptBtn]}
+      style={[styles.btn, compact && styles.btnCompact, styles.acceptBtn, compact && styles.acceptBtnCompact]}
       onPress={onAccept}
       disabled={busy}
       activeOpacity={0.82}
@@ -48,6 +48,8 @@ const styles = StyleSheet.create({
   },
   rowCompact: {
     marginBottom: 0,
+    width: 'auto',
+    alignSelf: 'flex-start',
   },
   btn: {
     flex: 1,
@@ -59,19 +61,25 @@ const styles = StyleSheet.create({
     marginHorizontal: 4,
   },
   btnCompact: {
-    flex: 1,
-    minHeight: 36,
-    paddingVertical: 8,
+    flex: 0,
+    minHeight: 28,
+    paddingVertical: 5,
     paddingHorizontal: 10,
-    marginHorizontal: 3,
+    marginHorizontal: 2,
+    borderRadius: 999,
   },
   rejectBtn: {
     backgroundColor: ERP_DOC_FLAT.surface,
     borderWidth: hairline,
     borderColor: ERP_DOC_FLAT.border,
   },
-  rejectText: { fontSize: 15, fontWeight: '600', color: ERP_DOC_FLAT.ink },
+  rejectBtnCompact: {
+    backgroundColor: '#D32F2F',
+    borderColor: '#B71C1C',
+  },
+  rejectText: { fontSize: 15, fontWeight: '600', color: Colors.WHITE },
   acceptBtn: { backgroundColor: ERP_DOC_FLAT.accent },
+  acceptBtnCompact: { backgroundColor: Colors.SUCCESS },
   acceptText: { fontSize: 15, fontWeight: '600', color: Colors.WHITE },
-  btnTextCompact: { fontSize: 14, fontWeight: '600' },
+  btnTextCompact: { fontSize: 12, fontWeight: '700' },
 });
