@@ -252,6 +252,7 @@ export type SupplierStackParamList = {
   SupplierTabs: undefined;
   SupplierOrdersInvoices: undefined;
   SupplierSalesInvoiceDetail: { name: string };
+  SupplierDeliveryNoteList: undefined;
   SupplierDeliveryNoteDetail: { name: string };
   SupplierPaymentEntryDetail: { name: string };
   SupplierQuotationList: { initialTab?: 'list' | 'new' } | undefined;

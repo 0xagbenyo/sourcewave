@@ -10,6 +10,11 @@ export type ShippingOption = {
   /** Unit shown on line items and totals for this shipping mode. */
   measureUnit: ShippingMeasureUnit;
   measureLabel: string;
+  /**
+   * When true, goods (Sales Invoice) are collected on arrival —
+   * buyer may arrange delivery without paying the invoice first.
+   */
+  goodsPaymentOnArrival?: boolean;
 };
 
 /** Shipping choices shown before creating a Delivery Note from a paid invoice. */
@@ -17,21 +22,34 @@ export const SHIPPING_OPTIONS: ShippingOption[] = [
   {
     id: 'air_cargo',
     label: 'Air Cargo',
-    subtitle: 'Max 21 days delivery · KG',
+    subtitle: 'Max 21 days delivery · KG · Pay goods upfront',
     /** Must match ERPNext Select options on Delivery Note `custom_shipping_option`. */
     erpValue: 'Air Cargo',
     measureUnit: 'kg',
     measureLabel: 'KG',
+    goodsPaymentOnArrival: false,
   },
   {
     id: 'freight_cargo',
     label: 'Freight Cargo',
-    subtitle: 'Max 7 weeks delivery · CBM',
+    subtitle: 'Max 7 weeks delivery · CBM · Goods: payment upon arrival',
     erpValue: 'Freight Cargo',
     measureUnit: 'cbm',
     measureLabel: 'CBM',
+    goodsPaymentOnArrival: true,
   },
 ];
+
+/** True when this shipping option defers goods payment until arrival. */
+export function shippingOptionGoodsPaymentOnArrival(
+  value: string | ShippingOptionId | undefined | null
+): boolean {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  const byId = shippingOptionById(raw as ShippingOptionId);
+  if (byId) return !!byId.goodsPaymentOnArrival;
+  return !!shippingOptionByErpValue(raw)?.goodsPaymentOnArrival;
+}
 
 export function shippingOptionById(id: ShippingOptionId): ShippingOption | undefined {
   return SHIPPING_OPTIONS.find((o) => o.id === id);
@@ -128,8 +146,11 @@ export function syncedShippingFromOption(
   rules: Array<{ name: string; label?: string }>,
   isSupplier: boolean
 ): { shipping_rule: string; shipping_option_label: string; is_supplier: boolean } {
+  const option = shippingOptionByErpValue(String(optionErpValue || '').trim());
+  /** Freight Cargo: suppliers enter freight in taxes — do not auto-assign a shipping rule. */
+  const skipRule = !!option?.goodsPaymentOnArrival || option?.id === 'freight_cargo';
   return {
-    shipping_rule: shippingRuleNameForOptionErpValue(optionErpValue, rules),
+    shipping_rule: skipRule ? '' : shippingRuleNameForOptionErpValue(optionErpValue, rules),
     shipping_option_label: optionErpValue,
     is_supplier: isSupplier,
   };

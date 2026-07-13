@@ -1,3 +1,5 @@
+import { shippingOptionGoodsPaymentOnArrival } from '../constants/shippingOptions';
+
 export type DeliveryNoteAmountBreakdown = {
   invoiceAmount: number;
   shippingAmount: number;
@@ -78,6 +80,204 @@ export function deliveryNoteIsSupplierErpValue(
     if (s === 'yes' || s === 'no') return yes ? 'Yes' : 'No';
   }
   return yes ? 1 : 0;
+}
+
+const DEFAULT_ENTER_FREIGHT_AMOUNT_FIELD = 'custom_enter_freight_amount';
+
+/** ERPNext Check on Delivery Note — supplier enters freight via Sales Taxes and Charges. */
+export function deliveryNoteEnterFreightAmountFieldName(): string {
+  return (
+    String(
+      process.env.EXPO_PUBLIC_ERPNEXT_DN_ENTER_FREIGHT_AMOUNT_FIELD || DEFAULT_ENTER_FREIGHT_AMOUNT_FIELD
+    ).trim() || DEFAULT_ENTER_FREIGHT_AMOUNT_FIELD
+  );
+}
+
+export function readDeliveryNoteEnterFreightAmount(
+  doc: Record<string, unknown> | null | undefined,
+  field = deliveryNoteEnterFreightAmountFieldName()
+): boolean {
+  if (!doc) return false;
+  const candidates = [field, 'custom_enter_freight_amount', 'enter_freight_amount'];
+  for (const key of candidates) {
+    if (!key || !(key in doc)) continue;
+    const v = doc[key];
+    if (v === 1 || v === '1' || v === true) return true;
+    if (v === 0 || v === '0' || v === false) return false;
+    const s = String(v ?? '').trim().toLowerCase();
+    if (s === 'yes' || s === 'y') return true;
+    if (s === 'no' || s === 'n') return false;
+  }
+  return false;
+}
+
+/** Always persist as ERPNext Check (0/1). */
+export function deliveryNoteEnterFreightAmountErpValue(yes: boolean): number {
+  return yes ? 1 : 0;
+}
+
+/** Default Account Head for Actual freight tax rows. */
+export function deliveryNoteFreightAccountHeadDefault(): string {
+  return (
+    String(process.env.EXPO_PUBLIC_ERPNEXT_DN_FREIGHT_ACCOUNT_HEAD || '').trim() ||
+    'Bank Accounts - SW'
+  );
+}
+
+/** UI + draft charge basis. ERPNext Sales Taxes always stores `Actual` for freight. */
+export const FREIGHT_TAX_CHARGE_ACTUAL = 'Actual';
+export const FREIGHT_TAX_CHARGE_ON_WEIGHT = 'On Weight';
+
+export type DeliveryNoteTaxRowDraft = {
+  key: string;
+  idx: number;
+  /** `Actual` (fixed amount) or `On Weight` (rate × DN weight). */
+  charge_type: string;
+  account_head: string;
+  description: string;
+  rate: number;
+  tax_amount: number;
+  total: number;
+  /** Preserve ERP row identity when updating. */
+  name?: string;
+};
+
+export function isFreightTaxChargeOnWeight(chargeType: string | null | undefined): boolean {
+  const s = String(chargeType || '')
+    .trim()
+    .toLowerCase();
+  return s === 'on weight' || s === 'weight' || s === 'net weight';
+}
+
+export function freightTaxAmountFromRateAndWeight(rate: number, totalWeight: number): number {
+  const r = Number(rate);
+  const w = Number(totalWeight);
+  if (!Number.isFinite(r) || r <= 0) return 0;
+  if (!Number.isFinite(w) || w <= 0) return 0;
+  return Math.round(r * w * 100) / 100;
+}
+
+export function readDeliveryNoteTaxRows(
+  doc: Record<string, unknown> | null | undefined
+): DeliveryNoteTaxRowDraft[] {
+  const rows = Array.isArray(doc?.taxes) ? (doc!.taxes as Record<string, unknown>[]) : [];
+  return rows.map((row, idx) => {
+    const rate = Number(row.rate);
+    const taxAmount = Number(row.tax_amount);
+    const total = Number(row.total);
+    const safeRate = Number.isFinite(rate) ? rate : 0;
+    const desc = String(row.description || '').trim();
+    const rawType = String(row.charge_type || FREIGHT_TAX_CHARGE_ACTUAL).trim() || FREIGHT_TAX_CHARGE_ACTUAL;
+    // Weight basis is stored as Actual + positive rate (never infer from description alone —
+    // that hid saved Actual amounts when description said "Freight (Weight)").
+    const onWeight = isFreightTaxChargeOnWeight(rawType) || safeRate > 0;
+    const safeAmount = Number.isFinite(taxAmount) ? taxAmount : 0;
+    return {
+      key: String(row.name || `tax-${idx}`),
+      idx: idx + 1,
+      charge_type: onWeight ? FREIGHT_TAX_CHARGE_ON_WEIGHT : FREIGHT_TAX_CHARGE_ACTUAL,
+      account_head:
+        String(row.account_head || '').trim() || deliveryNoteFreightAccountHeadDefault(),
+      description: desc,
+      rate: safeRate,
+      // Prefer saved amount; for weight rows keep rate and amount both available.
+      tax_amount: onWeight && safeAmount <= 0.009 && safeRate > 0 ? 0 : safeAmount,
+      total: Number.isFinite(total) ? total : safeAmount,
+      name: String(row.name || '').trim() || undefined,
+    };
+  });
+}
+
+/** Build ERPNext `taxes` child rows from supplier drafts (Sales Taxes and Charges). */
+export function deliveryNoteTaxesPayloadFromDrafts(
+  drafts: DeliveryNoteTaxRowDraft[],
+  totalWeight?: number
+): Record<string, unknown>[] {
+  const weight = Number(totalWeight);
+  return drafts
+    .map((row) => {
+      const account =
+        String(row.account_head || '').trim() || deliveryNoteFreightAccountHeadDefault();
+      if (!account) return null;
+      const onWeight = isFreightTaxChargeOnWeight(row.charge_type);
+      const rate = Number(row.rate);
+      const safeRate = Number.isFinite(rate) ? rate : 0;
+      let amount = Number(row.tax_amount);
+      if (onWeight) {
+        amount = freightTaxAmountFromRateAndWeight(safeRate, weight);
+      }
+      const safeAmount = Number.isFinite(amount) ? amount : 0;
+      const payload: Record<string, unknown> = {
+        doctype: 'Sales Taxes and Charges',
+        idx: 0,
+        // ERPNext only accepts standard charge types; weight basis is applied client-side.
+        charge_type: FREIGHT_TAX_CHARGE_ACTUAL,
+        account_head: account,
+        description:
+          String(row.description || '').trim() ||
+          (onWeight ? 'Freight (Weight)' : 'Freight'),
+        rate: onWeight ? safeRate : 0,
+        tax_amount: safeAmount,
+      };
+      if (row.name) payload.name = row.name;
+      return payload;
+    })
+    .filter((row): row is Record<string, unknown> => row != null)
+    .map((row, idx) => ({ ...row, idx: idx + 1 }));
+}
+
+export function createBlankFreightTaxRow(accountHead?: string): DeliveryNoteTaxRowDraft {
+  const account = String(accountHead || deliveryNoteFreightAccountHeadDefault()).trim();
+  return {
+    key: `new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    idx: 0,
+    charge_type: FREIGHT_TAX_CHARGE_ACTUAL,
+    account_head: account,
+    description: 'Freight',
+    rate: 0,
+    tax_amount: 0,
+    total: 0,
+  };
+}
+
+/** True when at least one Sales Taxes row has a positive freight amount (account is auto-filled). */
+export function deliveryNoteFreightTaxesAreFilled(
+  rows: DeliveryNoteTaxRowDraft[] | null | undefined,
+  totalWeight?: number
+): boolean {
+  if (!Array.isArray(rows) || rows.length === 0) return false;
+  const weight = Number(totalWeight);
+  return rows.some((row) => {
+    const account =
+      String(row.account_head || '').trim() || deliveryNoteFreightAccountHeadDefault();
+    if (!account) return false;
+    if (isFreightTaxChargeOnWeight(row.charge_type)) {
+      const amount = freightTaxAmountFromRateAndWeight(Number(row.rate), weight);
+      return amount > 0.009;
+    }
+    const amount = Number(row.tax_amount);
+    return Number.isFinite(amount) && amount > 0.009;
+  });
+}
+
+/**
+ * Freight Cargo (or enter-freight mode) delivery payment is only allowed after the
+ * supplier entered freight in Sales Taxes and Charges.
+ */
+export function deliveryNoteFreightPriceReadyForPayment(
+  doc: Record<string, unknown> | null | undefined,
+  shippingOptionErpValue?: string | null
+): boolean {
+  if (!doc) return false;
+  const freightMode =
+    shippingOptionGoodsPaymentOnArrival(shippingOptionErpValue) ||
+    readDeliveryNoteEnterFreightAmount(doc);
+  if (!freightMode) return true;
+  if (!readDeliveryNoteEnterFreightAmount(doc)) return false;
+  return deliveryNoteFreightTaxesAreFilled(
+    readDeliveryNoteTaxRows(doc),
+    readDeliveryNoteTotalNetWeight(doc)
+  );
 }
 
 export function computeDeliveryNoteAmountBreakdown(

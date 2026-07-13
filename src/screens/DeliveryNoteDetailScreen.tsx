@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Text, StyleSheet, View, TouchableOpacity, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -23,12 +23,18 @@ import {
 } from '../utils/deliveryNoteSupplierFields';
 import {
   computeDeliveryNoteAmountBreakdown,
+  createBlankFreightTaxRow,
   deliveryNoteAllowsDeliveryPayment,
+  deliveryNoteFreightPriceReadyForPayment,
+  deliveryNoteFreightTaxesAreFilled,
+  readDeliveryNoteEnterFreightAmount,
+  readDeliveryNoteTaxRows,
   readDeliveryNoteTotalNetWeight,
   shippingRatePerMeasureUnit,
   readDeliveryNoteIsSupplier,
   readDeliveryNoteLogistics,
   readDeliveryNoteSupplier,
+  type DeliveryNoteTaxRowDraft,
 } from '../utils/deliveryNoteAmounts';
 import {
   deliveryNoteLogisticsUiLabel,
@@ -41,6 +47,7 @@ import { navigateToSalesInvoiceDetail } from '../utils/erpDocumentNavigation';
 import {
   SHIPPING_OPTIONS,
   shippingOptionByErpValue,
+  shippingOptionGoodsPaymentOnArrival,
   syncedShippingFromOption,
   syncedShippingFromRule,
   type ShippingOptionId,
@@ -50,6 +57,7 @@ import { InvoicePaystackPaymentSheet } from '../components/InvoicePaystackPaymen
 import { ErpDeliveryNotePaymentsPanel } from '../components/ErpDeliveryNotePaymentsPanel';
 import { SupplierQuotationPaymentModal } from '../components/SupplierQuotationPaymentModal';
 import { DeliveryNoteSupplierHeaderForm } from '../components/DeliveryNoteSupplierHeaderForm';
+import { DeliveryNoteFreightTaxesEditor } from '../components/DeliveryNoteFreightTaxesEditor';
 import {
   DeliveryNoteShippingRulePicker,
   type ShippingRuleOption,
@@ -83,7 +91,7 @@ import { ERP_DOC_FLAT } from '../constants/erpDocFlatUi';
 import { Colors } from '../constants/colors';
 
 type RouteParams = { deliveryNoteId?: string; name?: string };
-type DnTab = 'details' | 'items' | 'payments';
+type DnTab = 'details' | 'items' | 'charges' | 'payments';
 
 type PendingShipping = {
   shipping_option_label: string;
@@ -142,6 +150,12 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
   const [headerDraft, setHeaderDraft] = useState<DeliveryNoteSupplierHeaderDraft | null>(null);
   const [headerBaseline, setHeaderBaseline] = useState<DeliveryNoteSupplierHeaderDraft | null>(null);
   const [pendingShipping, setPendingShipping] = useState<PendingShipping | null>(null);
+  const [enterFreightAmount, setEnterFreightAmount] = useState(false);
+  const [enterFreightBaseline, setEnterFreightBaseline] = useState(false);
+  const [taxDrafts, setTaxDrafts] = useState<DeliveryNoteTaxRowDraft[]>([]);
+  const [taxBaseline, setTaxBaseline] = useState<DeliveryNoteTaxRowDraft[]>([]);
+  /** Prevents re-sync from wiping local add/edit/delete until the DN is reloaded. */
+  const taxSyncKeyRef = useRef('');
   const [tab, setTab] = useState<DnTab>('details');
   const [deliveryOutstanding, setDeliveryOutstanding] = useState<number | null>(null);
   const [paySheetOpen, setPaySheetOpen] = useState(false);
@@ -270,10 +284,14 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
       ? pendingShipping.is_supplier
       : readDeliveryNoteIsSupplier(doc);
 
-  const amountBreakdown = useMemo(
-    () => (doc ? computeDeliveryNoteAmountBreakdown(doc, invoiceDoc?.grand_total) : null),
-    [doc, invoiceDoc?.grand_total]
-  );
+  const amountBreakdown = useMemo(() => {
+    if (!doc) return null;
+    const invoiceTotal = Number(invoiceDoc?.grand_total);
+    return computeDeliveryNoteAmountBreakdown(
+      doc,
+      Number.isFinite(invoiceTotal) ? invoiceTotal : null
+    );
+  }, [doc, invoiceDoc?.grand_total]);
 
   const docShippingOption = doc ? getERPNextClient().readDeliveryNoteShippingOption(doc) : '';
   const docShippingRule = doc ? String(doc.shipping_rule || '').trim() : '';
@@ -286,11 +304,41 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
   const feePerUnit = shippingRatePerMeasureUnit(displayShippingFee, erpTotalNetWeight);
 
   const shippingRuleDisplay =
-    canSupplierEdit && pendingShipping ? pendingShipping.shipping_rule : docShippingRule;
+    (canSupplierEdit || canBuyerEditShipping) && pendingShipping
+      ? pendingShipping.shipping_rule
+      : docShippingRule;
   const shippingOptionDisplay =
     (canSupplierEdit || canBuyerEditShipping) && pendingShipping
       ? pendingShipping.shipping_option_label
       : docShippingOption;
+  const isFreightOption = shippingOptionGoodsPaymentOnArrival(shippingOptionDisplay);
+  const docEnterFreight = readDeliveryNoteEnterFreightAmount(doc);
+  const docTaxRows = useMemo(() => readDeliveryNoteTaxRows(doc), [doc]);
+  const shippingRuleIsEmpty = !String(shippingRuleDisplay || '').trim();
+  const shippingRuleLabel = shippingRuleIsEmpty ? '—' : shippingRuleDisplay;
+  /** Rule picker for suppliers only (not forced empty by Freight / Enter amount). */
+  const showShippingRuleEditor =
+    canSupplierEdit && !isFreightOption && !enterFreightAmount;
+  const freightTaxesFilled = useMemo(() => {
+    if (canSupplierEdit && enterFreightAmount) {
+      return deliveryNoteFreightTaxesAreFilled(taxDrafts, erpTotalNetWeight);
+    }
+    return deliveryNoteFreightTaxesAreFilled(docTaxRows, erpTotalNetWeight);
+  }, [
+    canSupplierEdit,
+    enterFreightAmount,
+    taxDrafts,
+    docTaxRows,
+    erpTotalNetWeight,
+  ]);
+  /** Empty rule / Freight / Enter amount → taxes required before submit. */
+  const taxesRequiredToSubmit =
+    isFreightOption || enterFreightAmount || (canSupplierEdit && shippingRuleIsEmpty);
+  const canSubmitFreight = !taxesRequiredToSubmit || (enterFreightAmount && freightTaxesFilled);
+  const freightPriceReadyForPayment = useMemo(
+    () => deliveryNoteFreightPriceReadyForPayment(doc, shippingOptionDisplay || docShippingOption),
+    [doc, shippingOptionDisplay, docShippingOption]
+  );
 
   const shippingDirty = useMemo(() => {
     if (!doc || !pendingShipping) return false;
@@ -316,9 +364,17 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
   const deliveryPaid =
     showDeliveryPayments && deliveryOutstanding != null && deliveryOutstanding <= 0.009;
   const canPayDelivery =
-    !canSupplierView && showDeliveryPayments && deliveryOutstanding != null && deliveryOutstanding > 0.009;
+    !canSupplierView &&
+    showDeliveryPayments &&
+    deliveryOutstanding != null &&
+    deliveryOutstanding > 0.009 &&
+    freightPriceReadyForPayment;
   const canRecordDelivery =
-    canSupplierView && showDeliveryPayments && deliveryOutstanding != null && deliveryOutstanding > 0.009;
+    canSupplierView &&
+    showDeliveryPayments &&
+    deliveryOutstanding != null &&
+    deliveryOutstanding > 0.009 &&
+    freightPriceReadyForPayment;
 
   const customerScope = useMemo(() => {
     const fromDoc = String(doc?.customer || '').trim();
@@ -381,6 +437,11 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
       if (!canSupplierEdit) {
         setHeaderDraft(null);
         setHeaderBaseline(null);
+        setEnterFreightAmount(false);
+        setEnterFreightBaseline(false);
+        setTaxDrafts([]);
+        setTaxBaseline([]);
+        taxSyncKeyRef.current = '';
       }
       setPendingShipping(null);
       return;
@@ -389,6 +450,16 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
       const fromDoc = deliveryNoteSupplierHeaderFromDoc(doc);
       setHeaderDraft(fromDoc);
       setHeaderBaseline(fromDoc);
+      const syncKey = `${String(doc.name || '')}::${String(doc.modified || '')}`;
+      if (taxSyncKeyRef.current !== syncKey) {
+        taxSyncKeyRef.current = syncKey;
+        const enterFreight = readDeliveryNoteEnterFreightAmount(doc);
+        setEnterFreightAmount(enterFreight);
+        setEnterFreightBaseline(enterFreight);
+        const taxes = readDeliveryNoteTaxRows(doc);
+        setTaxDrafts(taxes);
+        setTaxBaseline(taxes);
+      }
     }
     setPendingShipping(pendingShippingFromDoc(doc));
   }, [dnId, doc?.name, doc?.modified, canEditDraftShipping, canSupplierEdit]);
@@ -403,7 +474,31 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
     return Object.keys(deliveryNoteSupplierHeaderPatch(headerDraft, headerBaseline)).length > 0;
   }, [headerDraft, headerBaseline]);
 
-  const isDirty = headerDirty || shippingDirty;
+  const freightDirty = useMemo(() => {
+    if (!canSupplierEdit) return false;
+    if (enterFreightAmount !== enterFreightBaseline) return true;
+    if (!enterFreightAmount) return false;
+    if (taxDrafts.length !== taxBaseline.length) return true;
+    return taxDrafts.some((row, idx) => {
+      const base = taxBaseline[idx];
+      if (!base) return true;
+      return (
+        row.account_head !== base.account_head ||
+        row.charge_type !== base.charge_type ||
+        Number(row.tax_amount) !== Number(base.tax_amount) ||
+        Number(row.rate) !== Number(base.rate) ||
+        row.description !== base.description
+      );
+    });
+  }, [
+    canSupplierEdit,
+    enterFreightAmount,
+    enterFreightBaseline,
+    taxDrafts,
+    taxBaseline,
+  ]);
+
+  const isDirty = headerDirty || shippingDirty || freightDirty;
   const actionBusy = saving || submitting;
 
   const heroFactPairs = useMemo((): ErpDocHeroFactPair[] => {
@@ -423,7 +518,7 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
       {
         left: {
           label: t('deliveryNoteDetails.shippingRule'),
-          value: docShippingRule || t('deliveryNoteDetails.notSet'),
+          value: shippingRuleLabel,
         },
         right:
           feePerUnit != null
@@ -455,7 +550,7 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
     customer,
     deliveryOutstanding,
     deliveryPaid,
-    docShippingRule,
+    shippingRuleLabel,
     erpTotalNetWeight,
     feePerUnit,
     canEditDraftShipping,
@@ -467,17 +562,21 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
   const screenTabs = useMemo(() => {
     const list: { id: DnTab; label: string }[] = [
       { id: 'details', label: t('deliveryNoteDetails.tabDetails') },
+      { id: 'charges', label: t('deliveryNoteDetails.tabCharges') },
     ];
     if (canSupplierView) {
       list.push({ id: 'items', label: `${t('deliveryNoteDetails.tabItems')} · ${items.length}` });
     }
-    if (showDeliveryPayments) {
+    const showPaymentsTab =
+      showDeliveryPayments ||
+      ((isFreightOption || docEnterFreight) && deliveryNoteAllowsDeliveryPayment(doc));
+    if (showPaymentsTab) {
       list.push({ id: 'payments', label: t('deliveryNoteDetails.tabPayments') });
     }
     return list;
-  }, [canSupplierView, items.length, showDeliveryPayments, t]);
+  }, [canSupplierView, items.length, showDeliveryPayments, isFreightOption, docEnterFreight, doc, t]);
 
-  const hasTabs = canSupplierView || showDeliveryPayments;
+  const hasTabs = true;
 
   const openRulePicker = () => {
     void loadShippingRules(company);
@@ -485,30 +584,60 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
   };
 
   const onPickShippingRule = (ruleName: string) => {
+    const rule = String(ruleName || '').trim();
     setPendingShipping((prev) => {
       const isSupplier = prev?.is_supplier ?? readDeliveryNoteIsSupplier(doc);
-      return syncedShippingFromRule(ruleName, isSupplier);
+      const currentOption =
+        prev?.shipping_option_label ||
+        (doc ? getERPNextClient().readDeliveryNoteShippingOption(doc) : '');
+      if (!rule) {
+        // Keep shipping option; leave rule empty for logistics to suggest.
+        return {
+          shipping_rule: '',
+          shipping_option_label: currentOption,
+          is_supplier: isSupplier,
+        };
+      }
+      return syncedShippingFromRule(rule, isSupplier);
     });
+    if (!rule && canSupplierEdit) {
+      // Empty rule → supplier must enter freight taxes before submit.
+      setEnterFreightAmount(true);
+      setTaxDrafts((rows) => {
+        if (rows.length) return rows;
+        const fromDoc = doc ? readDeliveryNoteTaxRows(doc) : [];
+        return fromDoc.length ? fromDoc : [createBlankFreightTaxRow()];
+      });
+    }
     setRulePickerOpen(false);
   };
 
   const onPickShippingOption = (optionId: ShippingOptionId) => {
     const option = SHIPPING_OPTIONS.find((o) => o.id === optionId);
     if (!option) return;
+    // Customers may only change the shipping option field — never rule / flags / taxes.
+    if (canBuyerEditShipping && !canSupplierEdit) {
+      setPendingShipping((prev) => ({
+        shipping_option_label: option.erpValue,
+        shipping_rule: String(prev?.shipping_rule || doc?.shipping_rule || '').trim(),
+        is_supplier: prev?.is_supplier ?? readDeliveryNoteIsSupplier(doc),
+      }));
+      setOptionSheetOpen(false);
+      return;
+    }
     if (canSupplierEdit) {
       setPendingShipping((prev) => {
         const isSupplier = prev?.is_supplier ?? readDeliveryNoteIsSupplier(doc);
-        return syncedShippingFromOption(option.erpValue, shippingRules, isSupplier);
-      });
-    } else {
-      setPendingShipping((prev) => {
-        const fallbackRule = String(prev?.shipping_rule || doc?.shipping_rule || '').trim();
-        const fallbackIsSupplier = prev?.is_supplier ?? readDeliveryNoteIsSupplier(doc);
-        return {
-          shipping_option_label: option.erpValue,
-          shipping_rule: fallbackRule,
-          is_supplier: fallbackIsSupplier,
-        };
+        const next = syncedShippingFromOption(option.erpValue, shippingRules, isSupplier);
+        if (option.goodsPaymentOnArrival) {
+          setEnterFreightAmount(true);
+          setTaxDrafts((rows) => {
+            if (rows.length) return rows;
+            const fromDoc = doc ? readDeliveryNoteTaxRows(doc) : [];
+            return fromDoc.length ? fromDoc : [createBlankFreightTaxRow()];
+          });
+        }
+        return next;
       });
     }
     setOptionSheetOpen(false);
@@ -520,30 +649,95 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
     );
   };
 
+  const onSetEnterFreightAmount = (yes: boolean) => {
+    setEnterFreightAmount(yes);
+    if (yes) {
+      setPendingShipping((prev) =>
+        prev
+          ? { ...prev, shipping_rule: '' }
+          : {
+              shipping_option_label: docShippingOption,
+              shipping_rule: '',
+              is_supplier: readDeliveryNoteIsSupplier(doc),
+            }
+      );
+      setTaxDrafts((rows) => {
+        if (rows.length) return rows;
+        const fromDoc = doc ? readDeliveryNoteTaxRows(doc) : [];
+        return fromDoc.length ? fromDoc : [createBlankFreightTaxRow()];
+      });
+    }
+  };
+
   const onSaveAll = async () => {
     if (!dnId || !doc || actionBusy || !isDirty) return;
     if (!canEditDraftShipping) return;
     const shippingPatch = pendingShipping ? shippingPatchFromPending(pendingShipping, doc) : {};
+    if (canSupplierEdit && (isFreightOption || enterFreightAmount)) {
+      if (String(doc.shipping_rule || '').trim() || shippingPatch.shipping_rule) {
+        shippingPatch.shipping_rule = '';
+      }
+    }
+    const taxesChanged =
+      enterFreightAmount &&
+      (taxDrafts.length !== taxBaseline.length ||
+        taxDrafts.some((row, idx) => {
+          const base = taxBaseline[idx];
+          if (!base) return true;
+          return (
+            row.account_head !== base.account_head ||
+            row.charge_type !== base.charge_type ||
+            Number(row.tax_amount) !== Number(base.tax_amount) ||
+            Number(row.rate) !== Number(base.rate) ||
+            row.description !== base.description
+          );
+        }));
+    const enterFreightChanged = enterFreightAmount !== enterFreightBaseline;
     const patch = {
       ...(canSupplierEdit && headerDraft && headerBaseline
         ? deliveryNoteSupplierHeaderPatch(headerDraft, headerBaseline)
         : {}),
       ...(canSupplierEdit
-        ? shippingPatch
-        : canBuyerEditShipping && shippingPatch.shipping_option_label !== undefined
-          ? { shipping_option_label: shippingPatch.shipping_option_label }
+        ? {
+            ...shippingPatch,
+            // Persist Check field custom_enter_freight_amount whenever toggle or taxes change.
+            ...(enterFreightChanged || taxesChanged
+              ? { enter_freight_amount: enterFreightAmount }
+              : {}),
+            ...(taxesChanged ? { taxes: taxDrafts } : {}),
+          }
+        : canBuyerEditShipping
+          ? {
+              // Customer: persist only the shipping option field.
+              ...(shippingPatch.shipping_option_label !== undefined
+                ? { shipping_option_label: shippingPatch.shipping_option_label }
+                : {}),
+            }
           : {}),
     };
     if (Object.keys(patch).length === 0) return;
 
     setSaving(true);
     try {
-      const updated = await getERPNextClient().updateDeliveryNoteForSupplier(dnId, patch);
+      const updated = await getERPNextClient().updateDeliveryNoteForSupplier(
+        dnId,
+        patch,
+        canSupplierEdit && supplierDocId?.trim()
+          ? { logisticsSupplierDocName: supplierDocId.trim() }
+          : undefined
+      );
       setDoc(updated);
       if (canSupplierEdit) {
         const syncedHeader = deliveryNoteSupplierHeaderFromDoc(updated);
         setHeaderDraft(syncedHeader);
         setHeaderBaseline(syncedHeader);
+        const enterFreight = readDeliveryNoteEnterFreightAmount(updated);
+        setEnterFreightAmount(enterFreight);
+        setEnterFreightBaseline(enterFreight);
+        const taxes = readDeliveryNoteTaxRows(updated);
+        setTaxDrafts(taxes);
+        setTaxBaseline(taxes);
+        taxSyncKeyRef.current = `${String(updated.name || '')}::${String(updated.modified || '')}`;
       }
       setPendingShipping(pendingShippingFromDoc(updated));
       notifyDeliveryNoteEditedInChat(dnId, {
@@ -567,6 +761,22 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
     if (isDirty) {
       Alert.alert(t('deliveryNoteDetails.submitTitle'), t('deliveryNoteDetails.saveBeforeSubmit'));
       return;
+    }
+    if (isFreightOption || taxesRequiredToSubmit) {
+      if (!enterFreightAmount) {
+        Alert.alert(
+          t('deliveryNoteDetails.submitTitle'),
+          t('deliveryNoteDetails.freightEnterAmountRequired')
+        );
+        return;
+      }
+      if (!freightTaxesFilled) {
+        Alert.alert(
+          t('deliveryNoteDetails.submitTitle'),
+          t('deliveryNoteDetails.freightTaxesRequired')
+        );
+        return;
+      }
     }
     Alert.alert(t('deliveryNoteDetails.submitTitle'), t('deliveryNoteDetails.submitConfirm'), [
       { text: t('deliveryNoteDetails.cancel'), style: 'cancel' },
@@ -712,18 +922,23 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
 
           {canSupplierEdit ? (
             <>
-              <DnPressRow
+              <DnRow
                 label={t('deliveryNoteDetails.shippingOption')}
                 value={shippingOptionLabel}
-                onPress={() => setOptionSheetOpen(true)}
-                disabled={actionBusy}
               />
-              <DnPressRow
-                label={t('deliveryNoteDetails.shippingRule')}
-                value={shippingRuleDisplay || t('deliveryNoteDetails.notSet')}
-                onPress={openRulePicker}
-                disabled={actionBusy}
-              />
+              {showShippingRuleEditor ? (
+                <DnPressRow
+                  label={t('deliveryNoteDetails.shippingRule')}
+                  value={shippingRuleLabel}
+                  onPress={openRulePicker}
+                  disabled={actionBusy}
+                />
+              ) : (
+                <DnRow
+                  label={t('deliveryNoteDetails.shippingRule')}
+                  value={shippingRuleLabel}
+                />
+              )}
               {feePerUnit != null ? (
                 <DnRow
                   label={t('deliveryNoteDetails.ratePerUnit', {
@@ -747,16 +962,22 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
               </View>
             </>
           ) : canBuyerEditShipping ? (
-            <DnPressRow
-              label={t('deliveryNoteDetails.shippingOption')}
-              value={shippingOptionLabel}
-              onPress={() => setOptionSheetOpen(true)}
-              disabled={actionBusy}
-            />
+            <>
+              <DnPressRow
+                label={t('deliveryNoteDetails.shippingOption')}
+                value={shippingOptionLabel}
+                onPress={() => setOptionSheetOpen(true)}
+                disabled={actionBusy}
+              />
+              <DnRow label={t('deliveryNoteDetails.shippingRule')} value={shippingRuleLabel} last />
+            </>
           ) : (
             <>
               <DnRow label={t('deliveryNoteDetails.shippingOption')} value={shippingOptionLabel} />
-              <DnRow label={t('deliveryNoteDetails.shippingRule')} value={docShippingRule || '—'} />
+              <DnRow
+                label={t('deliveryNoteDetails.shippingRule')}
+                value={shippingRuleLabel}
+              />
               {feePerUnit != null ? (
                 <DnRow
                   label={t('deliveryNoteDetails.ratePerUnit', {
@@ -792,15 +1013,112 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
       ) : null}
 
       {canSupplierEdit ? (
-        <DnTextLink label={t('deliveryNoteDetails.nextViewItems')} onPress={() => setTab('items')} />
-      ) : showDeliveryPayments ? (
-        <DnTextLink label={t('deliveryNoteDetails.viewPayments')} onPress={() => setTab('payments')} />
-      ) : null}
+        <DnTextLink label={t('deliveryNoteDetails.nextViewCharges')} onPress={() => setTab('charges')} />
+      ) : (
+        <DnTextLink label={t('deliveryNoteDetails.viewCharges')} onPress={() => setTab('charges')} />
+      )}
     </View>
   );
 
+  const renderChargesTab = () => {
+    const customerRows = docTaxRows;
+    return (
+      <View style={dnUiStyles.page}>
+        <DnSectionTitle>{t('deliveryNoteDetails.salesTaxesSection')}</DnSectionTitle>
+        <DnPanel>
+          {canSupplierEdit ? (
+            <View style={[styles.segmentRow, enterFreightAmount ? styles.taxesEnterAmountRow : undefined]}>
+              <Text style={styles.segmentLabel}>{t('deliveryNoteDetails.enterFreightAmount')}</Text>
+              <DnSegment
+                yesLabel={t('deliveryNoteDetails.yes')}
+                noLabel={t('deliveryNoteDetails.no')}
+                value={enterFreightAmount}
+                onChange={onSetEnterFreightAmount}
+                disabled={actionBusy}
+              />
+            </View>
+          ) : (
+            <DnRow
+              label={t('deliveryNoteDetails.enterFreightAmount')}
+              value={docEnterFreight ? t('deliveryNoteDetails.yes') : t('deliveryNoteDetails.no')}
+              last={customerRows.length === 0}
+            />
+          )}
+
+          {canSupplierEdit && enterFreightAmount ? (
+            <DeliveryNoteFreightTaxesEditor
+              rows={taxDrafts}
+              currency={currency}
+              totalWeight={erpTotalNetWeight}
+              weightUnitLabel={measureLabelForUnit(weightDisplayUnit)}
+              disabled={actionBusy}
+              onChange={setTaxDrafts}
+            />
+          ) : null}
+
+          {canSupplierEdit && !enterFreightAmount ? (
+            <>
+              <View style={{ paddingHorizontal: 14, paddingTop: 12, paddingBottom: customerRows.length ? 4 : 12 }}>
+                <Text style={styles.taxesHint}>{t('deliveryNoteDetails.enterAmountOffHint')}</Text>
+              </View>
+              {customerRows.map((row, idx) => (
+                <DnRow
+                  key={row.key}
+                  label={`${idx + 1}. ${
+                    row.charge_type === 'On Weight'
+                      ? t('deliveryNoteDetails.taxTypeWeight')
+                      : t('deliveryNoteDetails.taxTypeActual')
+                  }`}
+                  value={formatErpDocMoney(row.tax_amount, currency)}
+                  valueStrong
+                  last={idx === customerRows.length - 1}
+                />
+              ))}
+            </>
+          ) : null}
+
+          {!canSupplierEdit ? (
+            customerRows.length === 0 ? (
+              <View style={{ padding: 14 }}>
+                <Text style={styles.taxesHint}>{t('deliveryNoteDetails.taxEmpty')}</Text>
+              </View>
+            ) : (
+              customerRows.map((row, idx) => (
+                <DnRow
+                  key={row.key}
+                  label={`${idx + 1}. ${
+                    row.charge_type === 'On Weight'
+                      ? t('deliveryNoteDetails.taxTypeWeight')
+                      : t('deliveryNoteDetails.taxTypeActual')
+                  }`}
+                  value={formatErpDocMoney(row.tax_amount, currency)}
+                  valueStrong
+                  last={idx === customerRows.length - 1}
+                />
+              ))
+            )
+          ) : null}
+        </DnPanel>
+
+        {canSupplierEdit ? (
+          <DnTextLink label={t('deliveryNoteDetails.nextViewItems')} onPress={() => setTab('items')} />
+        ) : showDeliveryPayments ||
+          ((isFreightOption || docEnterFreight) && deliveryNoteAllowsDeliveryPayment(doc)) ? (
+          <DnTextLink label={t('deliveryNoteDetails.viewPayments')} onPress={() => setTab('payments')} />
+        ) : null}
+      </View>
+    );
+  };
+
   const renderPaymentsTab = () => (
     <View style={dnUiStyles.page}>
+      {!freightPriceReadyForPayment && (isFreightOption || docEnterFreight) ? (
+        <View style={styles.freightPayBlocked}>
+          <Text style={styles.freightPayBlockedText}>
+            {t('deliveryPayment.awaitingFreightPrice')}
+          </Text>
+        </View>
+      ) : null}
       <ErpDeliveryNotePaymentsPanel
         key={paymentsRefreshKey}
         deliveryNoteName={dnId}
@@ -810,7 +1128,11 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
         customerId={customerScope}
         totalDue={amountBreakdown?.shippingAmount ?? 0}
         outstanding={deliveryOutstanding ?? 0}
-        onRecordPayment={canSupplierView ? () => setRecordPayModal(true) : undefined}
+        onRecordPayment={
+          canSupplierView && freightPriceReadyForPayment
+            ? () => setRecordPayModal(true)
+            : undefined
+        }
         recordDisabled={!canRecordDelivery || recordPaySubmitting}
       />
     </View>
@@ -830,6 +1152,7 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
 
   const renderActiveTab = () => {
     if (tab === 'payments') return renderPaymentsTab();
+    if (tab === 'charges') return renderChargesTab();
     if (tab === 'items') {
       return <View style={dnUiStyles.page}>{renderItemsList()}</View>;
     }
@@ -914,7 +1237,7 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
                 submitLabel={t('deliveryNoteDetails.submitCta')}
                 showSubmit={canSupplierEdit && !isSubmitted}
                 canSave={isDirty && !actionBusy}
-                canSubmit={canSupplierEdit && !isDirty && !actionBusy}
+                canSubmit={canSupplierEdit && !isDirty && !actionBusy && canSubmitFreight}
                 saving={saving}
                 submitting={submitting}
                 onSave={() => void onSaveAll()}
@@ -939,12 +1262,13 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
         busy={actionBusy}
         loading={rulesLoading}
         options={shippingRules}
-        selectedName={shippingRuleDisplay || null}
+        selectedName={shippingRuleDisplay || ''}
+        allowEmpty
         onClose={() => setRulePickerOpen(false)}
         onConfirm={(ruleName) => onPickShippingRule(ruleName)}
       />
 
-      {canEditDraftShipping ? (
+      {canBuyerEditShipping ? (
         <InvoiceShippingOptionSheet
           visible={optionSheetOpen}
           busy={actionBusy}
@@ -1000,11 +1324,36 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   segmentLabel: {
-    width: 120,
-    flexShrink: 0,
+    flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
     fontSize: 15,
     color: ERP_DOC_FLAT.ink,
     letterSpacing: -0.2,
+  },
+  taxesEnterAmountRow: {
+    borderBottomWidth: ERP_DOC_FLAT.hairline,
+    borderBottomColor: ERP_DOC_FLAT.border,
+  },
+  taxesHint: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    fontSize: 13,
+    lineHeight: 18,
+    color: ERP_DOC_FLAT.muted,
+  },
+  freightPayBlocked: {
+    marginBottom: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: '#F5F6F8',
+    borderWidth: ERP_DOC_FLAT.hairline,
+    borderColor: ERP_DOC_FLAT.border,
+  },
+  freightPayBlockedText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: ERP_DOC_FLAT.muted,
   },
   payHeroBtn: {
     alignItems: 'center',

@@ -4,6 +4,7 @@ import { SupplierTabNavigator } from './SupplierTabNavigator';
 import { SupplierOrdersInvoicesScreen } from '../screens/supplier/SupplierOrdersInvoicesScreen';
 import { SupplierSalesInvoiceDetailScreen } from '../screens/supplier/SupplierSalesInvoiceDetailScreen';
 import { DeliveryNoteDetailScreen } from '../screens/DeliveryNoteDetailScreen';
+import { SupplierDeliveryNoteListScreen } from '../screens/supplier/SupplierDeliveryNoteListScreen';
 import { SupplierPaymentEntryDetailScreen } from '../screens/supplier/SupplierPaymentEntryDetailScreen';
 import { SupplierQuotationListScreen } from '../screens/supplier/SupplierQuotationListScreen';
 import { SupplierQuotationDetailScreen } from '../screens/supplier/SupplierQuotationDetailScreen';
@@ -28,6 +29,11 @@ export const SupplierRootNavigator: React.FC = () => {
       <Stack.Screen
         name="SupplierSalesInvoiceDetail"
         component={SupplierSalesInvoiceDetailScreen}
+        options={{ presentation: 'card', gestureEnabled: true }}
+      />
+      <Stack.Screen
+        name="SupplierDeliveryNoteList"
+        component={SupplierDeliveryNoteListScreen}
         options={{ presentation: 'card', gestureEnabled: true }}
       />
       <Stack.Screen

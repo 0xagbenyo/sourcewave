@@ -181,7 +181,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   const [pickerOpen, setPickerOpen] = useState(false);
   const [imageGalleryOpen, setImageGalleryOpen] = useState(false);
   const [imageGalleryIndex, setImageGalleryIndex] = useState(0);
-  const [sharedMenuTitle, setSharedMenuTitle] = useState('Files shared in this channel');
+  const [sharedMenuTitle, setSharedMenuTitle] = useState(() => t('ravenShared.filesSectionTitle'));
   const [error, setError] = useState<string | null>(null);
   const [quotationActionByName, setQuotationActionByName] = useState<Record<string, 'accepted' | 'rejected'>>({});
   const [quotationActionBusy, setQuotationActionBusy] = useState<string | null>(null);
@@ -1374,7 +1374,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
                 />
               ) : (
                 <Text style={[styles.channelRowMeta, { paddingHorizontal: Spacing.LG, paddingVertical: Spacing.MD }]}>
-                  Select a channel to view files shared in this channel.
+                  {t('ravenShared.selectChannel')}
                 </Text>
               )}
             </ScrollView>

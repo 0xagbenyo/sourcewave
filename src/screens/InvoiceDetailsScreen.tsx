@@ -17,7 +17,7 @@ import {
 import { ErpInvoicePaymentsPanel } from '../components/ErpInvoicePaymentsPanel';
 import { InvoicePaystackPaymentSheet } from '../components/InvoicePaystackPaymentSheet';
 import { InvoiceShippingOptionSheet } from '../components/InvoiceShippingOptionSheet';
-import { shippingOptionById, type ShippingOptionId } from '../constants/shippingOptions';
+import { shippingOptionById, shippingOptionGoodsPaymentOnArrival, type ShippingOptionId } from '../constants/shippingOptions';
 import { userFacingError } from '../utils/userFacingError';
 import {
   erpDocTotalWeightDetailWithCbm,
@@ -72,9 +72,10 @@ export const InvoiceDetailsScreen: React.FC = () => {
   const [shippingSheetOpen, setShippingSheetOpen] = useState(false);
   const [deliveryBusy, setDeliveryBusy] = useState(false);
   const [deliveryNotes, setDeliveryNotes] = useState<
-    Array<{ name: string; status?: string; docstatus?: number }>
+    Array<{ name: string; status?: string; docstatus?: number; shippingOption?: string }>
   >([]);
   const [deliveryNotesLoading, setDeliveryNotesLoading] = useState(false);
+  const [linkedDnShippingOption, setLinkedDnShippingOption] = useState('');
   const [lineImages, setLineImages] = useState<Record<string, string>>({});
   const [invoiceSupplierId, setInvoiceSupplierId] = useState('');
   const [invoiceSupplierName, setInvoiceSupplierName] = useState('');
@@ -89,38 +90,67 @@ export const InvoiceDetailsScreen: React.FC = () => {
   const canPay = outstanding != null && outstanding > 0.009;
   const isPaid = outstanding != null && !canPay && (invoice?.grandTotal ?? 0) > 0;
   const primaryDeliveryNote = deliveryNotes[0]?.name?.trim() || '';
+  const freightGoodsPayOnArrival = shippingOptionGoodsPaymentOnArrival(
+    linkedDnShippingOption || deliveryNotes[0]?.shippingOption
+  );
+  /** Freight Cargo: goods are collected on arrival — hide immediate Pay CTA once that option is active. */
+  const showGoodsPayOnArrival = canPay && freightGoodsPayOnArrival && !!primaryDeliveryNote;
+  const showPayGoodsCta = canPay && !showGoodsPayOnArrival;
+  /** Buyer can arrange delivery when paid, or while unpaid (to pick Freight Cargo pay-on-arrival). */
+  const canArrangeDelivery = !!invoice && (isPaid || canPay) && !primaryDeliveryNote && !deliveryNotesLoading;
 
   const statusColor = React.useMemo(() => {
+    if (showGoodsPayOnArrival) return Colors.INFO;
     if (canPay) return Colors.ERROR;
     return erpDocStatusAccent(invoice?.status || '');
-  }, [invoice?.status, canPay]);
+  }, [invoice?.status, canPay, showGoodsPayOnArrival]);
 
   const dateLabel = invoice?.date ? formatErpDocDate(invoice.date) : undefined;
   const supplierLabel = salesInvoiceSupplierUiLabel(invoiceSupplierId, invoiceSupplierName, t);
 
   const loadDeliveryNotes = useCallback(async () => {
-    if (!id || !isPaid) {
+    if (!id) {
       setDeliveryNotes([]);
+      setLinkedDnShippingOption('');
       return;
     }
     setDeliveryNotesLoading(true);
     try {
       const rows = await getERPNextClient().listDeliveryNotesForSalesInvoice(id);
-      setDeliveryNotes(
-        rows
-          .map((row) => ({
-            name: String(row?.name || '').trim(),
-            status: String(row?.status || '').trim() || undefined,
-            docstatus: Number(row?.docstatus ?? 0),
-          }))
-          .filter((row) => row.name.length > 0)
-      );
+      const mapped = rows
+        .map((row) => ({
+          name: String(row?.name || '').trim(),
+          status: String(row?.status || '').trim() || undefined,
+          docstatus: Number(row?.docstatus ?? 0),
+          shippingOption: undefined as string | undefined,
+        }))
+        .filter((row) => row.name.length > 0);
+      setDeliveryNotes(mapped);
+
+      const primary = mapped[0]?.name?.trim() || '';
+      if (primary) {
+        try {
+          const dn = await getERPNextClient().getDeliveryNoteRaw(primary);
+          const option = getERPNextClient().readDeliveryNoteShippingOption(dn);
+          setLinkedDnShippingOption(option);
+          if (option) {
+            setDeliveryNotes((prev) =>
+              prev.map((row, idx) => (idx === 0 ? { ...row, shippingOption: option } : row))
+            );
+          }
+        } catch {
+          setLinkedDnShippingOption('');
+        }
+      } else {
+        setLinkedDnShippingOption('');
+      }
     } catch {
       setDeliveryNotes([]);
+      setLinkedDnShippingOption('');
     } finally {
       setDeliveryNotesLoading(false);
     }
-  }, [id, isPaid]);
+  }, [id]);
 
   const loadOutstanding = useCallback(async () => {
     if (!id) {
@@ -211,6 +241,13 @@ export const InvoiceDetailsScreen: React.FC = () => {
   const onCreateDeliveryNote = async (optionId: ShippingOptionId) => {
     const option = shippingOptionById(optionId);
     if (!option || !id) return;
+    if (!option.goodsPaymentOnArrival && canPay) {
+      Alert.alert(
+        t('invoiceDelivery.failedTitle'),
+        t('invoiceDelivery.airCargoRequiresPayment')
+      );
+      return;
+    }
     setDeliveryBusy(true);
     try {
       const result = await getERPNextClient().createDeliveryNoteFromSalesInvoice(id, {
@@ -221,7 +258,9 @@ export const InvoiceDetailsScreen: React.FC = () => {
       await loadDeliveryNotes();
       Alert.alert(
         t('invoiceDelivery.successTitle'),
-        t('invoiceDelivery.successBody', { name: result.name, shipping: option.label })
+        option.goodsPaymentOnArrival
+          ? t('invoiceDelivery.successBodyFreight', { name: result.name, shipping: option.label })
+          : t('invoiceDelivery.successBody', { name: result.name, shipping: option.label })
       );
     } catch (e: unknown) {
       Alert.alert(t('invoiceDelivery.failedTitle'), userFacingError(e, t('invoiceDelivery.failedBody')));
@@ -288,18 +327,29 @@ export const InvoiceDetailsScreen: React.FC = () => {
               amountLabel={t('invoiceDetails.total')}
               subtitle={dateLabel ? t('invoiceDetails.issued', { date: dateLabel }) : undefined}
               facts={
-                canPay
-                  ? [{ label: t('invoiceDetails.outstanding'), value: formatErpDocMoney(outstanding!, currency) }]
-                  : invoice.customer
-                    ? [{ label: t('invoiceDetails.customer'), value: invoice.customer }]
-                    : undefined
+                showGoodsPayOnArrival
+                  ? [
+                      {
+                        label: t('invoiceDetails.outstanding'),
+                        value: formatErpDocMoney(outstanding!, currency),
+                      },
+                      {
+                        label: t('invoicePayment.paymentOption'),
+                        value: t('invoicePayment.uponArrival'),
+                      },
+                    ]
+                  : canPay
+                    ? [{ label: t('invoiceDetails.outstanding'), value: formatErpDocMoney(outstanding!, currency) }]
+                    : invoice.customer
+                      ? [{ label: t('invoiceDetails.customer'), value: invoice.customer }]
+                      : undefined
               }
               statusTrailing={
-                canPay ? (
+                showPayGoodsCta ? (
                   <TouchableOpacity style={styles.payHeroBtn} onPress={openPaySheet} activeOpacity={0.85}>
                     <Text style={styles.payHeroBtnText}>{t('invoicePayment.payShort')}</Text>
                   </TouchableOpacity>
-                ) : isPaid && !primaryDeliveryNote && !deliveryNotesLoading ? (
+                ) : canArrangeDelivery ? (
                   <ErpDocHeroActionButton
                     label={t('invoiceDelivery.arrangeDelivery')}
                     onPress={() => setShippingSheetOpen(true)}
@@ -314,19 +364,25 @@ export const InvoiceDetailsScreen: React.FC = () => {
               <>
                 <ErpDocLinkButton
                   label={t('invoiceDetails.viewPayments')}
-                  subtitle={t('invoiceDetails.viewPaymentsSub')}
+                  subtitle={
+                    showGoodsPayOnArrival
+                      ? t('invoicePayment.uponArrivalHint')
+                      : t('invoiceDetails.viewPaymentsSub')
+                  }
                   icon="wallet-outline"
                   onPress={() => setTab('payments')}
                 />
-                {isPaid && primaryDeliveryNote ? (
+                {primaryDeliveryNote ? (
                   <ErpDocLinkButton
                     label={t('invoiceDelivery.linkedDeliveryNote', { name: primaryDeliveryNote })}
                     subtitle={
-                      deliveryNotes[0]?.docstatus === 0
-                        ? t('invoiceDelivery.linkedDeliveryNoteDraftSub')
-                        : [deliveryNotes[0]?.status, t('invoiceDelivery.linkedDeliveryNoteSub')]
-                            .filter(Boolean)
-                            .join(' · ') || t('invoiceDelivery.linkedDeliveryNoteSub')
+                      freightGoodsPayOnArrival && canPay
+                        ? t('invoiceDelivery.linkedDeliveryNoteFreightSub')
+                        : deliveryNotes[0]?.docstatus === 0
+                          ? t('invoiceDelivery.linkedDeliveryNoteDraftSub')
+                          : [deliveryNotes[0]?.status, t('invoiceDelivery.linkedDeliveryNoteSub')]
+                              .filter(Boolean)
+                              .join(' · ') || t('invoiceDelivery.linkedDeliveryNoteSub')
                     }
                     icon="airplane-outline"
                     onPress={() =>
@@ -337,7 +393,7 @@ export const InvoiceDetailsScreen: React.FC = () => {
                       )
                     }
                   />
-                ) : isPaid && !deliveryNotesLoading ? (
+                ) : canArrangeDelivery ? (
                   <ErpDocLinkButton
                     label={t('invoiceDelivery.arrangeDelivery')}
                     subtitle={t('invoiceDelivery.arrangeDeliverySub')}

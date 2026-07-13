@@ -8,6 +8,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import { RavenLight } from '../constants/ravenLightTheme';
 import { Colors } from '../constants/colors';
@@ -22,10 +23,7 @@ import {
 } from '../services/ravenNativeApi';
 import { formatMessageHeaderTime } from '../utils/ravenChatUi';
 import { resolveRavenUserDisplayName, type RavenUserDisplayProfiles } from '../utils/ravenSearchPreview';
-import {
-  RAVEN_CHANNEL_FILE_TYPE_FILTER_LABELS,
-  type RavenChannelFileTypeFilter,
-} from '../utils/ravenChannelFileTypeFilter';
+import { type RavenChannelFileTypeFilter } from '../utils/ravenChannelFileTypeFilter';
 import { classifyRavenAttachment } from '../utils/ravenAttachment';
 import { sanitizeRavenWebMessageFileUrl } from '../utils/ravenFileUrl';
 import { ErpAuthenticatedImage } from './ErpAuthenticatedImage';
@@ -48,27 +46,24 @@ type Props = {
   onSectionTitleChange?: (title: string) => void;
 };
 
-type FileFilterChip = { id: RavenChannelFileTypeFilter; label: string };
-type DocumentFilterChip = { id: RavenSharedDocumentFilter; label: string };
+type FileFilterChip = { id: RavenChannelFileTypeFilter; labelKey: string };
+type DocumentFilterChip = { id: RavenSharedDocumentFilter; labelKey: string };
 
 const FILE_FILTER_CHIPS: FileFilterChip[] = [
-  { id: 'any', label: RAVEN_CHANNEL_FILE_TYPE_FILTER_LABELS.any },
-  { id: 'pdf', label: RAVEN_CHANNEL_FILE_TYPE_FILTER_LABELS.pdf },
-  { id: 'doc', label: RAVEN_CHANNEL_FILE_TYPE_FILTER_LABELS.doc },
-  { id: 'ppt', label: RAVEN_CHANNEL_FILE_TYPE_FILTER_LABELS.ppt },
-  { id: 'xls', label: RAVEN_CHANNEL_FILE_TYPE_FILTER_LABELS.xls },
-  { id: 'image', label: RAVEN_CHANNEL_FILE_TYPE_FILTER_LABELS.image },
+  { id: 'any', labelKey: 'ravenShared.filterAny' },
+  { id: 'pdf', labelKey: 'ravenShared.filterPdf' },
+  { id: 'doc', labelKey: 'ravenShared.filterDoc' },
+  { id: 'ppt', labelKey: 'ravenShared.filterPpt' },
+  { id: 'xls', labelKey: 'ravenShared.filterXls' },
+  { id: 'image', labelKey: 'ravenShared.filterImage' },
 ];
 
 const DOCUMENT_FILTER_CHIPS: DocumentFilterChip[] = [
-  { id: 'any', label: 'Any' },
-  { id: 'quotation', label: 'Quotations' },
-  { id: 'order', label: 'Orders' },
-  { id: 'invoice', label: 'Invoices' },
+  { id: 'any', labelKey: 'ravenShared.filterAny' },
+  { id: 'quotation', labelKey: 'ravenShared.filterQuotations' },
+  { id: 'order', labelKey: 'ravenShared.filterOrders' },
+  { id: 'invoice', labelKey: 'ravenShared.filterInvoices' },
 ];
-
-const FILES_SECTION_TITLE = 'Files shared in this channel';
-const DOCUMENTS_SECTION_TITLE = 'Documents shared in this channel';
 
 function sharedDocumentIcon(kind: RavenSharedChatItemKind): keyof typeof Ionicons.glyphMap {
   switch (kind) {
@@ -83,16 +78,16 @@ function sharedDocumentIcon(kind: RavenSharedChatItemKind): keyof typeof Ionicon
   }
 }
 
-function sharedDocumentTypeLabel(kind: RavenSharedChatItemKind): string {
+function sharedDocumentTypeLabelKey(kind: RavenSharedChatItemKind): string {
   switch (kind) {
     case 'quotation':
-      return 'Supplier Quotation';
+      return 'ravenShared.typeQuotation';
     case 'order':
-      return 'Sales Order';
+      return 'ravenShared.typeOrder';
     case 'invoice':
-      return 'Sales Invoice';
+      return 'ravenShared.typeInvoice';
     default:
-      return 'Document';
+      return 'ravenShared.typeDocument';
   }
 }
 
@@ -104,12 +99,12 @@ function channelFileIcon(row: RavenChannelFileRow): keyof typeof Ionicons.glyphM
   return 'document-attach-outline';
 }
 
-function channelFileTypeLabel(row: RavenChannelFileRow): string {
+function channelFileTypeLabelKey(row: RavenChannelFileRow): string {
   const { kind } = classifyRavenAttachment(row.fileUrl, row.message_type);
-  if (kind === 'image') return 'Image';
-  if (kind === 'video') return 'Video';
-  if (kind === 'pdf') return 'PDF';
-  return 'File';
+  if (kind === 'image') return 'ravenShared.typeImage';
+  if (kind === 'video') return 'ravenShared.typeVideo';
+  if (kind === 'pdf') return 'ravenShared.typePdf';
+  return 'ravenShared.typeFile';
 }
 
 function sharedFileImageUri(row: RavenChannelFileRow): string {
@@ -131,6 +126,7 @@ export const RavenSharedInChatList: React.FC<Props> = ({
   showInlineTitle = true,
   onSectionTitleChange,
 }) => {
+  const { t } = useTranslation();
   const { width: windowWidth } = useWindowDimensions();
   const imageGridGap = 6;
   const imageGridPad = Spacing.MD;
@@ -153,7 +149,8 @@ export const RavenSharedInChatList: React.FC<Props> = ({
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [loadingDocuments, setLoadingDocuments] = useState(false);
 
-  const sectionTitle = mainTab === 'files' ? FILES_SECTION_TITLE : DOCUMENTS_SECTION_TITLE;
+  const sectionTitle =
+    mainTab === 'files' ? t('ravenShared.filesSectionTitle') : t('ravenShared.documentsSectionTitle');
 
   useEffect(() => {
     onSectionTitleChange?.(sectionTitle);
@@ -275,7 +272,9 @@ export const RavenSharedInChatList: React.FC<Props> = ({
             accessibilityRole="button"
             accessibilityState={{ selected }}
           >
-            <Text style={[styles.filterChipText, { color: selected ? accent : textMuted }]}>{chip.label}</Text>
+            <Text style={[styles.filterChipText, { color: selected ? accent : textMuted }]}>
+              {t(chip.labelKey)}
+            </Text>
           </TouchableOpacity>
         );
       })
@@ -305,7 +304,7 @@ export const RavenSharedInChatList: React.FC<Props> = ({
                 disabled && styles.filterChipTextDisabled,
               ]}
             >
-              {chip.label}
+              {t(chip.labelKey)}
               {chip.id !== 'any' && count > 0 ? ` · ${count}` : ''}
             </Text>
           </TouchableOpacity>
@@ -313,9 +312,9 @@ export const RavenSharedInChatList: React.FC<Props> = ({
       })
     );
 
-  const emptyHeading = 'Nothing to see here';
+  const emptyHeading = t('ravenShared.emptyHeading');
   const emptyBody =
-    mainTab === 'files' ? 'No files found in this channel' : 'No documents found in this channel';
+    mainTab === 'files' ? t('ravenShared.emptyFiles') : t('ravenShared.emptyDocuments');
 
   return (
     <View style={styles.wrap}>
@@ -331,7 +330,7 @@ export const RavenSharedInChatList: React.FC<Props> = ({
       <View style={[styles.mainTabRow, { borderColor: border }]}>
         {(['files', 'documents'] as const).map((tab) => {
           const selected = mainTab === tab;
-          const label = tab === 'files' ? 'View Files' : 'View Documents';
+          const label = tab === 'files' ? t('ravenShared.viewFiles') : t('ravenShared.viewDocuments');
           return (
             <TouchableOpacity
               key={tab}
@@ -348,11 +347,9 @@ export const RavenSharedInChatList: React.FC<Props> = ({
       </View>
 
       {mainTab === 'files' ? (
-        <Text style={[styles.hint, { color: textMuted }]}>Tap a file to jump to that message.</Text>
+        <Text style={[styles.hint, { color: textMuted }]}>{t('ravenShared.filesHint')}</Text>
       ) : (
-        <Text style={[styles.hint, { color: textMuted }]}>
-          Supplier quotations, sales orders, and sales invoices shared in this channel.
-        </Text>
+        <Text style={[styles.hint, { color: textMuted }]}>{t('ravenShared.documentsHint')}</Text>
       )}
 
       <ScrollView
@@ -365,7 +362,7 @@ export const RavenSharedInChatList: React.FC<Props> = ({
       </ScrollView>
 
       {loading && (mainTab === 'files' ? fileRows.length === 0 : filteredDocuments.length === 0) ? (
-        <Text style={[styles.empty, { color: textMuted }]}>Loading…</Text>
+        <Text style={[styles.empty, { color: textMuted }]}>{t('ravenShared.loading')}</Text>
       ) : mainTab === 'files' ? (
         fileRows.length === 0 ? (
           <View style={styles.emptyBlock}>
@@ -404,7 +401,7 @@ export const RavenSharedInChatList: React.FC<Props> = ({
           fileRows.map((row) => {
             const when = formatMessageHeaderTime(row.creation);
             const who = resolveRavenUserDisplayName(row.owner, userDisplayProfiles);
-            const typeLabel = channelFileTypeLabel(row);
+            const typeLabel = t(channelFileTypeLabelKey(row));
             const imageRow = isSharedImageRow(row);
             return (
               <TouchableOpacity
@@ -460,7 +457,7 @@ export const RavenSharedInChatList: React.FC<Props> = ({
         filteredDocuments.map((row) => {
           const when = formatMessageHeaderTime(row.creation);
           const who = resolveRavenUserDisplayName(row.owner, userDisplayProfiles);
-          const typeLabel = sharedDocumentTypeLabel(row.kind);
+          const typeLabel = t(sharedDocumentTypeLabelKey(row.kind));
           return (
             <TouchableOpacity
               key={`doc-${row.kind}-${row.messageName}-${row.linkDocument || row.label}`}

@@ -1,6 +1,6 @@
 import { readSalesOrderLineRequestedQty } from './erpSalesOrderLineFields';
 import { readErpDocLineImage } from './erpDocLineImageField';
-import { formatErpLineWeight, parseErpWeightInput, readErpLineWeightFromRow } from './erpLineWeight';
+import { formatErpLineWeight, kgToCbm, parseErpWeightInput, readErpLineWeightFromRow } from './erpLineWeight';
 import { defaultQuotationValidTillIso, readErpDateField } from './erpDateInput';
 export type SalesOrderQuotationLineSeed = {
   key: string;
@@ -104,7 +104,7 @@ export function quotationLinesFromSupplierQuotation(
         wpuCbm != null
           ? formatErpLineWeight(wpuCbm)
           : weights.weight_per_unit != null
-            ? formatErpLineWeight(weights.weight_per_unit / 100)
+            ? formatErpLineWeight(kgToCbm(weights.weight_per_unit))
             : '',
       total_weight: weights.total_weight != null ? formatErpLineWeight(weights.total_weight) : '',
     });

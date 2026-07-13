@@ -39,10 +39,10 @@ const ERP_TOTAL_WEIGHT_KG_FIELD = 'custom_total_weight_kg';
 const ERP_WEIGHT_PER_UNIT_CBM_FIELD = 'custom_weight_cbm';
 const ERP_TOTAL_WEIGHT_CBM_FIELD = 'custom_total_weight_cbm';
 
-/** kg per 1 CBM when converting supplier-entered mass to freight volume (default **100**). */
+/** kg per 1 CBM when converting supplier-entered mass to freight volume (default **25**). */
 export function kgPerCbm(): number {
-  const n = Number(process.env.EXPO_PUBLIC_KG_PER_CBM ?? 100);
-  return Number.isFinite(n) && n > 0 ? n : 100;
+  const n = Number(process.env.EXPO_PUBLIC_KG_PER_CBM ?? 25);
+  return Number.isFinite(n) && n > 0 ? n : 25;
 }
 
 export function kgToCbm(kg: number): number {

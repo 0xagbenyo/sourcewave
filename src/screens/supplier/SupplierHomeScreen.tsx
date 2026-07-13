@@ -63,6 +63,13 @@ export const SupplierHomeScreen: React.FC = () => {
       onPress: () => openStack('SupplierOrdersInvoices'),
     },
     {
+      key: 'dn',
+      icon: 'airplane-outline',
+      title: t('supplierHome.dnTitle'),
+      subtitle: t('supplierHome.dnSub'),
+      onPress: () => openStack('SupplierDeliveryNoteList'),
+    },
+    {
       key: 'quo',
       icon: 'reader-outline',
       title: t('supplierHome.quoTitle'),

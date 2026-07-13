@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Modal,
   View,
@@ -20,12 +20,17 @@ export type ShippingRuleOption = {
   shipping_rule_type?: string;
 };
 
+/** Sentinel for “no shipping rule yet — logistics will suggest”. */
+export const EMPTY_SHIPPING_RULE = '';
+
 type Props = {
   visible: boolean;
   busy?: boolean;
   loading?: boolean;
   options: ShippingRuleOption[];
   selectedName?: string | null;
+  /** When true, include an empty-rule choice for logistics to suggest later. */
+  allowEmpty?: boolean;
   onClose: () => void;
   onConfirm: (ruleName: string) => void;
 };
@@ -36,17 +41,38 @@ export const DeliveryNoteShippingRulePicker: React.FC<Props> = ({
   loading = false,
   options,
   selectedName,
+  allowEmpty = true,
   onClose,
   onConfirm,
 }) => {
   const { t } = useTranslation();
-  const [selected, setSelected] = useState<string | null>(selectedName ?? null);
+  const [selected, setSelected] = useState<string | null>(
+    selectedName === undefined || selectedName === null ? null : String(selectedName)
+  );
+
+  useEffect(() => {
+    if (!visible) return;
+    setSelected(selectedName === undefined || selectedName === null ? null : String(selectedName));
+  }, [visible, selectedName]);
 
   const handleClose = () => {
     if (busy) return;
-    setSelected(selectedName ?? null);
+    setSelected(selectedName === undefined || selectedName === null ? null : String(selectedName));
     onClose();
   };
+
+  const listData: ShippingRuleOption[] = allowEmpty
+    ? [
+        {
+          name: EMPTY_SHIPPING_RULE,
+          label: t('deliveryNoteDetails.shippingRuleUnknown'),
+          shipping_rule_type: t('deliveryNoteDetails.shippingRuleUnknownSub'),
+        },
+        ...options,
+      ]
+    : options;
+
+  const canConfirm = selected !== null && !busy && !loading;
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
@@ -65,12 +91,12 @@ export const DeliveryNoteShippingRulePicker: React.FC<Props> = ({
               <View style={styles.loadingBox}>
                 <ActivityIndicator color={Colors.WINE} />
               </View>
-            ) : options.length === 0 ? (
+            ) : listData.length === 0 ? (
               <Text style={styles.empty}>{t('deliveryNoteDetails.shippingRuleEmpty')}</Text>
             ) : (
               <FlatList
-                data={options}
-                keyExtractor={(item) => item.name}
+                data={listData}
+                keyExtractor={(item, index) => (item.name ? item.name : `empty-${index}`)}
                 style={styles.list}
                 keyboardShouldPersistTaps="handled"
                 renderItem={({ item }) => {
@@ -98,9 +124,12 @@ export const DeliveryNoteShippingRulePicker: React.FC<Props> = ({
             )}
 
             <TouchableOpacity
-              style={[styles.confirmBtn, (!selected || busy || loading) && styles.confirmBtnOff]}
-              onPress={() => selected && onConfirm(selected)}
-              disabled={!selected || busy || loading}
+              style={[styles.confirmBtn, !canConfirm && styles.confirmBtnOff]}
+              onPress={() => {
+                if (selected === null) return;
+                onConfirm(selected);
+              }}
+              disabled={!canConfirm}
               activeOpacity={0.85}
             >
               {busy ? (

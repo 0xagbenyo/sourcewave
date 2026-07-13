@@ -30,6 +30,7 @@ import {
   shippingOptionErpValueForRuleName,
   shippingMeasureUnitForContext,
   shippingMeasureUnitForErpValue,
+  shippingOptionGoodsPaymentOnArrival,
   type ShippingMeasureUnit,
 } from '../constants/shippingOptions';
 import { parseShippingRuleDetail, type ErpShippingRuleDetail } from '../utils/shippingRuleEstimate';
@@ -50,15 +51,24 @@ import {
 import { logFrappeHttpError, parseFrappeResponseData } from '../utils/frappeHttpError';
 import {
   deliveryNoteAllowsDeliveryPayment,
+  deliveryNoteEnterFreightAmountErpValue,
+  deliveryNoteEnterFreightAmountFieldName,
   deliveryNoteIsSupplierErpValue,
   deliveryNoteIsSupplierFieldName,
   deliveryNoteShippingOutstanding,
   deliveryNoteLogisticsFieldName,
   deliveryNoteSupplierFieldName,
+  deliveryNoteTaxesPayloadFromDrafts,
+  deliveryNoteFreightTaxesAreFilled,
+  deliveryNoteFreightPriceReadyForPayment,
   paymentEntryDeliveryNoteFieldName,
+  readDeliveryNoteEnterFreightAmount,
   readDeliveryNoteIsSupplier,
   readDeliveryNoteLogistics,
   readDeliveryNoteSupplier,
+  readDeliveryNoteTaxRows,
+  readDeliveryNoteTotalNetWeight,
+  type DeliveryNoteTaxRowDraft,
 } from '../utils/deliveryNoteAmounts';
 import { readSalesInvoiceSupplier } from '../utils/erpSalesInvoiceSupplier';
 import {
@@ -3088,6 +3098,25 @@ class ERPNextClient {
     if (!fresh) throw new Error('Delivery Note not found.');
     if (Number(fresh.docstatus) === 1) return fresh;
 
+    const shippingOption = this.readDeliveryNoteShippingOption(fresh);
+    const shippingRule = String(fresh.shipping_rule || '').trim();
+    const enterFreight = readDeliveryNoteEnterFreightAmount(fresh);
+    const needsTaxes =
+      shippingOptionGoodsPaymentOnArrival(shippingOption) || enterFreight || !shippingRule;
+    if (needsTaxes) {
+      const taxRows = readDeliveryNoteTaxRows(fresh);
+      if (!enterFreight) {
+        throw new Error(
+          'Turn on Enter amount and fill Sales Taxes and Charges before submitting when no shipping rule is set.'
+        );
+      }
+      if (!deliveryNoteFreightTaxesAreFilled(taxRows, readDeliveryNoteTotalNetWeight(fresh))) {
+        throw new Error(
+          'Add at least one Sales Taxes and Charges row with a freight amount greater than zero before submitting.'
+        );
+      }
+    }
+
     const logisticsDoc = String(opts?.supplierDocName || '').trim();
     const logisticsField = deliveryNoteLogisticsFieldName();
 
@@ -3119,7 +3148,9 @@ class ERPNextClient {
   }
 
   /**
-   * Create a **draft** Delivery Note from a paid Sales Invoice after the buyer picks a shipping option.
+   * Create a **draft** Delivery Note from a Sales Invoice after the buyer picks a shipping option.
+   * **Air Cargo** requires the invoice to be paid in full first.
+   * **Freight Cargo** allows unpaid goods (payment upon arrival).
    * Sets **`custom_shipping_option`** (configurable) and line **`valuation_rate`** defaults before save.
    * Does not submit — warehouse can submit in ERPNext once stock is available.
    */
@@ -3138,9 +3169,10 @@ class ERPNextClient {
     if (Number(inv.docstatus) !== 1) {
       throw new Error('Sales Invoice must be submitted before a delivery note can be created.');
     }
+    const goodsPayOnArrival = shippingOptionGoodsPaymentOnArrival(shippingLabel);
     const outstanding = this.effectiveSalesInvoiceOutstanding(inv as Record<string, unknown>);
-    if (outstanding > 0.009) {
-      throw new Error('Pay this invoice in full before arranging delivery.');
+    if (!goodsPayOnArrival && outstanding > 0.009) {
+      throw new Error('Pay this invoice in full before arranging Air Cargo delivery.');
     }
 
     const existing = await this.listDeliveryNotesForSalesInvoice(n);
@@ -3174,7 +3206,8 @@ class ERPNextClient {
 
     const shipField = this.deliveryNoteShippingOptionField();
     draft[shipField] = shippingLabel;
-    draft.shipping_rule = shippingLabel;
+    /** Freight Cargo: no shipping rule — freight amount comes from Sales Taxes and Charges. */
+    draft.shipping_rule = shippingOptionGoodsPaymentOnArrival(shippingLabel) ? '' : shippingLabel;
     const shippingNote =
       String(opts.shippingInstructions || '').trim() || shippingLabel;
     draft.instructions = String(draft.instructions || '').trim()
@@ -3271,7 +3304,7 @@ class ERPNextClient {
   }
 
   /**
-   * Edit a **draft** Delivery Note — shipping, flags, and supplier header fields.
+   * Edit a **draft** Delivery Note — shipping, flags, freight taxes, and supplier header fields.
    * Weights stay in **KG** on ERP rows; CBM is display-only in the app.
    */
   async updateDeliveryNoteForSupplier(
@@ -3280,6 +3313,8 @@ class ERPNextClient {
       shipping_rule?: string | null;
       shipping_option_label?: string | null;
       is_supplier?: boolean;
+      enter_freight_amount?: boolean;
+      taxes?: DeliveryNoteTaxRowDraft[];
       contact_person?: string | null;
       contact_mobile?: string | null;
       contact_email?: string | null;
@@ -3292,7 +3327,8 @@ class ERPNextClient {
       incoterm?: string | null;
       instructions?: string | null;
       terms?: string | null;
-    }
+    },
+    opts?: { logisticsSupplierDocName?: string }
   ): Promise<Record<string, unknown>> {
     const n = String(name || '').trim();
     if (!n) throw new Error('Delivery Note name required');
@@ -3313,7 +3349,7 @@ class ERPNextClient {
       patch.shipping_option_label !== undefined
         ? String(patch.shipping_option_label || '').trim()
         : savedOption;
-    const nextRule =
+    let nextRule =
       patch.shipping_rule !== undefined ? String(patch.shipping_rule || '').trim() : savedRule;
 
     doc.items = items.map((row) => {
@@ -3323,22 +3359,72 @@ class ERPNextClient {
       return next;
     });
 
-    if (patch.shipping_option_label !== undefined && patch.shipping_rule === undefined) {
+    const enterFreight =
+      patch.enter_freight_amount !== undefined
+        ? !!patch.enter_freight_amount
+        : readDeliveryNoteEnterFreightAmount(fresh);
+    const freightOption =
+      shippingOptionGoodsPaymentOnArrival(nextOption) ||
+      shippingOptionGoodsPaymentOnArrival(savedOption);
+
+    /** Freight + enter-freight: never keep a shipping rule. */
+    if (freightOption || enterFreight) {
+      nextRule = '';
+    }
+
+    if (
+      patch.shipping_option_label !== undefined &&
+      patch.shipping_rule === undefined &&
+      patch.is_supplier === undefined &&
+      patch.enter_freight_amount === undefined &&
+      patch.taxes === undefined
+    ) {
+      // Buyer (and any option-only) update: touch only the shipping option field.
       doc[this.deliveryNoteShippingOptionField()] = String(patch.shipping_option_label || '').trim();
-    } else if (patch.shipping_rule !== undefined || patch.shipping_option_label !== undefined) {
+    } else if (
+      patch.shipping_rule !== undefined ||
+      patch.shipping_option_label !== undefined ||
+      freightOption ||
+      enterFreight
+    ) {
       const syncedOption =
         nextOption ||
         shippingOptionErpValueForRuleName(nextRule) ||
         savedOption;
-      const syncedRule = nextRule || nextOption || savedRule;
-      doc.shipping_rule = syncedRule;
       doc[this.deliveryNoteShippingOptionField()] = syncedOption;
+      // Preserve intentional empty shipping rule (logistics to suggest) — do not
+      // fall back to the shipping option name as a rule.
+      if (freightOption || enterFreight) {
+        doc.shipping_rule = '';
+      } else if (patch.shipping_rule !== undefined) {
+        doc.shipping_rule = nextRule;
+      } else {
+        doc.shipping_rule = nextRule || nextOption || savedRule;
+      }
+    }
+
+    if (patch.enter_freight_amount !== undefined) {
+      const freightField = deliveryNoteEnterFreightAmountFieldName();
+      doc[freightField] = deliveryNoteEnterFreightAmountErpValue(!!patch.enter_freight_amount);
+    } else if (patch.taxes !== undefined && Array.isArray(patch.taxes) && patch.taxes.length > 0) {
+      // Saving charge rows implies Enter amount is on → keep Check field in sync.
+      const freightField = deliveryNoteEnterFreightAmountFieldName();
+      doc[freightField] = deliveryNoteEnterFreightAmountErpValue(true);
+    }
+
+    if (patch.taxes !== undefined) {
+      doc.taxes = deliveryNoteTaxesPayloadFromDrafts(
+        patch.taxes,
+        readDeliveryNoteTotalNetWeight(doc)
+      );
     }
 
     const optionOnlyPatch =
       patch.shipping_option_label !== undefined &&
       patch.shipping_rule === undefined &&
-      patch.is_supplier === undefined;
+      patch.is_supplier === undefined &&
+      patch.enter_freight_amount === undefined &&
+      patch.taxes === undefined;
 
     if (!optionOnlyPatch) {
       const currentOption = String(doc[this.deliveryNoteShippingOptionField()] || '').trim();
@@ -3373,6 +3459,15 @@ class ERPNextClient {
     for (const key of headerKeys) {
       if (patch[key] !== undefined) {
         doc[key] = String(patch[key] ?? '').trim();
+      }
+    }
+
+    const logisticsClaim = String(opts?.logisticsSupplierDocName || '').trim();
+    if (logisticsClaim) {
+      const logisticsField = deliveryNoteLogisticsFieldName();
+      const existingLogistics = String(doc[logisticsField] ?? '').trim();
+      if (!existingLogistics) {
+        doc[logisticsField] = logisticsClaim;
       }
     }
 
@@ -8070,6 +8165,49 @@ class ERPNextClient {
     }
   }
 
+  /**
+   * **Delivery Notes** for a logistics **Supplier** (`custom_logistics` / env field).
+   * Includes notes this supplier submitted (or claimed on save).
+   */
+  async listDeliveryNotesForLogisticsSupplier(
+    supplierDocName: string,
+    opts?: { fromDate?: string; toDate?: string; limit?: number }
+  ): Promise<any[]> {
+    const sid = String(supplierDocName || '').trim();
+    if (!sid) return [];
+    const logisticsField = deliveryNoteLogisticsFieldName();
+    const filters: any[][] = [
+      [logisticsField, '=', sid],
+      ['docstatus', '!=', 2],
+    ];
+    const fromD = (opts?.fromDate || '').trim();
+    const toD = (opts?.toDate || '').trim();
+    if (fromD) filters.push(['posting_date', '>=', fromD]);
+    if (toD) filters.push(['posting_date', '<=', toD]);
+    const lim = Math.min(Math.max(1, opts?.limit ?? 80), 150);
+    try {
+      return await this.listResourceRows('Delivery Note', {
+        filters,
+        fields: [
+          'name',
+          'customer',
+          'customer_name',
+          'posting_date',
+          'grand_total',
+          'status',
+          'currency',
+          'docstatus',
+          'company',
+          logisticsField,
+        ],
+        limit_page_length: lim,
+        order_by: 'posting_date desc',
+      });
+    } catch {
+      return [];
+    }
+  }
+
   /** **Payment Entries** where **party** is this **Customer** (typical Receive payments). */
   async listPaymentEntriesForCustomer(
     customerDocName: string,
@@ -8861,8 +8999,18 @@ class ERPNextClient {
     return await this.createAndSubmitPaymentEntry(toSave);
   }
 
+  private assertDeliveryNoteFreightPriceReadyForPayment(doc: Record<string, unknown>): void {
+    const option = this.readDeliveryNoteShippingOption(doc);
+    if (!deliveryNoteFreightPriceReadyForPayment(doc, option)) {
+      throw new Error(
+        'Freight price has not been entered yet. The supplier must fill Sales Taxes and Charges before payment.'
+      );
+    }
+  }
+
   /**
-   * Verify Paystack and record payment against the **delivery (shipping) portion** of a Delivery Note only.
+   * Verify a successful Paystack charge and create + submit a **Payment Entry**
+   * allocated to the Delivery Note (shipping/delivery fee). Idempotent per Paystack reference.
    */
   async recordPaystackPaymentAgainstDeliveryNote(args: {
     deliveryNoteName: string;
@@ -8894,6 +9042,7 @@ class ERPNextClient {
     if (!deliveryNoteAllowsDeliveryPayment(dn)) {
       throw new Error('This delivery note is not ready for delivery payment.');
     }
+    this.assertDeliveryNoteFreightPriceReadyForPayment(dn);
 
     const outstanding = await this.effectiveDeliveryNoteShippingOutstanding(dnName);
     if (!Number.isFinite(outstanding) || outstanding <= 0) {
@@ -9263,6 +9412,7 @@ class ERPNextClient {
     if (!deliveryNoteAllowsDeliveryPayment(dn)) {
       throw new Error('This delivery note is not ready for delivery payment.');
     }
+    this.assertDeliveryNoteFreightPriceReadyForPayment(dn);
 
     const outstanding = await this.effectiveDeliveryNoteShippingOutstanding(dnName);
     if (!Number.isFinite(outstanding) || outstanding <= 0) {

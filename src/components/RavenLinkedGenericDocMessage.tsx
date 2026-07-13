@@ -1,6 +1,7 @@
 import React, { useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { getERPNextBaseUrl } from '../services/erpnext';
 import { appAlert as Alert } from '../services/appAlert';
 import { ravenChatDocCardColors, ravenChatDocCardStyle, ravenChatDocSharedLabelStyle } from '../utils/ravenChatDocCard';
@@ -28,6 +29,7 @@ function buildDeskDocUrl(doctype: string, docname: string): string {
  * Matches Raven web’s “document chip” at a minimal level so the thread never shows an empty bubble.
  */
 export const RavenLinkedGenericDocMessage: React.FC<Props> = ({ linkDoctype, linkDocument, mine }) => {
+  const { t } = useTranslation();
   const dt = linkDoctype.trim();
   const dn = linkDocument.trim();
   const colors = ravenChatDocCardColors(mine);
@@ -48,7 +50,7 @@ export const RavenLinkedGenericDocMessage: React.FC<Props> = ({ linkDoctype, lin
       accessibilityRole="button"
       accessibilityLabel={`Open ${dt} ${dn}`}
     >
-      {mine ? <Text style={ravenChatDocSharedLabelStyle(mine)}>You shared</Text> : null}
+      {mine ? <Text style={ravenChatDocSharedLabelStyle(mine)}>{t('ravenShared.youShared')}</Text> : null}
       <View style={styles.head}>
         <Ionicons name="document-text-outline" size={22} color={colors.icon} style={{ marginRight: 8 }} />
         <Text style={[styles.headTitle, { color: colors.title }]} numberOfLines={1}>
@@ -59,7 +61,7 @@ export const RavenLinkedGenericDocMessage: React.FC<Props> = ({ linkDoctype, lin
         {dn}
       </Text>
       <View style={styles.row}>
-        <Text style={[styles.hint, { color: colors.hint }]}>View document</Text>
+        <Text style={[styles.hint, { color: colors.hint }]}>{t('ravenShared.viewDocument')}</Text>
         <Ionicons name="open-outline" size={18} color={colors.icon} />
       </View>
     </TouchableOpacity>
