@@ -22,7 +22,7 @@ export const SHIPPING_OPTIONS: ShippingOption[] = [
   {
     id: 'air_cargo',
     label: 'Air Cargo',
-    subtitle: 'Max 21 days delivery · KG · Pay goods upfront',
+    subtitle: 'Max 21 days delivery · KG · Payment before shipping',
     /** Must match ERPNext Select options on Delivery Note `custom_shipping_option`. */
     erpValue: 'Air Cargo',
     measureUnit: 'kg',

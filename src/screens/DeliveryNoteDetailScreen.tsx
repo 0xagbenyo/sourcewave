@@ -30,7 +30,6 @@ import {
   readDeliveryNoteEnterFreightAmount,
   readDeliveryNoteTaxRows,
   readDeliveryNoteTotalNetWeight,
-  shippingRatePerMeasureUnit,
   readDeliveryNoteIsSupplier,
   readDeliveryNoteLogistics,
   readDeliveryNoteSupplier,
@@ -301,7 +300,6 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
   );
   const erpTotalNetWeight = readDeliveryNoteTotalNetWeight(doc);
   const displayShippingFee = amountBreakdown?.shippingAmount ?? 0;
-  const feePerUnit = shippingRatePerMeasureUnit(displayShippingFee, erpTotalNetWeight);
 
   const shippingRuleDisplay =
     (canSupplierEdit || canBuyerEditShipping) && pendingShipping
@@ -520,16 +518,6 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
           label: t('deliveryNoteDetails.shippingRule'),
           value: shippingRuleLabel,
         },
-        right:
-          feePerUnit != null
-            ? {
-                label: t('deliveryNoteDetails.ratePerUnit', { unit: unitLabel }),
-                value: t('deliveryNoteDetails.ratePerUnitValue', {
-                  amount: formatErpDocMoney(feePerUnit, currency),
-                  unit: unitLabel,
-                }),
-              }
-            : undefined,
       },
     ];
 
@@ -552,7 +540,6 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
     deliveryPaid,
     shippingRuleLabel,
     erpTotalNetWeight,
-    feePerUnit,
     canEditDraftShipping,
     showDeliveryPayments,
     t,
@@ -939,17 +926,6 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
                   value={shippingRuleLabel}
                 />
               )}
-              {feePerUnit != null ? (
-                <DnRow
-                  label={t('deliveryNoteDetails.ratePerUnit', {
-                    unit: measureLabelForUnit(weightDisplayUnit),
-                  })}
-                  value={t('deliveryNoteDetails.ratePerUnitValue', {
-                    amount: formatErpDocMoney(feePerUnit, currency),
-                    unit: measureLabelForUnit(weightDisplayUnit),
-                  })}
-                />
-              ) : null}
               <View style={styles.segmentRow}>
                 <Text style={styles.segmentLabel}>{t('deliveryNoteDetails.isSupplier')}</Text>
                 <DnSegment
@@ -978,17 +954,6 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
                 label={t('deliveryNoteDetails.shippingRule')}
                 value={shippingRuleLabel}
               />
-              {feePerUnit != null ? (
-                <DnRow
-                  label={t('deliveryNoteDetails.ratePerUnit', {
-                    unit: measureLabelForUnit(weightDisplayUnit),
-                  })}
-                  value={t('deliveryNoteDetails.ratePerUnitValue', {
-                    amount: formatErpDocMoney(feePerUnit, currency),
-                    unit: measureLabelForUnit(weightDisplayUnit),
-                  })}
-                />
-              ) : null}
               <DnRow
                 label={t('deliveryNoteDetails.isSupplier')}
                 value={isSupplierFlag ? t('deliveryNoteDetails.yes') : t('deliveryNoteDetails.no')}

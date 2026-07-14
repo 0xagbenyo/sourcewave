@@ -658,14 +658,15 @@
     "statusDraft": "草稿",
     "statusSubmitted": "已提交",
     "totalWeight": "总重量",
-    "totalWeightValue": "{{weightKg}} 公斤（≈ {{weightCbm}} CBM）"
+    "totalWeightValue": "{{weightKg}} 公斤（≈ {{weightCbm}} CBM）",
+    "totalWeightValueKg": "{{weightKg}} 公斤"
   },
   "invoiceDelivery": {
     "shippingTitle": "选择运输方式",
     "shippingSubtitle": "在我们创建送货单之前，请选择此订单的运输方式。海运货物为货到付款。",
     "createDeliveryNote": "保存送货单",
     "arrangeDelivery": "安排配送",
-    "arrangeDeliverySub": "选择空运（需先付款）或海运（货到付款）",
+    "arrangeDeliverySub": "选择空运（发货前付款）或海运（货到付款）",
     "linkedDeliveryNote": "送货单 {{name}}",
     "linkedDeliveryNoteSub": "您的货物已安排发运",
     "linkedDeliveryNoteDraftSub": "",
@@ -677,7 +678,8 @@
     "failedTitle": "配送",
     "failedBody": "无法创建送货单。",
     "weightDetail": "共 {{weight}} {{unit}} · {{perUnit}} {{unit}}/件",
-    "weightDetailWithCbm": "共 {{weight}} 公斤 · {{perUnit}} 公斤/件（≈ {{weightCbm}} CBM · {{perUnitCbm}} CBM/件）"
+    "weightDetailWithCbm": "共 {{weight}} 公斤 · {{perUnit}} 公斤/件（≈ {{weightCbm}} CBM · {{perUnitCbm}} CBM/件）",
+    "weightDetailKg": "共 {{weight}} 公斤 · {{perUnit}} 公斤/件"
   },
   "deliveryNoteDetails": {
     "screenTitle": "送货单",

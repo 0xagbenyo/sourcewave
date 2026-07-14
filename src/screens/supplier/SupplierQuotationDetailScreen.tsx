@@ -15,6 +15,7 @@ import { Colors } from '../../constants/colors';
 import { pickLineDisplayImageUri } from '../../utils/erpLineItemImages';
 import { erpLineItemTitle } from '../../utils/erpLineItemDisplay';
 import {
+  erpDocTotalWeightDetailKg,
   erpDocTotalWeightDetailWithCbm,
   sumErpDocItemsTotalWeight,
 } from '../../utils/erpLineWeight';
@@ -181,7 +182,9 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
     doc?.customer_name || doc?.custom_bill_to_customer || doc?.customer || '—'
   );
   const totalWeightKg = useMemo(() => sumErpDocItemsTotalWeight(doc), [doc]);
-  const totalWeightDetail = erpDocTotalWeightDetailWithCbm(t, totalWeightKg);
+  const totalWeightDetail = isSupplierPortal
+    ? erpDocTotalWeightDetailWithCbm(t, totalWeightKg)
+    : erpDocTotalWeightDetailKg(t, totalWeightKg);
 
   const heroFactPairs = useMemo((): ErpDocHeroFactPair[] => {
     const rows: ErpDocHeroFactPair[] = [

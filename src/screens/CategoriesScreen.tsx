@@ -22,7 +22,11 @@ import { useTranslation } from 'react-i18next';
 import { ErpAuthenticatedImage } from '../components/ErpAuthenticatedImage';
 import { getERPNextClient } from '../services/erpnext';
 import { encodeErpFileUrl } from '../utils/erpImageUrl';
-import { isItemGroupTopLevelParentRow, isReservedItemGroupRow } from '../utils/itemGroup';
+import {
+  isDisabledItemGroupRow,
+  isItemGroupTopLevelParentRow,
+  isReservedItemGroupRow,
+} from '../utils/itemGroup';
 
 const { width } = Dimensions.get('window');
 const SIDEBAR_WIDTH = width * 0.32;
@@ -168,7 +172,7 @@ export const CategoriesScreen: React.FC = () => {
       const response = await client.getItemGroups();
 
       const children = response.filter((group: any) => {
-        if (isReservedItemGroupRow(group)) return false;
+        if (isReservedItemGroupRow(group) || isDisabledItemGroupRow(group)) return false;
         const parent = String(group.parent_item_group || '').trim();
         return parent === parentId || (!!parentName && parent === parentName);
       });

@@ -658,14 +658,15 @@
     "statusDraft": "Draft",
     "statusSubmitted": "Submitted",
     "totalWeight": "Total weight",
-    "totalWeightValue": "{{weightKg}} KG (≈ {{weightCbm}} CBM)"
+    "totalWeightValue": "{{weightKg}} KG (≈ {{weightCbm}} CBM)",
+    "totalWeightValueKg": "{{weightKg}} KG"
   },
   "invoiceDelivery": {
     "shippingTitle": "Choose shipping",
     "shippingSubtitle": "Select how you want this order shipped before we create your delivery note. Freight Cargo goods are payment upon arrival.",
     "createDeliveryNote": "Save delivery note",
     "arrangeDelivery": "Arrange delivery",
-    "arrangeDeliverySub": "Pick Air Cargo (pay goods first) or Freight Cargo (goods payment upon arrival)",
+    "arrangeDeliverySub": "Pick Air Cargo (payment before shipping) or Freight Cargo (goods payment upon arrival)",
     "linkedDeliveryNote": "Delivery note {{name}}",
     "linkedDeliveryNoteSub": "Your shipment has been scheduled",
     "linkedDeliveryNoteDraftSub": "",
@@ -677,7 +678,8 @@
     "failedTitle": "Delivery",
     "failedBody": "Could not create the delivery note.",
     "weightDetail": "{{weight}} {{unit}} total · {{perUnit}} {{unit}}/unit",
-    "weightDetailWithCbm": "{{weight}} KG total · {{perUnit}} KG/unit (≈ {{weightCbm}} CBM · {{perUnitCbm}} CBM/unit)"
+    "weightDetailWithCbm": "{{weight}} KG total · {{perUnit}} KG/unit (≈ {{weightCbm}} CBM · {{perUnitCbm}} CBM/unit)",
+    "weightDetailKg": "{{weight}} KG total · {{perUnit}} KG/unit"
   },
   "deliveryNoteDetails": {
     "screenTitle": "Delivery note",

@@ -414,12 +414,15 @@ export const useCategories = () => {
           });
         });
         
-        // Filter out ERPNext root / pseudo item groups (never show as browse categories)
+        // Filter out ERPNext root / pseudo item groups and custom_disabled groups
         const filteredGroups = erpGroups.filter((group: any) => {
           const n = String(group?.name ?? '').trim().toLowerCase();
           const lab = String(group?.item_group_name ?? '').trim().toLowerCase();
           const reserved = new Set(['all item groups', 'all items group', 'all item group']);
-          return !reserved.has(n) && !reserved.has(lab);
+          if (reserved.has(n) || reserved.has(lab)) return false;
+          const disabled = group?.custom_disabled;
+          if (disabled === 1 || disabled === '1' || disabled === true) return false;
+          return true;
         });
         
         const categories = filteredGroups.map((group) =>

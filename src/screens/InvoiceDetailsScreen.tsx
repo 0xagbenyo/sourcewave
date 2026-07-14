@@ -20,7 +20,9 @@ import { InvoiceShippingOptionSheet } from '../components/InvoiceShippingOptionS
 import { shippingOptionById, shippingOptionGoodsPaymentOnArrival, type ShippingOptionId } from '../constants/shippingOptions';
 import { userFacingError } from '../utils/userFacingError';
 import {
+  erpDocTotalWeightDetailKg,
   erpDocTotalWeightDetailWithCbm,
+  erpLineMeasureDetailKg,
   erpLineMeasureDetailWithCbm,
   sumErpDocItemsTotalWeight,
 } from '../utils/erpLineWeight';
@@ -272,11 +274,15 @@ export const InvoiceDetailsScreen: React.FC = () => {
   const lineWeightDetail = (item: {
     weightPerUnit?: number;
     totalWeight?: number;
-  }): string | undefined =>
-    erpLineMeasureDetailWithCbm(t, {
+  }): string | undefined => {
+    const weights = {
       weight_per_unit: item.weightPerUnit,
       total_weight: item.totalWeight,
-    });
+    };
+    return isSupplierPortal
+      ? erpLineMeasureDetailWithCbm(t, weights)
+      : erpLineMeasureDetailKg(t, weights);
+  };
 
   const totalWeightKg = React.useMemo(() => {
     if (!invoice?.items?.length) return 0;
@@ -288,7 +294,9 @@ export const InvoiceDetailsScreen: React.FC = () => {
       })),
     });
   }, [invoice?.items]);
-  const totalWeightDetail = erpDocTotalWeightDetailWithCbm(t, totalWeightKg);
+  const totalWeightDetail = isSupplierPortal
+    ? erpDocTotalWeightDetailWithCbm(t, totalWeightKg)
+    : erpDocTotalWeightDetailKg(t, totalWeightKg);
 
   return (
     <>

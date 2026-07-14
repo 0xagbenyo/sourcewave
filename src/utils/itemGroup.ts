@@ -15,6 +15,12 @@ export function isReservedItemGroupRow(group: any): boolean {
 	return false;
 }
 
+/** Item Group with custom_disabled = 1 should not appear on the Categories browse page. */
+export function isDisabledItemGroupRow(group: any): boolean {
+	const v = group?.custom_disabled ?? group?.customDisabled;
+	return v === 1 || v === '1' || v === true;
+}
+
 export const isTopLevelItemGroupParent = (parent: string | undefined | null): boolean => {
 	const p = String(parent ?? '').trim();
 	if (!p) return true;

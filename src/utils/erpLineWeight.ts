@@ -167,12 +167,32 @@ export function erpLineMeasureDetailWithCbm(
   });
 }
 
+/** Customer-facing line weight: KG only (no CBM approximation). */
+export function erpLineMeasureDetailKg(
+  t: TFunction,
+  weights: ErpLineWeightFields
+): string | undefined {
+  if (weights.total_weight == null && weights.weight_per_unit == null) return undefined;
+  return t('invoiceDelivery.weightDetailKg', {
+    weight: formatErpLineWeight(weights.total_weight ?? 0),
+    perUnit: formatErpLineWeight(weights.weight_per_unit ?? 0),
+  });
+}
+
 /** Document total weight in KG and CBM (quotations, invoices). */
 export function erpDocTotalWeightDetailWithCbm(t: TFunction, totalKg: number): string | undefined {
   if (!Number.isFinite(totalKg) || totalKg <= 0) return undefined;
   return t('invoiceDetails.totalWeightValue', {
     weightKg: formatErpLineWeight(totalKg),
     weightCbm: formatErpLineWeight(kgToCbm(totalKg)),
+  });
+}
+
+/** Customer-facing document total weight: KG only. */
+export function erpDocTotalWeightDetailKg(t: TFunction, totalKg: number): string | undefined {
+  if (!Number.isFinite(totalKg) || totalKg <= 0) return undefined;
+  return t('invoiceDetails.totalWeightValueKg', {
+    weightKg: formatErpLineWeight(totalKg),
   });
 }
 

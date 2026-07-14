@@ -4751,7 +4751,7 @@ class ERPNextClient {
   async getItemGroups(): Promise<any[]> {
     try {
       const response = await this.client.get(
-        `${API_VERSION}/Item Group?fields=["name","item_group_name","image","is_group","parent_item_group"]&limit_page_length=0`
+        `${API_VERSION}/Item Group?fields=["name","item_group_name","image","is_group","parent_item_group","custom_disabled"]&limit_page_length=0`
       );
       return response.data.data || [];
     } catch (error) {
