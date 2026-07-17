@@ -132,6 +132,7 @@ export const CustomerDeliveryNotesScreen: React.FC = () => {
             peerUserId: pick.peerUserId.trim(),
             workspaceId: pick.ravenWorkspaceId.trim(),
             sessionEmail: user?.email,
+            logisticsSupplierDocName: String(pick.logisticsSupplierDocName || '').trim() || undefined,
           });
           await showDeliveryNoteShareSentAndOpenChat({
             t,

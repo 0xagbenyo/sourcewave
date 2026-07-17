@@ -42,7 +42,7 @@ export function erpDocOwnedByOtherSupplier(
   const linked = String(linkedSupplierId || '').trim();
   const viewer = String(viewerSupplierDocId || '').trim();
   if (!linked || !viewer) return false;
-  return linked !== viewer;
+  return linked.toLowerCase() !== viewer.toLowerCase();
 }
 
 export async function resolveErpSupplierDisplayName(supplierDocId: string): Promise<string> {

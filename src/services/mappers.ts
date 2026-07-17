@@ -602,7 +602,12 @@ export const mapERPSalesOrderToOrder = (erpOrder: any): Order => {
     isDefault: true,
   };
 
-  const status = mapERPOrderStatusFromDocstatus(erpOrder.docstatus, erpOrder.status);
+  const status = mapERPOrderStatusFromDocstatus(erpOrder.docstatus, erpOrder.status, {
+    perDelivered: erpOrder.per_delivered,
+    perBilled: erpOrder.per_billed,
+    deliveryStatus: erpOrder.delivery_status,
+    billingStatus: erpOrder.billing_status,
+  });
   const supplierId = readSalesOrderSupplier(erpOrder as Record<string, unknown>);
 
   return {
@@ -640,32 +645,23 @@ export const mapERPSalesOrderToOrder = (erpOrder: any): Order => {
 
 /**
  * Map ERPNext order status to app status based on docstatus
- * docstatus: 0 = Draft, 1 = Submitted, 2 = Cancelled
- * Also consider the workflow status field for more detailed status
+ * docstatus: 0 = Draft, 1 = Submitted → Completed, 2 = Cancelled
  */
-const mapERPOrderStatusFromDocstatus = (docstatus: number, workflowStatus?: string): string => {
-  // First check docstatus (primary indicator)
-  if (docstatus === 0) {
-    return 'pending'; // Draft
-  } else if (docstatus === 2) {
-    return 'cancelled'; // Cancelled
-  } else if (docstatus === 1) {
-    // If submitted (docstatus = 1), use workflow status for more detail
-    if (workflowStatus) {
-      const statusMap: Record<string, string> = {
-        'Submitted': 'confirmed',
-        'Partial': 'processing',
-        'To Deliver': 'to_deliver',
-        'Completed': 'completed',
-        'Delivered': 'delivered',
-        'Returned': 'returned',
-      };
-      return statusMap[workflowStatus] || 'confirmed';
-    }
-    return 'confirmed'; // Default for submitted orders
+const mapERPOrderStatusFromDocstatus = (
+  docstatus: number | string | undefined | null,
+  _workflowStatus?: string,
+  _progress?: {
+    perDelivered?: number | string | null;
+    perBilled?: number | string | null;
+    deliveryStatus?: string | null;
+    billingStatus?: string | null;
   }
-  
-  // Fallback to pending if docstatus is unknown
+): string => {
+  const ds = Number(docstatus);
+  if (!Number.isFinite(ds) || ds === 0) return 'pending';
+  if (ds === 2) return 'cancelled';
+  // Submitted (and any other non-draft/non-cancelled) → Completed for buyers.
+  if (ds === 1) return 'completed';
   return 'pending';
 };
 

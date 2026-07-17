@@ -134,6 +134,8 @@ type ActionBarProps = {
   canSubmit: boolean;
   saving?: boolean;
   submitting?: boolean;
+  /** Guidance shown above the buttons (e.g. save first / ready to submit). */
+  hint?: string;
   onSave: () => void;
   onSubmit: () => void;
 };
@@ -146,38 +148,42 @@ export const DnActionBar: React.FC<ActionBarProps> = ({
   canSubmit,
   saving,
   submitting,
+  hint,
   onSave,
   onSubmit,
 }) => (
-  <View style={styles.actionBar}>
-    <TouchableOpacity
-      style={[styles.actionPrimary, !canSave && styles.actionPrimaryOff]}
-      onPress={onSave}
-      disabled={!canSave || saving}
-      activeOpacity={0.82}
-    >
-      {saving ? (
-        <ActivityIndicator size="small" color={Colors.WHITE} />
-      ) : (
-        <Text style={styles.actionPrimaryText}>{saveLabel}</Text>
-      )}
-    </TouchableOpacity>
-    {showSubmit ? (
+  <View style={styles.actionBarWrap}>
+    {hint ? <Text style={styles.actionHint}>{hint}</Text> : null}
+    <View style={styles.actionBar}>
       <TouchableOpacity
-        style={[styles.actionSecondary, !canSubmit && styles.actionSecondaryOff]}
-        onPress={onSubmit}
-        disabled={!canSubmit || submitting}
+        style={[styles.actionPrimary, !canSave && styles.actionPrimaryOff]}
+        onPress={onSave}
+        disabled={!canSave || saving}
         activeOpacity={0.82}
       >
-        {submitting ? (
-          <ActivityIndicator size="small" color={accent} />
+        {saving ? (
+          <ActivityIndicator size="small" color={Colors.WHITE} />
         ) : (
-          <Text style={[styles.actionSecondaryText, !canSubmit && styles.actionSecondaryTextOff]}>
-            {submitLabel}
-          </Text>
+          <Text style={styles.actionPrimaryText}>{saveLabel}</Text>
         )}
       </TouchableOpacity>
-    ) : null}
+      {showSubmit ? (
+        <TouchableOpacity
+          style={[styles.actionSecondary, !canSubmit && styles.actionSecondaryOff]}
+          onPress={onSubmit}
+          disabled={!canSubmit || submitting}
+          activeOpacity={0.82}
+        >
+          {submitting ? (
+            <ActivityIndicator size="small" color={accent} />
+          ) : (
+            <Text style={[styles.actionSecondaryText, !canSubmit && styles.actionSecondaryTextOff]}>
+              {submitLabel}
+            </Text>
+          )}
+        </TouchableOpacity>
+      ) : null}
+    </View>
   </View>
 );
 
@@ -367,15 +373,26 @@ const styles = StyleSheet.create({
     height: 2,
     backgroundColor: accent,
   },
-  actionBar: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
+  actionBarWrap: {
     width: '100%',
     minWidth: 0,
     borderTopWidth: hairline,
     borderTopColor: border,
     paddingTop: 12,
     paddingHorizontal: 16,
+    gap: 8,
+  },
+  actionHint: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: muted,
+    letterSpacing: -0.1,
+  },
+  actionBar: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    width: '100%',
+    minWidth: 0,
   },
   actionPrimary: {
     flex: 1,

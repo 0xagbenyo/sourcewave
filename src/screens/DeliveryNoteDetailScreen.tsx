@@ -86,6 +86,7 @@ import {
 } from '../components/ErpDocumentPreviewLayout';
 import { navigateShareDeliveryNoteToLogistics } from '../utils/navigateShareDeliveryNoteToLogistics';
 import { notifyDeliveryNoteEditedInChat } from '../utils/erpDocChatStatusReply';
+import { shareDeliveryNoteToCustomerFromDoc } from '../utils/shareDeliveryNoteInChat';
 import { ERP_DOC_FLAT } from '../constants/erpDocFlatUi';
 import { Colors } from '../constants/colors';
 
@@ -155,6 +156,7 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
   const [taxBaseline, setTaxBaseline] = useState<DeliveryNoteTaxRowDraft[]>([]);
   /** Prevents re-sync from wiping local add/edit/delete until the DN is reloaded. */
   const taxSyncKeyRef = useRef('');
+  const isDirtyRef = useRef(false);
   const [tab, setTab] = useState<DnTab>('details');
   const [deliveryOutstanding, setDeliveryOutstanding] = useState<number | null>(null);
   const [paySheetOpen, setPaySheetOpen] = useState(false);
@@ -314,9 +316,8 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
   const docTaxRows = useMemo(() => readDeliveryNoteTaxRows(doc), [doc]);
   const shippingRuleIsEmpty = !String(shippingRuleDisplay || '').trim();
   const shippingRuleLabel = shippingRuleIsEmpty ? '—' : shippingRuleDisplay;
-  /** Rule picker for suppliers only (not forced empty by Freight / Enter amount). */
-  const showShippingRuleEditor =
-    canSupplierEdit && !isFreightOption && !enterFreightAmount;
+  /** Suppliers can always change shipping rule on a draft (including switching off Enter amount). */
+  const showShippingRuleEditor = canSupplierEdit;
   const freightTaxesFilled = useMemo(() => {
     if (canSupplierEdit && enterFreightAmount) {
       return deliveryNoteFreightTaxesAreFilled(taxDrafts, erpTotalNetWeight);
@@ -497,6 +498,7 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
   ]);
 
   const isDirty = headerDirty || shippingDirty || freightDirty;
+  isDirtyRef.current = isDirty;
   const actionBusy = saving || submitting;
 
   const heroFactPairs = useMemo((): ErpDocHeroFactPair[] => {
@@ -595,6 +597,9 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
         const fromDoc = doc ? readDeliveryNoteTaxRows(doc) : [];
         return fromDoc.length ? fromDoc : [createBlankFreightTaxRow()];
       });
+    } else if (rule && canSupplierEdit) {
+      // Choosing a rule means use ERP shipping rule pricing — not manual enter-amount.
+      setEnterFreightAmount(false);
     }
     setRulePickerOpen(false);
   };
@@ -660,8 +665,14 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
     if (!dnId || !doc || actionBusy || !isDirty) return;
     if (!canEditDraftShipping) return;
     const shippingPatch = pendingShipping ? shippingPatchFromPending(pendingShipping, doc) : {};
-    if (canSupplierEdit && (isFreightOption || enterFreightAmount)) {
-      if (String(doc.shipping_rule || '').trim() || shippingPatch.shipping_rule) {
+    // Freight / enter-amount: clear rule only when the supplier left it empty (manual freight).
+    // If they picked a shipping rule, keep it and let ERP apply that rule.
+    if (
+      canSupplierEdit &&
+      (isFreightOption || enterFreightAmount) &&
+      !String(shippingPatch.shipping_rule ?? pendingShipping?.shipping_rule ?? '').trim()
+    ) {
+      if (String(doc.shipping_rule || '').trim() || shippingPatch.shipping_rule !== undefined) {
         shippingPatch.shipping_rule = '';
       }
     }
@@ -703,6 +714,13 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
           : {}),
     };
     if (Object.keys(patch).length === 0) return;
+    if (canSupplierEdit && !String(supplierDocId || '').trim()) {
+      Alert.alert(
+        t('deliveryNoteDetails.failedTitle'),
+        t('deliveryNoteDetails.supplierNotLinked')
+      );
+      return;
+    }
 
     setSaving(true);
     try {
@@ -735,7 +753,15 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
             ? getERPNextClient().readDeliveryNoteShippingOption(updated)
             : undefined,
       });
-      Alert.alert(t('deliveryNoteDetails.savedTitle'), t('deliveryNoteDetails.changesSaved'));
+      if (canSupplierEdit) {
+        void shareDeliveryNoteToCustomerFromDoc({
+          deliveryNoteName: dnId,
+          sessionEmail: user?.email ?? null,
+        }).catch((e) => {
+          console.warn('[DeliveryNote] share to customer after save failed', dnId, e);
+        });
+      }
+      isDirtyRef.current = false;
     } catch (e: unknown) {
       Alert.alert(t('deliveryNoteDetails.failedTitle'), userFacingError(e, t('deliveryNoteDetails.failedBody')));
     } finally {
@@ -745,7 +771,7 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
 
   const onSubmit = () => {
     if (!dnId || !canSupplierEdit || isSubmitted) return;
-    if (isDirty) {
+    if (isDirtyRef.current) {
       Alert.alert(t('deliveryNoteDetails.submitTitle'), t('deliveryNoteDetails.saveBeforeSubmit'));
       return;
     }
@@ -769,6 +795,7 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
       { text: t('deliveryNoteDetails.cancel'), style: 'cancel' },
       {
         text: t('deliveryNoteDetails.submitCta'),
+        style: 'destructive',
         onPress: () => void (async () => {
           if (!supplierDocId?.trim()) {
             Alert.alert(
@@ -1103,8 +1130,22 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
     </View>
   );
 
-  const canShareWithLogistics =
-    !canSupplierView && !!dnId && !!doc && Number(doc.docstatus) !== 2;
+  const canShareWithLogistics = useMemo(() => {
+    if (canSupplierView || !dnId || !doc || Number(doc.docstatus) === 2) return false;
+    const dnStatus = String(doc.status || '')
+      .trim()
+      .toLowerCase();
+    if (dnStatus === 'completed' || dnStatus === 'closed') return false;
+    // Hide once the delivery fee is fully paid.
+    if (
+      showDeliveryPayments &&
+      deliveryOutstanding != null &&
+      deliveryOutstanding <= 0.009
+    ) {
+      return false;
+    }
+    return true;
+  }, [canSupplierView, dnId, doc, showDeliveryPayments, deliveryOutstanding]);
 
   const onShareWithLogistics = useCallback(() => {
     if (!dnId || !canShareWithLogistics) return;
@@ -1205,6 +1246,17 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
                 canSubmit={canSupplierEdit && !isDirty && !actionBusy && canSubmitFreight}
                 saving={saving}
                 submitting={submitting}
+                hint={
+                  canSupplierEdit && !isSubmitted
+                    ? isDirty
+                      ? t('deliveryNoteDetails.unsavedChangesHint')
+                      : canSubmitFreight
+                        ? t('deliveryNoteDetails.readyToSubmitHint')
+                        : undefined
+                    : isDirty
+                      ? t('deliveryNoteDetails.unsavedChangesHint')
+                      : undefined
+                }
                 onSave={() => void onSaveAll()}
                 onSubmit={onSubmit}
               />
@@ -1228,7 +1280,7 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
         loading={rulesLoading}
         options={shippingRules}
         selectedName={shippingRuleDisplay || ''}
-        allowEmpty
+        allowEmpty={false}
         onClose={() => setRulePickerOpen(false)}
         onConfirm={(ruleName) => onPickShippingRule(ruleName)}
       />

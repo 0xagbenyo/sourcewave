@@ -50,7 +50,7 @@ import {
 function orderStatusAccent(status: string): string {
   const s = (status || 'pending') as OrderStatus;
   if (s === 'cancelled' || s === 'returned') return Colors.ERROR;
-  if (s === 'completed' || s === 'delivered') return '#248A3D';
+  if (s === 'completed' || s === 'delivered' || s === 'confirmed') return '#248A3D';
   if (s === 'pending') return '#C93400';
   return Colors.INFO;
 }

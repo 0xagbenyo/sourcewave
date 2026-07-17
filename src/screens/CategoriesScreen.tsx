@@ -30,13 +30,11 @@ import {
 
 const { width } = Dimensions.get('window');
 const SIDEBAR_WIDTH = width * 0.32;
-const MAIN_COLUMN_WIDTH = width - SIDEBAR_WIDTH;
 const GRID_COLUMNS = 2;
 const GRID_GAP = 10;
 const GRID_PAD = 12;
-const TILE_WIDTH =
-  (MAIN_COLUMN_WIDTH - GRID_PAD * 2 - GRID_GAP * (GRID_COLUMNS - 1)) / GRID_COLUMNS;
-const TILE_IMAGE_HEIGHT = Math.round(TILE_WIDTH * 0.92);
+/** Approx main column; tiles use % width so two always fit per row. */
+const TILE_IMAGE_HEIGHT = Math.round(((width - SIDEBAR_WIDTH - GRID_PAD * 2 - GRID_GAP) / 2) * 0.92);
 
 const AnimatedCategoryGridItem: React.FC<{
   category: any;
@@ -493,12 +491,13 @@ const styles = StyleSheet.create({
   childCategoriesList: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+    justifyContent: 'space-between',
     paddingHorizontal: GRID_PAD,
     paddingBottom: GRID_PAD,
-    gap: GRID_GAP,
+    rowGap: GRID_GAP,
   },
   gridTile: {
-    width: TILE_WIDTH,
+    width: '48%',
   },
   gridTileTouchable: {
     width: '100%',

@@ -363,6 +363,8 @@ export type RootStackParamList = {
           peerUserId: string;
           ravenWorkspaceId: string;
           supplierLabel?: string;
+          /** ERPNext Supplier.name — stamps custom_logistics on share. */
+          logisticsSupplierDocName?: string;
         };
       }
     | undefined;

@@ -36,7 +36,7 @@ type OrderKind = 'pending' | 'active' | 'done' | 'cancelled' | 'neutral';
 
 const statusLabels: Record<string, string> = {
   pending: 'Pending',
-  confirmed: 'Confirmed',
+  confirmed: 'Completed',
   processing: 'Processing',
   to_deliver: 'To deliver',
   completed: 'Completed',
@@ -70,9 +70,9 @@ function matchesStatusFilter(order: Order, f: StatusFilterKey): boolean {
   const s = (order.status || 'pending') as OrderStatus;
   if (f === 'all') return true;
   if (f === 'pending') return s === 'pending';
-  if (f === 'processing') return s === 'processing' || s === 'confirmed';
+  if (f === 'processing') return s === 'processing';
   if (f === 'to_deliver') return s === 'to_deliver' || s === 'shipped';
-  if (f === 'completed') return s === 'completed' || s === 'delivered';
+  if (f === 'completed') return s === 'completed' || s === 'delivered' || s === 'confirmed';
   if (f === 'cancelled') return s === 'cancelled' || s === 'returned';
   return true;
 }
@@ -80,9 +80,9 @@ function matchesStatusFilter(order: Order, f: StatusFilterKey): boolean {
 function orderUiKind(status: string): OrderKind {
   const s = (status || 'pending') as OrderStatus;
   if (s === 'cancelled' || s === 'returned') return 'cancelled';
-  if (s === 'completed' || s === 'delivered') return 'done';
+  if (s === 'completed' || s === 'delivered' || s === 'confirmed') return 'done';
   if (s === 'pending') return 'pending';
-  if (s === 'processing' || s === 'confirmed' || s === 'to_deliver' || s === 'shipped') return 'active';
+  if (s === 'processing' || s === 'to_deliver' || s === 'shipped') return 'active';
   return 'neutral';
 }
 
@@ -248,7 +248,10 @@ export const OrderHistoryScreen: React.FC = () => {
 
   const renderOrderRow = ({ item }: { item: Order }) => {
     if (!item?.id) return null;
-    const statusLabel = statusLabels[item.status] || statusLabels.pending;
+    const statusKey = (item.status || 'pending') as OrderStatus;
+    const statusLabel = t(`orderDetails.status.${statusKey}`, {
+      defaultValue: statusLabels[statusKey] || statusLabels.pending,
+    });
     const kind = orderUiKind(item.status);
     const chip = chipColors(kind);
     const accent = accentForOrderKind(kind);

@@ -368,7 +368,7 @@
     "estimatedDelivery": "Estimated delivery",
     "status": {
       "pending": "Pending",
-      "confirmed": "Confirmed",
+      "confirmed": "Completed",
       "processing": "Processing",
       "to_deliver": "To deliver",
       "completed": "Completed",
@@ -634,7 +634,7 @@
     "reviseResendA11y": "Revise and send a new quotation"
   },
   "erpDocumentParty": {
-    "approvedByOtherNotice": "You can't edit this because it was approved by another supplier or logistics company.",
+    "approvedByOtherNotice": "This delivery note is assigned to another logistics supplier. Only they can edit it.",
     "supplierSection": "Supplier",
     "supplierField": "Assigned supplier",
     "noSupplierAssigned": "No supplier assigned",
@@ -705,13 +705,17 @@
     "saveDetails": "Save delivery details",
     "saveChanges": "Save",
     "changesSaved": "Your changes have been saved.",
+    "changesSavedAskSubmit": "Your changes have been saved and sent to the customer in chat. Submit the delivery note when you are ready so these updates are finalized.",
+    "unsavedChangesHint": "You have unsaved changes. Tap Save before submitting.",
+    "readyToSubmitHint": "Saved. Tap Submit to finalize this delivery note.",
     "submitCta": "Submit",
-    "submitTitle": "Submit delivery note",
-    "submitConfirm": "Submit this delivery note? You will not be able to edit it after submission.",
+    "submitTitle": "Submit delivery note?",
+    "submitConfirm": "Are you sure you want to submit? After submission you cannot edit this delivery note.",
     "submitSuccess": "Delivery note submitted.",
     "submitFailed": "Could not submit the delivery note.",
     "supplierNotLinked": "Your account is not linked to a supplier profile. Contact your administrator before submitting.",
     "saveBeforeSubmit": "Save your changes before submitting.",
+    "submitLater": "Not now",
     "cancel": "Cancel",
     "tabDetails": "Details",
     "tabItems": "Items",
@@ -830,7 +834,7 @@
     "subtitle": "Shipments where you are the logistics supplier",
     "noSupplier": "No supplier profile linked to this account.",
     "emptyTitle": "No delivery notes yet",
-    "emptySub": "Delivery notes you save or submit as logistics will appear here."
+    "emptySub": "Draft notes shared with you (and notes you save or submit) appear here. Open a draft to edit, then save and submit."
   },
   "erpPayments": {
     "invoiceTotal": "Invoice total",

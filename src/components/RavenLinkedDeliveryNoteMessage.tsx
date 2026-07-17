@@ -3,6 +3,9 @@ import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'rea
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { RavenLight } from '../constants/ravenLightTheme';
+import { getERPNextClient } from '../services/erpnext';
+import { useUserSession } from '../context/UserContext';
+import { isSupplierPortalUser } from '../utils/isSupplierPortalUser';
 import {
   deliveryNoteShippingFeeAmount,
   linkedSalesInvoiceFromDeliveryNote,
@@ -39,7 +42,9 @@ function statusLabel(docstatus: unknown, status: unknown): string {
 /** In-chat card for a linked **Delivery Note** (buyer shares with a logistics company). */
 export const RavenLinkedDeliveryNoteMessage: React.FC<Props> = ({ deliveryNoteName, mine }) => {
   const navigation = useNavigation();
+  const { user } = useUserSession();
   const name = deliveryNoteName.trim();
+  const isSupplierPortal = isSupplierPortalUser(user);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -96,11 +101,15 @@ export const RavenLinkedDeliveryNoteMessage: React.FC<Props> = ({ deliveryNoteNa
   const openDetails = useCallback(() => {
     if (!name) return;
     try {
-      navigateToDeliveryNoteDetail(navigation as { navigate: (n: string, p?: object) => void }, name, false);
+      navigateToDeliveryNoteDetail(
+        navigation as { navigate: (n: string, p?: object) => void },
+        name,
+        isSupplierPortal
+      );
     } catch (e: unknown) {
       Alert.alert('Delivery note', userFacingError(e, 'Could not open this delivery note.'));
     }
-  }, [navigation, name]);
+  }, [navigation, name, isSupplierPortal]);
 
   const colors = ravenChatDocCardColors(mine);
 

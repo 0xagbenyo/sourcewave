@@ -71,12 +71,16 @@ export async function shareDeliveryNoteInRavenChat(
   setPendingRavenDocLinkMessageMerge(chId, sentRaw);
 }
 
-/** Resolve or create a DM with a logistics peer, then post the delivery note link. */
+/** Resolve or create a DM with a logistics peer, then post the delivery note link.
+ * Optionally stamps **custom_logistics** so the note appears in that supplier’s draft list.
+ */
 export async function shareDeliveryNoteToLogisticsPeer(opts: {
   deliveryNoteName: string;
   peerUserId: string;
   workspaceId?: string;
   sessionEmail?: string | null;
+  /** ERPNext Supplier.name for the logistics company — claims the DN for their list. */
+  logisticsSupplierDocName?: string;
 }): Promise<{ channelId: string; peerUserId: string; workspaceId: string }> {
   const dnName = String(opts.deliveryNoteName || '').trim();
   const peerUserId = String(opts.peerUserId || '').trim();
@@ -86,6 +90,16 @@ export async function shareDeliveryNoteToLogisticsPeer(opts: {
   }
 
   await assertDeliveryNoteShareable(dnName);
+
+  const logisticsSid = String(opts.logisticsSupplierDocName || '').trim();
+  if (logisticsSid) {
+    try {
+      await getERPNextClient().claimDeliveryNoteLogistics(dnName, logisticsSid);
+    } catch (e) {
+      console.warn('[shareDeliveryNote] claim logistics failed', dnName, e);
+    }
+  }
+
   const raw = await getERPNextClient().getDeliveryNoteRaw(dnName);
   const caption = raw ? await buildDeliveryNoteShareCaption(raw, dnName) : dnName;
 
@@ -97,6 +111,43 @@ export async function shareDeliveryNoteToLogisticsPeer(opts: {
 
   await shareDeliveryNoteInRavenChat(ch, dnName, caption);
   return { channelId: ch, peerUserId, workspaceId };
+}
+
+/**
+ * After a logistics supplier saves a delivery note, send (or re-send) it to the DN **customer** in Raven chat.
+ */
+export async function shareDeliveryNoteToCustomerFromDoc(opts: {
+  deliveryNoteName: string;
+  sessionEmail?: string | null;
+}): Promise<{ channelId: string; peerUserId: string } | null> {
+  const dnName = String(opts.deliveryNoteName || '').trim();
+  if (!dnName) return null;
+
+  const client = getERPNextClient();
+  const raw = await client.getDeliveryNoteRaw(dnName);
+  if (!raw) return null;
+
+  const customerId = String(raw.customer || '').trim();
+  if (!customerId) {
+    console.warn('[shareDeliveryNote] no customer on delivery note', dnName);
+    return null;
+  }
+
+  const peerUserId = await client.resolveFrappeUserIdForCustomer(customerId);
+  if (!peerUserId) {
+    console.warn('[shareDeliveryNote] no chat user for customer', customerId, dnName);
+    return null;
+  }
+
+  const caption = await buildDeliveryNoteShareCaption(raw, dnName);
+  const ch = await resolveRavenChannelForSupplierShare({
+    sessionEmail: opts.sessionEmail,
+    peerUserId,
+  });
+  if (!ch) return null;
+
+  await shareDeliveryNoteInRavenChat(ch, dnName, caption);
+  return { channelId: ch, peerUserId };
 }
 
 export { resolveRavenChannelForSupplierShare };

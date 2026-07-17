@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { RefreshControl } from 'react-native';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { getERPNextClient } from '../../services/erpnext';
 import { useUserSession } from '../../context/UserContext';
@@ -123,6 +123,13 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
     };
   }, [loadLinkedInvoices]);
 
+  useFocusEffect(
+    useCallback(() => {
+      if (isSupplierPortal) return;
+      void loadLinkedInvoices();
+    }, [isSupplierPortal, loadLinkedInvoices])
+  );
+
   const items = useMemo(
     () => (Array.isArray(doc?.items) ? (doc!.items as Record<string, unknown>[]) : []),
     [doc]
@@ -212,7 +219,84 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
   const showBuyerActions = !isSupplierPortal && buyerReview.canReviewDoc(doc);
   const buyerAcceptedAwaitingInvoice =
     !isSupplierPortal && buyerReview.outcome === 'accepted' && !primaryInvoiceName;
-  const canBuyerPayInvoice = !isSupplierPortal && !!primaryInvoiceName;
+
+  const [invoiceFlowComplete, setInvoiceFlowComplete] = useState(false);
+
+  useEffect(() => {
+    if (isSupplierPortal || !primaryInvoiceName) {
+      setInvoiceFlowComplete(false);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const client = getERPNextClient();
+        let invoicePaid = false;
+
+        // Prefer a fresh invoice read — list rows can lag behind payments.
+        try {
+          const inv = await client.getSalesInvoiceRaw(primaryInvoiceName);
+          if (inv) {
+            const outstanding = client.effectiveSalesInvoiceOutstanding(
+              inv as Record<string, unknown>
+            );
+            const st = String(inv.status || '')
+              .trim()
+              .toLowerCase();
+            invoicePaid =
+              outstanding <= 0.009 ||
+              st === 'paid' ||
+              st === 'completed' ||
+              st === 'credit note issued';
+          }
+        } catch {
+          const outstanding = Number(primaryInvoice?.outstanding_amount);
+          const st = String(primaryInvoice?.status || '')
+            .trim()
+            .toLowerCase();
+          invoicePaid =
+            (Number.isFinite(outstanding) && outstanding <= 0.009) ||
+            st === 'paid' ||
+            st === 'completed';
+        }
+
+        let orderCompleted = false;
+        if (linkedSalesOrderName) {
+          try {
+            const so = await client.getSalesOrder(linkedSalesOrderName);
+            const soStatus = String(so?.status || '')
+              .trim()
+              .toLowerCase();
+            orderCompleted =
+              soStatus === 'completed' ||
+              soStatus === 'closed' ||
+              (Number(so?.per_delivered) >= 99.99 && Number(so?.per_billed) >= 99.99);
+          } catch {
+            orderCompleted = false;
+          }
+        }
+
+        if (!cancelled) {
+          // Hide pay/delivery CTA once the invoice is paid (or the sales order is completed).
+          setInvoiceFlowComplete(invoicePaid || orderCompleted);
+        }
+      } catch {
+        if (!cancelled) setInvoiceFlowComplete(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isSupplierPortal,
+    primaryInvoiceName,
+    primaryInvoice?.outstanding_amount,
+    primaryInvoice?.status,
+    linkedSalesOrderName,
+  ]);
+
+  const canBuyerPayInvoice =
+    !isSupplierPortal && !!primaryInvoiceName && !invoiceFlowComplete;
 
   useEffect(() => {
     if (!buyerAcceptedAwaitingInvoice) return;

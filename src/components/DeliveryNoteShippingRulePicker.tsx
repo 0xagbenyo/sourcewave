@@ -29,7 +29,7 @@ type Props = {
   loading?: boolean;
   options: ShippingRuleOption[];
   selectedName?: string | null;
-  /** When true, include an empty-rule choice for logistics to suggest later. */
+  /** When true, include an empty-rule choice for customers (“let logistics suggest”). Suppliers should pass false. */
   allowEmpty?: boolean;
   onClose: () => void;
   onConfirm: (ruleName: string) => void;
@@ -41,7 +41,7 @@ export const DeliveryNoteShippingRulePicker: React.FC<Props> = ({
   loading = false,
   options,
   selectedName,
-  allowEmpty = true,
+  allowEmpty = false,
   onClose,
   onConfirm,
 }) => {

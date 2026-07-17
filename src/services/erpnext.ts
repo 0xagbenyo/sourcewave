@@ -3119,8 +3119,18 @@ class ERPNextClient {
 
     const logisticsDoc = String(opts?.supplierDocName || '').trim();
     const logisticsField = deliveryNoteLogisticsFieldName();
+    const existingLogisticsOnSubmit = String(fresh[logisticsField] ?? '').trim();
+    if (
+      existingLogisticsOnSubmit &&
+      logisticsDoc &&
+      existingLogisticsOnSubmit.toLowerCase() !== logisticsDoc.toLowerCase()
+    ) {
+      throw new Error(
+        'This delivery note is already assigned to another logistics supplier. Only that supplier can submit it.'
+      );
+    }
 
-    if (logisticsDoc) {
+    if (logisticsDoc && !existingLogisticsOnSubmit) {
       fresh = { ...fresh, [logisticsField]: logisticsDoc };
       const savedRaw = await this.callFrappeMethodRavenOrApi('frappe.client.save', { doc: fresh });
       const saved = (savedRaw?.message ?? savedRaw) as Record<string, unknown> | undefined;
@@ -3339,6 +3349,19 @@ class ERPNextClient {
       throw new Error('Only draft delivery notes can be edited.');
     }
 
+    const logisticsField = deliveryNoteLogisticsFieldName();
+    const logisticsClaim = String(opts?.logisticsSupplierDocName || '').trim();
+    const existingLogistics = String(fresh[logisticsField] ?? '').trim();
+    if (
+      existingLogistics &&
+      logisticsClaim &&
+      existingLogistics.toLowerCase() !== logisticsClaim.toLowerCase()
+    ) {
+      throw new Error(
+        'This delivery note is already assigned to another logistics supplier. Only that supplier can edit it.'
+      );
+    }
+
     const doc: Record<string, unknown> = { ...fresh };
     const valuationRate = this.deliveryNoteDefaultValuationRate();
     const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
@@ -3367,8 +3390,12 @@ class ERPNextClient {
       shippingOptionGoodsPaymentOnArrival(nextOption) ||
       shippingOptionGoodsPaymentOnArrival(savedOption);
 
-    /** Freight + enter-freight: never keep a shipping rule. */
-    if (freightOption || enterFreight) {
+    /** Supplier may set an explicit shipping rule; only clear when enter-freight / freight with no rule. */
+    const explicitRuleProvided = patch.shipping_rule !== undefined;
+    const explicitRule = explicitRuleProvided ? String(patch.shipping_rule || '').trim() : '';
+    if (explicitRuleProvided && explicitRule) {
+      nextRule = explicitRule;
+    } else if (freightOption || enterFreight) {
       nextRule = '';
     }
 
@@ -3392,9 +3419,10 @@ class ERPNextClient {
         shippingOptionErpValueForRuleName(nextRule) ||
         savedOption;
       doc[this.deliveryNoteShippingOptionField()] = syncedOption;
-      // Preserve intentional empty shipping rule (logistics to suggest) — do not
-      // fall back to the shipping option name as a rule.
-      if (freightOption || enterFreight) {
+      // Explicit non-empty rule from supplier wins; otherwise freight/enter-amount stays rule-less.
+      if (explicitRuleProvided && explicitRule) {
+        doc.shipping_rule = explicitRule;
+      } else if (freightOption || enterFreight) {
         doc.shipping_rule = '';
       } else if (patch.shipping_rule !== undefined) {
         doc.shipping_rule = nextRule;
@@ -3462,19 +3490,29 @@ class ERPNextClient {
       }
     }
 
-    const logisticsClaim = String(opts?.logisticsSupplierDocName || '').trim();
     if (logisticsClaim) {
-      const logisticsField = deliveryNoteLogisticsFieldName();
-      const existingLogistics = String(doc[logisticsField] ?? '').trim();
-      if (!existingLogistics) {
+      const currentLogistics = String(doc[logisticsField] ?? '').trim();
+      // First supplier to save claims the note; later saves keep the same owner.
+      if (!currentLogistics) {
         doc[logisticsField] = logisticsClaim;
       }
     }
 
-    const savedRaw = await this.callFrappeMethod('frappe.client.save', { doc });
+    const savedRaw = await this.callFrappeMethodRavenOrApi('frappe.client.save', { doc });
     const saved = (savedRaw?.message ?? savedRaw) as Record<string, unknown>;
     const dnName = String(saved?.name || n).trim();
-    const reloaded = await this.getDeliveryNoteRaw(dnName);
+    let reloaded = await this.getDeliveryNoteRaw(dnName);
+
+    // Ensure custom_logistics persists even if the full-doc save dropped the custom field.
+    if (logisticsClaim && !String(reloaded?.[logisticsField] ?? saved?.[logisticsField] ?? '').trim()) {
+      try {
+        await this.claimDeliveryNoteLogistics(dnName, logisticsClaim);
+        reloaded = (await this.getDeliveryNoteRaw(dnName)) ?? reloaded;
+      } catch (e) {
+        console.warn('[ERPNext] delivery note logistics claim after save failed', dnName, e);
+      }
+    }
+
     return reloaded ?? saved;
   }
 
@@ -4245,6 +4283,10 @@ class ERPNextClient {
           'company',
           'status',
           'docstatus',
+          'per_delivered',
+          'per_billed',
+          'delivery_status',
+          'billing_status',
           'total',
           'transaction_date',
           'grand_total',
@@ -7472,6 +7514,81 @@ class ERPNextClient {
     } else {
       await this.callFrappeMethod('frappe.client.set_value', kwargs);
     }
+  }
+
+  /**
+   * Stamp Delivery Note **custom_logistics** (or env field) when sharing with a logistics supplier,
+   * so the note appears in their list as a draft they can edit. Does not overwrite another logistics company.
+   */
+  async claimDeliveryNoteLogistics(
+    deliveryNoteName: string,
+    logisticsSupplierDocName: string
+  ): Promise<boolean> {
+    const n = String(deliveryNoteName || '').trim();
+    const sid = String(logisticsSupplierDocName || '').trim();
+    if (!n || !sid) return false;
+    const fresh = await this.getDeliveryNoteRaw(n);
+    if (!fresh || Number(fresh.docstatus) === 2) return false;
+    const field = deliveryNoteLogisticsFieldName();
+    const existing = String(fresh[field] ?? '').trim();
+    if (existing) {
+      return existing.toLowerCase() === sid.toLowerCase();
+    }
+    await this.setDocFieldValue('Delivery Note', n, field, sid);
+    return true;
+  }
+
+  /**
+   * Resolve a Frappe **User** id for a **Customer** (Raven User.custom_customer → portal_users → email_id).
+   * Used to DM the customer when a logistics supplier saves a delivery note.
+   */
+  async resolveFrappeUserIdForCustomer(customerName: string): Promise<string | null> {
+    const cid = String(customerName || '').trim();
+    if (!cid) return null;
+
+    const listRows = async (
+      doctype: string,
+      options?: {
+        filters?: any[][];
+        fields?: string[];
+        limit_page_length?: number;
+      }
+    ) => {
+      const { hasFrappeRavenSession, ravenListResourceRows } = await import('./frappeRavenSession');
+      if (hasFrappeRavenSession()) {
+        return ravenListResourceRows(doctype, options);
+      }
+      return this.listResourceRows(doctype, options);
+    };
+
+    try {
+      const ruRows = await listRows('Raven User', {
+        filters: [['custom_customer', '=', cid]],
+        fields: ['name', 'user', 'custom_customer'],
+        limit_page_length: 10,
+      });
+      for (const row of ruRows || []) {
+        const u = String((row as { user?: string }).user || '').trim();
+        if (u) return u;
+      }
+    } catch {
+      /* Raven User / custom_customer may be unavailable */
+    }
+
+    try {
+      const cust = await this.getCustomer(cid);
+      const portal = Array.isArray(cust?.portal_users) ? cust.portal_users : [];
+      for (const pu of portal) {
+        const u = String((pu as { user?: string })?.user || '').trim();
+        if (u) return u;
+      }
+      const email = String(cust?.email_id || '').trim();
+      if (email) return email;
+    } catch {
+      /* ignore */
+    }
+
+    return null;
   }
 
   /**

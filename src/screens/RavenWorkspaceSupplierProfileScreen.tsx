@@ -357,6 +357,7 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
         peerUserId: adminId,
         workspaceId: wsId,
         sessionEmail: user?.email,
+        logisticsSupplierDocName: String(profile?.name || '').trim() || undefined,
       });
       emitRavenOpenChatFromProfile({
         workspaceId: wsId,
@@ -384,6 +385,7 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
     navigation,
     sharingDeliveryNote,
     user?.email,
+    profile?.name,
     t,
   ]);
 
@@ -401,6 +403,7 @@ export const RavenWorkspaceSupplierProfileScreen: React.FC = () => {
         peerUserId: adminId,
         ravenWorkspaceId: wsId,
         supplierLabel: profile?.supplier_name || profile?.name || '',
+        logisticsSupplierDocName: String(profile?.name || '').trim() || undefined,
       },
     });
   }, [adminId, adminIdLower, viewerId, wsId, navigation, profile?.supplier_name, profile?.name, t]);

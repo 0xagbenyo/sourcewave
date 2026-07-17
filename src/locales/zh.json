@@ -368,7 +368,7 @@
     "estimatedDelivery": "预计送达",
     "status": {
       "pending": "待处理",
-      "confirmed": "已确认",
+      "confirmed": "已完成",
       "processing": "处理中",
       "to_deliver": "待发货",
       "completed": "已完成",
@@ -634,7 +634,7 @@
     "reviseResendA11y": "修改并发送新报价"
   },
   "erpDocumentParty": {
-    "approvedByOtherNotice": "您无法编辑此项，因为它已由其他供应商或物流公司批准。",
+    "approvedByOtherNotice": "此送货单已分配给其他物流供应商，仅对方可编辑。",
     "supplierSection": "供应商",
     "supplierField": "指定供应商",
     "noSupplierAssigned": "未指定供应商",
@@ -705,13 +705,17 @@
     "saveDetails": "保存配送详情",
     "saveChanges": "保存",
     "changesSaved": "您的更改已保存。",
+    "changesSavedAskSubmit": "您的更改已保存，并已在聊天中发送给客户。准备好后请提交送货单，以确认这些更新。",
+    "unsavedChangesHint": "您有未保存的更改。提交前请先点击保存。",
+    "readyToSubmitHint": "已保存。点击提交以确认此送货单。",
     "submitCta": "提交",
-    "submitTitle": "提交送货单",
-    "submitConfirm": "提交此送货单？提交后将无法编辑。",
+    "submitTitle": "提交送货单？",
+    "submitConfirm": "确定要提交吗？提交后将无法再编辑此送货单。",
     "submitSuccess": "送货单已提交。",
     "submitFailed": "无法提交送货单。",
     "supplierNotLinked": "您的账户未关联供应商资料。请在提交前联系管理员。",
     "saveBeforeSubmit": "提交前请保存您的更改。",
+    "submitLater": "稍后",
     "cancel": "取消",
     "tabDetails": "详情",
     "tabItems": "商品",
@@ -830,7 +834,7 @@
     "subtitle": "您作为物流供应商负责的货运",
     "noSupplier": "此账户未关联供应商资料。",
     "emptyTitle": "暂无送货单",
-    "emptySub": "您作为物流保存或提交的送货单将显示在此处。"
+    "emptySub": "分享给您的草稿（以及您保存或提交的送货单）会显示在此处。打开草稿可编辑，然后保存并提交。"
   },
   "erpPayments": {
     "invoiceTotal": "发票总计",
