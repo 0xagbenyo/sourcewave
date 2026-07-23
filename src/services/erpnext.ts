@@ -26,6 +26,7 @@ import {
   cbmToKg,
   readErpLineWeightFromRow,
 } from '../utils/erpLineWeight';
+import { DEFAULT_ERPNEXT_URL } from '../constants/env';
 import {
   shippingOptionErpValueForRuleName,
   shippingMeasureUnitForContext,
@@ -56,11 +57,13 @@ import {
   deliveryNoteIsSupplierErpValue,
   deliveryNoteIsSupplierFieldName,
   deliveryNoteShippingOutstanding,
+  deliveryNoteShippingFeeAmount,
   deliveryNoteLogisticsFieldName,
   deliveryNoteSupplierFieldName,
   deliveryNoteTaxesPayloadFromDrafts,
   deliveryNoteFreightTaxesAreFilled,
   deliveryNoteFreightPriceReadyForPayment,
+  linkedSalesInvoiceFromDeliveryNote,
   paymentEntryDeliveryNoteFieldName,
   readDeliveryNoteEnterFreightAmount,
   readDeliveryNoteIsSupplier,
@@ -68,6 +71,7 @@ import {
   readDeliveryNoteSupplier,
   readDeliveryNoteTaxRows,
   readDeliveryNoteTotalNetWeight,
+  sumPaidTowardDeliveryNote,
   type DeliveryNoteTaxRowDraft,
 } from '../utils/deliveryNoteAmounts';
 import { readSalesInvoiceSupplier } from '../utils/erpSalesInvoiceSupplier';
@@ -78,7 +82,7 @@ import {
 } from '../utils/erpDateInput';
 
 // Configuration
-const ERPNEXT_BASE_URL = process.env.EXPO_PUBLIC_ERPNEXT_URL || 'http://localhost:8000';
+const ERPNEXT_BASE_URL = process.env.EXPO_PUBLIC_ERPNEXT_URL?.trim() || DEFAULT_ERPNEXT_URL;
 const API_VERSION = '/api/resource';
 
 // Default API timeout (JSON / resource calls). Override via EXPO_PUBLIC_ERPNEXT_TIMEOUT.
@@ -471,7 +475,7 @@ function responseBodyLooksLikeHtml(data: unknown, contentType: string | undefine
  */
 export function normalizeFrappeApiBaseUrl(raw: string): string {
   const trimmed = raw.trim().replace(/\/+$/, '');
-  if (!trimmed) return 'http://localhost:8000';
+  if (!trimmed) return DEFAULT_ERPNEXT_URL;
   const withProto = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
   let u: URL;
   try {
@@ -3059,19 +3063,62 @@ class ERPNextClient {
   async listDeliveryNotesForSalesInvoice(invoiceName: string): Promise<any[]> {
     const n = String(invoiceName || '').trim();
     if (!n) return [];
+    const filters: any[][] = [['Delivery Note Item', 'against_sales_invoice', '=', n]];
     try {
       const data = await this.callFrappeMethod('frappe.client.get_list', {
         doctype: 'Delivery Note',
-        filters: [['Delivery Note Item', 'against_sales_invoice', '=', n]],
-        fields: ['name', 'docstatus', 'status'],
+        filters,
+        fields: ['name', 'docstatus', 'status', 'grand_total'],
         limit_page_length: 20,
         distinct: true,
       });
       const rows = data?.message ?? data;
       const list = Array.isArray(rows) ? rows : [];
-      return list.filter((d) => Number(d?.docstatus) !== 2);
+      const filtered = list.filter((d) => Number(d?.docstatus) !== 2);
+      if (filtered.length) return filtered;
     } catch (e) {
       console.warn('[ERPNext] listDeliveryNotesForSalesInvoice failed', e);
+    }
+    try {
+      const rows = await this.listResourceRows('Delivery Note', {
+        filters,
+        fields: ['name', 'docstatus', 'status', 'grand_total'],
+        limit_page_length: 20,
+      });
+      return (rows || []).filter((d) => Number(d?.docstatus) !== 2);
+    } catch {
+      return [];
+    }
+  }
+
+  /** List non-cancelled Delivery Notes linked to a Sales Order (item `against_sales_order`). */
+  async listDeliveryNotesForSalesOrder(salesOrderName: string): Promise<any[]> {
+    const n = String(salesOrderName || '').trim();
+    if (!n) return [];
+    const filters: any[][] = [['Delivery Note Item', 'against_sales_order', '=', n]];
+    try {
+      const data = await this.callFrappeMethod('frappe.client.get_list', {
+        doctype: 'Delivery Note',
+        filters,
+        fields: ['name', 'docstatus', 'status', 'grand_total'],
+        limit_page_length: 20,
+        distinct: true,
+      });
+      const rows = data?.message ?? data;
+      const list = Array.isArray(rows) ? rows : [];
+      const filtered = list.filter((d) => Number(d?.docstatus) !== 2);
+      if (filtered.length) return filtered;
+    } catch (e) {
+      console.warn('[ERPNext] listDeliveryNotesForSalesOrder failed', e);
+    }
+    try {
+      const rows = await this.listResourceRows('Delivery Note', {
+        filters,
+        fields: ['name', 'docstatus', 'status', 'grand_total'],
+        limit_page_length: 20,
+      });
+      return (rows || []).filter((d) => Number(d?.docstatus) !== 2);
+    } catch {
       return [];
     }
   }
@@ -7645,10 +7692,289 @@ class ERPNextClient {
         'currency',
         'status',
         'posting_date',
+        linkField,
       ],
       limit_page_length: lim,
       order_by: 'modified desc',
     });
+  }
+
+  /**
+   * Sales Order names that are fully settled for buyer "completed" status:
+   * accepted quotation invoice(s) paid AND linked Delivery Note shipping settled.
+   */
+  async listPaidSupplierQuotationNames(
+    quotationNamesOrCandidates: string[] | Array<{ quotationId: string; salesOrderId?: string; customerId?: string }>
+  ): Promise<string[]> {
+    const candidates = (quotationNamesOrCandidates || [])
+      .map((entry) => {
+        if (typeof entry === 'string') {
+          const quotationId = String(entry || '').trim();
+          return quotationId ? { quotationId, salesOrderId: '', customerId: '' } : null;
+        }
+        const quotationId = String(entry?.quotationId || '').trim();
+        if (!quotationId) return null;
+        return {
+          quotationId,
+          salesOrderId: String(entry?.salesOrderId || '').trim(),
+          customerId: String(entry?.customerId || '').trim(),
+        };
+      })
+      .filter((c): c is { quotationId: string; salesOrderId: string; customerId: string } => c != null);
+
+    if (!candidates.length) return [];
+
+    // Prefer returning settled **Sales Order** ids when callers pass them (order enrichment).
+    const returnSalesOrderIds = candidates.some((c) => !!c.salesOrderId);
+
+    const names = [...new Set(candidates.map((c) => c.quotationId))];
+    const salesOrdersByQuotation = new Map<string, string[]>();
+    const customerBySalesOrder = new Map<string, string>();
+    for (const c of candidates) {
+      if (c.salesOrderId) {
+        const list = salesOrdersByQuotation.get(c.quotationId) || [];
+        if (!list.includes(c.salesOrderId)) list.push(c.salesOrderId);
+        salesOrdersByQuotation.set(c.quotationId, list);
+        if (c.customerId) customerBySalesOrder.set(c.salesOrderId, c.customerId);
+      }
+    }
+
+    const linkField = this.salesInvoiceSupplierQuotationLinkField();
+    const { isSalesInvoicePaidForOrderCompletion } = await import('../utils/erpSalesOrderPaymentStatus');
+
+    let rows: any[] = [];
+    try {
+      rows = await this.listResourceRows('Sales Invoice', {
+        filters: [
+          [linkField, 'in', names],
+          ['docstatus', '!=', 2],
+        ],
+        fields: [
+          'name',
+          'customer',
+          'grand_total',
+          'outstanding_amount',
+          'docstatus',
+          'status',
+          linkField,
+        ],
+        limit_page_length: Math.min(Math.max(names.length * 3, 20), 150),
+        order_by: 'modified desc',
+      });
+    } catch {
+      const batches = await Promise.all(
+        names.map((n) => this.listSalesInvoicesByCustomQuotation(n, { limit: 10 }).catch(() => []))
+      );
+      rows = batches.flat();
+    }
+
+    const byQuotation = new Map<string, Array<Record<string, unknown>>>();
+    for (const inv of rows || []) {
+      const q = String(inv?.[linkField] ?? '').trim();
+      if (!q) continue;
+      const list = byQuotation.get(q) || [];
+      list.push(inv as Record<string, unknown>);
+      byQuotation.set(q, list);
+    }
+
+    const invoicePaidQuotations = new Set<string>();
+    for (const [quotationId, invs] of byQuotation) {
+      if (!invs.length) continue;
+      const allPaid = invs.every((inv) =>
+        isSalesInvoicePaidForOrderCompletion(inv, this.effectiveSalesInvoiceOutstanding(inv))
+      );
+      if (allPaid) invoicePaidQuotations.add(quotationId);
+    }
+    if (!invoicePaidQuotations.size) return [];
+
+    if (!returnSalesOrderIds) {
+      const unsettledDeliveryQuotations = await this.supplierQuotationIdsWithUnsettledDelivery(
+        [...invoicePaidQuotations],
+        byQuotation,
+        salesOrdersByQuotation,
+        customerBySalesOrder
+      );
+      return [...invoicePaidQuotations].filter((qid) => !unsettledDeliveryQuotations.has(qid));
+    }
+
+    const settledSalesOrders: string[] = [];
+    for (const c of candidates) {
+      if (!c.salesOrderId || !invoicePaidQuotations.has(c.quotationId)) continue;
+      const deliverySettled = await this.salesOrderDeliveryIsSettledForCompletion({
+        salesOrderId: c.salesOrderId,
+        invoiceNames: (byQuotation.get(c.quotationId) || [])
+          .map((inv) => String(inv.name || '').trim())
+          .filter(Boolean),
+        customerId: c.customerId || customerBySalesOrder.get(c.salesOrderId) || '',
+      });
+      if (deliverySettled) settledSalesOrders.push(c.salesOrderId);
+    }
+    return [...new Set(settledSalesOrders)];
+  }
+
+  /**
+   * Quotation ids that are not ready for "completed" because delivery is missing,
+   * still draft, or shipping is unpaid.
+   */
+  private async supplierQuotationIdsWithUnsettledDelivery(
+    quotationIds: string[],
+    invoicesByQuotation: Map<string, Array<Record<string, unknown>>>,
+    salesOrdersByQuotation: Map<string, string[]>,
+    customerBySalesOrder: Map<string, string>
+  ): Promise<Set<string>> {
+    const unsettled = new Set<string>();
+    await Promise.all(
+      quotationIds.map(async (qid) => {
+        const soNames = salesOrdersByQuotation.get(qid) || [];
+        const invoiceNames = (invoicesByQuotation.get(qid) || [])
+          .map((inv) => String(inv.name || '').trim())
+          .filter(Boolean);
+        if (!soNames.length) {
+          const dnNames = await this.collectDeliveryNoteNamesForLinks({
+            invoiceNames,
+            salesOrderNames: [],
+            customerId: '',
+          });
+          // No delivery note yet → stay confirmed (not completed).
+          if (!dnNames.length) {
+            unsettled.add(qid);
+            return;
+          }
+          for (const dnName of dnNames) {
+            if (await this.deliveryNoteBlocksOrderCompletion(dnName)) {
+              unsettled.add(qid);
+              return;
+            }
+          }
+          return;
+        }
+        for (const soName of soNames) {
+          const settled = await this.salesOrderDeliveryIsSettledForCompletion({
+            salesOrderId: soName,
+            invoiceNames,
+            customerId: customerBySalesOrder.get(soName) || '',
+          });
+          if (!settled) {
+            unsettled.add(qid);
+            return;
+          }
+        }
+      })
+    );
+    return unsettled;
+  }
+
+  /**
+   * Delivery is settled for order completion only when at least one linked Delivery Note
+   * exists and none are draft or unpaid. Missing DNs keep the order confirmed.
+   */
+  private async salesOrderDeliveryIsSettledForCompletion(args: {
+    salesOrderId: string;
+    invoiceNames: string[];
+    customerId?: string;
+  }): Promise<boolean> {
+    const dnNames = await this.collectDeliveryNoteNamesForLinks({
+      invoiceNames: args.invoiceNames,
+      salesOrderNames: [args.salesOrderId],
+      customerId: args.customerId || '',
+    });
+    if (!dnNames.length) return false;
+    for (const dnName of dnNames) {
+      if (await this.deliveryNoteBlocksOrderCompletion(dnName)) return false;
+    }
+    return true;
+  }
+
+  /** Gather Delivery Note names linked to invoices and/or sales orders (with customer fallback). */
+  private async collectDeliveryNoteNamesForLinks(args: {
+    invoiceNames: string[];
+    salesOrderNames: string[];
+    customerId?: string;
+  }): Promise<string[]> {
+    const dnNames = new Set<string>();
+    const invoiceSet = new Set(
+      (args.invoiceNames || []).map((n) => String(n || '').trim()).filter(Boolean)
+    );
+    const soSet = new Set(
+      (args.salesOrderNames || []).map((n) => String(n || '').trim()).filter(Boolean)
+    );
+
+    await Promise.all([
+      ...[...invoiceSet].map(async (siName) => {
+        const dns = await this.listDeliveryNotesForSalesInvoice(siName);
+        for (const row of dns) {
+          const dnName = String(row?.name || '').trim();
+          if (dnName) dnNames.add(dnName);
+        }
+      }),
+      ...[...soSet].map(async (soName) => {
+        const dns = await this.listDeliveryNotesForSalesOrder(soName);
+        for (const row of dns) {
+          const dnName = String(row?.name || '').trim();
+          if (dnName) dnNames.add(dnName);
+        }
+      }),
+    ]);
+
+    const customerId = String(args.customerId || '').trim();
+    if (customerId && (invoiceSet.size || soSet.size) && dnNames.size === 0) {
+      try {
+        const customerDns = await this.listDeliveryNotesForCustomer(customerId, { limit: 80 });
+        await Promise.all(
+          (customerDns || []).slice(0, 40).map(async (row) => {
+            const dnName = String(row?.name || '').trim();
+            if (!dnName || Number(row?.docstatus) === 2) return;
+            const full = await this.getDeliveryNoteRaw(dnName);
+            if (!full) return;
+            const linkedSi = linkedSalesInvoiceFromDeliveryNote(full);
+            const items = Array.isArray(full.items) ? (full.items as Record<string, unknown>[]) : [];
+            const linkedSo = items
+              .map((it) => String(it.against_sales_order || '').trim())
+              .find((n) => n.length > 0);
+            if ((linkedSi && invoiceSet.has(linkedSi)) || (linkedSo && soSet.has(linkedSo))) {
+              dnNames.add(dnName);
+            }
+          })
+        );
+      } catch {
+        /* ignore customer DN fallback failures */
+      }
+    }
+
+    return [...dnNames];
+  }
+
+  /**
+   * True when a Delivery Note means the Sales Order should stay confirmed
+   * (draft delivery, or submitted with unpaid shipping fee).
+   */
+  private async deliveryNoteBlocksOrderCompletion(deliveryNoteName: string): Promise<boolean> {
+    const dnName = String(deliveryNoteName || '').trim();
+    if (!dnName) return false;
+    const dn = await this.getDeliveryNoteRaw(dnName);
+    if (!dn || Number(dn.docstatus) === 2) return false;
+
+    // Delivery arranged but not finished/submitted yet — keep order confirmed.
+    if (Number(dn.docstatus) === 0) return true;
+
+    const invoiceGt = await this.linkedInvoiceGrandTotalForDeliveryNote(dn);
+    const payments = await this.listPaymentEntriesForDeliveryNote(dnName);
+    const outstanding = deliveryNoteShippingOutstanding(dn, invoiceGt, payments);
+    if (outstanding > 0.009) return true;
+
+    try {
+      const uiOutstanding = await this.effectiveDeliveryNoteShippingOutstanding(dnName);
+      if (uiOutstanding > 0.009) return true;
+    } catch {
+      /* keep outstanding from breakdown */
+    }
+
+    // Submitted note with a detectable delivery fee and no delivery payments yet.
+    const fee = deliveryNoteShippingFeeAmount(dn, invoiceGt);
+    if (fee > 0.009 && sumPaidTowardDeliveryNote(payments, fee) <= 0.009) {
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -9066,8 +9392,9 @@ class ERPNextClient {
     const existing = await this.findPaymentEntryByPaystackReference(ref);
     if (existing?.name) return existing;
 
-    const { verifyPaystackPayment, paystackVerifyPaymentChannel } = await import('./paystack');
-    const verify = await verifyPaystackPayment(ref);
+    const { verifyPaystackPaymentSecure } = await import('./paystackSecure');
+    const { paystackVerifyPaymentChannel } = await import('./paystack');
+    const verify = await verifyPaystackPaymentSecure(ref);
     if (!verify?.status || String(verify.data?.status || '').trim().toLowerCase() !== 'success') {
       throw new Error(
         String(verify.data?.gateway_response || '').trim() || 'Paystack payment is not successful yet.'
@@ -9141,8 +9468,9 @@ class ERPNextClient {
     const existing = await this.findPaymentEntryByPaystackReference(ref);
     if (existing?.name) return existing;
 
-    const { verifyPaystackPayment, paystackVerifyPaymentChannel } = await import('./paystack');
-    const verify = await verifyPaystackPayment(ref);
+    const { verifyPaystackPaymentSecure } = await import('./paystackSecure');
+    const { paystackVerifyPaymentChannel } = await import('./paystack');
+    const verify = await verifyPaystackPaymentSecure(ref);
     if (!verify?.status || String(verify.data?.status || '').trim().toLowerCase() !== 'success') {
       throw new Error(
         String(verify.data?.gateway_response || '').trim() || 'Paystack payment is not successful yet.'
@@ -9258,10 +9586,11 @@ class ERPNextClient {
     const siName = String(args.salesInvoiceName || '').trim();
     if (!ref || !siName) return { modeOfPayment: null, paymentEntryName: null };
 
-    const { verifyPaystackPayment, paystackVerifyPaymentChannel } = await import('./paystack');
-    let verify: Awaited<ReturnType<typeof verifyPaystackPayment>>;
+    const { verifyPaystackPaymentSecure } = await import('./paystackSecure');
+    const { paystackVerifyPaymentChannel } = await import('./paystack');
+    let verify: Awaited<ReturnType<typeof verifyPaystackPaymentSecure>>;
     try {
-      verify = await verifyPaystackPayment(ref);
+      verify = await verifyPaystackPaymentSecure(ref);
     } catch (e) {
       console.warn('[Paystack PR] verify failed — cannot derive mode of payment:', e);
       return { modeOfPayment: null, paymentEntryName: null };
@@ -9351,14 +9680,17 @@ class ERPNextClient {
   }
 
   /**
-   * Create a submitted ERPNext **Payment Request** for a partial Paystack payment against a Sales Invoice.
-   * Mirrors ERPNext **Create → Payment** on the invoice (Paystack gateway); returns the hosted checkout URL.
+   * Create a submitted ERPNext **Payment Request** with Paystack hosted checkout.
+   * Paystack secret stays on ERPNext — not in the mobile app.
    */
-  async initiatePaystackPaymentRequestForSalesInvoice(args: {
-    salesInvoiceName: string;
+  async initiatePaystackPaymentRequestForDocument(args: {
+    doctype: string;
+    docname: string;
     amount: number;
     payerEmail: string;
     paymentGateway?: string;
+    currency?: string;
+    maxAmount?: number;
   }): Promise<{
     paymentRequestName: string;
     paymentUrl: string;
@@ -9366,35 +9698,42 @@ class ERPNextClient {
     currency: string;
   }> {
     const { erpPaystackPaymentGateway } = await import('../constants/invoicePaystack');
-    const invName = String(args.salesInvoiceName || '').trim();
+    const doctype = String(args.doctype || '').trim();
+    const docname = String(args.docname || '').trim();
     const payerEmail = String(args.payerEmail || '').trim();
     const gateway = String(args.paymentGateway || erpPaystackPaymentGateway()).trim();
     const amt = Number(args.amount);
 
-    if (!invName) throw new Error('Invoice name required');
-    if (!payerEmail) throw new Error('Sign in with your email to pay this invoice.');
+    if (!doctype || !docname) throw new Error('Document type and name required');
+    if (!payerEmail) throw new Error('Sign in with your email to pay.');
     if (!Number.isFinite(amt) || amt <= 0) throw new Error('Enter an amount greater than zero.');
 
-    const inv = await this.getSalesInvoiceRaw(invName);
-    if (!inv) throw new Error('Sales Invoice not found.');
-    if (Number(inv.docstatus) !== 1) throw new Error('This invoice must be submitted before you can pay.');
+    let company = String(process.env.EXPO_PUBLIC_ERPNEXT_DEFAULT_COMPANY || '').trim();
+    let currency = String(args.currency || 'GHS').trim() || 'GHS';
+    let pay = amt;
 
-    const outstanding = this.effectiveSalesInvoiceOutstanding(inv as Record<string, unknown>);
-    if (!Number.isFinite(outstanding) || outstanding <= 0) {
-      throw new Error('This invoice has no outstanding balance.');
+    if (doctype === 'Sales Invoice') {
+      const inv = await this.getSalesInvoiceRaw(docname);
+      if (!inv) throw new Error('Sales Invoice not found.');
+      if (Number(inv.docstatus) !== 1) throw new Error('This invoice must be submitted before you can pay.');
+      const outstanding = this.effectiveSalesInvoiceOutstanding(inv as Record<string, unknown>);
+      if (!Number.isFinite(outstanding) || outstanding <= 0) {
+        throw new Error('This invoice has no outstanding balance.');
+      }
+      pay = Math.min(amt, outstanding);
+      company = String(inv.company || company).trim();
+      currency = String(inv.currency || currency).trim() || currency;
+    } else if (typeof args.maxAmount === 'number' && Number.isFinite(args.maxAmount)) {
+      pay = Math.min(amt, args.maxAmount);
     }
 
-    const pay = Math.min(amt, outstanding);
-    if (pay <= 0) throw new Error('Nothing to pay on this invoice.');
-
-    const company = String(inv.company || process.env.EXPO_PUBLIC_ERPNEXT_DEFAULT_COMPANY || '').trim();
-    if (!company) throw new Error('Invoice company is missing.');
+    if (pay <= 0) throw new Error('Nothing to pay.');
+    if (!company) throw new Error('Company is missing for this payment.');
 
     const prMethod = 'erpnext.accounts.doctype.payment_request.payment_request.make_payment_request';
-    // Mode of payment is set after Paystack success (from verify `channel`), not at checkout start.
     const raw = await this.callFrappeMethod(prMethod, {
-      dt: 'Sales Invoice',
-      dn: invName,
+      dt: doctype,
+      dn: docname,
       company,
       payment_gateway_account: { payment_gateway: gateway, company },
       mode_of_payment: '',
@@ -9443,13 +9782,41 @@ class ERPNextClient {
     }
     paymentUrl = this.resolveErpSiteUrl(paymentUrl);
 
-    const currency = String(submitted.currency || inv.currency || 'GHS').trim() || 'GHS';
+    const outCurrency = String(submitted.currency || currency || 'GHS').trim() || 'GHS';
     return {
       paymentRequestName: prName,
       paymentUrl,
       amount: pay,
-      currency,
+      currency: outCurrency,
     };
+  }
+
+  /**
+   * Create a submitted ERPNext **Payment Request** for a partial Paystack payment against a Sales Invoice.
+   * Mirrors ERPNext **Create → Payment** on the invoice (Paystack gateway); returns the hosted checkout URL.
+   */
+  async initiatePaystackPaymentRequestForSalesInvoice(args: {
+    salesInvoiceName: string;
+    amount: number;
+    payerEmail: string;
+    paymentGateway?: string;
+  }): Promise<{
+    paymentRequestName: string;
+    paymentUrl: string;
+    amount: number;
+    currency: string;
+  }> {
+    const invName = String(args.salesInvoiceName || '').trim();
+    const inv = await this.getSalesInvoiceRaw(invName);
+    const currency = String(inv?.currency || 'GHS').trim() || 'GHS';
+    return this.initiatePaystackPaymentRequestForDocument({
+      doctype: 'Sales Invoice',
+      docname: invName,
+      amount: args.amount,
+      payerEmail: args.payerEmail,
+      paymentGateway: args.paymentGateway,
+      currency,
+    });
   }
 
   /** Poll Payment Request until paid or timeout (Paystack webhook updates ERPNext). */

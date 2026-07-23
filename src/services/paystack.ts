@@ -65,6 +65,13 @@ export function assertPaystackConfigured(): void {
   if (msg) throw new Error(msg);
 }
 
+function clientSecretBlockedMessage(): string {
+  return (
+    'Direct Paystack API is disabled in production builds. ' +
+    'Use ERPNext Payment Request checkout for invoices, or set EXPO_PUBLIC_PAYSTACK_ALLOW_CLIENT_SECRET=true only for development.'
+  );
+}
+
 if (__DEV__) {
   const paystackStatus = getPaystackConfigStatus();
   if (!paystackStatus.configured) {
@@ -166,6 +173,10 @@ async function paystackAuthorizedPost(
   path: string,
   body: Record<string, string>
 ): Promise<PaystackChargeResponse> {
+  const { isPaystackClientSecretEnabled } = await import('./paystackSecure');
+  if (!isPaystackClientSecretEnabled()) {
+    throw new Error(clientSecretBlockedMessage());
+  }
   assertPaystackConfigured();
   const response = await axios.post<PaystackChargeResponse>(
     `${PAYSTACK_BASE_URL}${path}`,
@@ -196,6 +207,10 @@ export const submitPaystackChargeOtp = async (
 export const checkPendingPaystackCharge = async (
   reference: string
 ): Promise<PaystackChargeResponse> => {
+  const { isPaystackClientSecretEnabled } = await import('./paystackSecure');
+  if (!isPaystackClientSecretEnabled()) {
+    throw new Error(clientSecretBlockedMessage());
+  }
   assertPaystackConfigured();
   const response = await axios.get<PaystackChargeResponse>(
     `${PAYSTACK_BASE_URL}/charge/${encodeURIComponent(reference)}`,
@@ -263,6 +278,10 @@ export const initializePaystackCardTransaction = async (
   request: PaystackInitializeRequest
 ): Promise<PaystackInitializeResponse> => {
   try {
+    const { isPaystackClientSecretEnabled } = await import('./paystackSecure');
+    if (!isPaystackClientSecretEnabled()) {
+      throw new Error(clientSecretBlockedMessage());
+    }
     assertPaystackConfigured();
     const { metadata: extraMetadata, ...body } = request;
     const payload = {
@@ -351,6 +370,10 @@ export const initializePaystackCharge = async (
   request: PaystackChargeRequest
 ): Promise<PaystackChargeResponse> => {
   try {
+    const { isPaystackClientSecretEnabled } = await import('./paystackSecure');
+    if (!isPaystackClientSecretEnabled()) {
+      throw new Error(clientSecretBlockedMessage());
+    }
     assertPaystackConfigured();
     const { metadata: extraMetadata, ...chargeBody } = request;
     const payload = {
@@ -487,6 +510,10 @@ export const verifyPaystackPayment = async (
   reference: string
 ): Promise<PaystackVerifyResponse> => {
   try {
+    const { isPaystackClientSecretEnabled } = await import('./paystackSecure');
+    if (!isPaystackClientSecretEnabled()) {
+      throw new Error(clientSecretBlockedMessage());
+    }
     assertPaystackConfigured();
     const response = await axios.get<PaystackVerifyResponse>(
       `${PAYSTACK_BASE_URL}/transaction/verify/${reference}`,

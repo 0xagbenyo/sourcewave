@@ -42,7 +42,6 @@ import {
   initializePaystackCardTransaction,
   mapProviderToPaystack,
   convertToPesewas,
-  verifyPaystackPayment,
   isPaystackChargeTransactionSuccessful,
   getPaystackChargeStep,
   normalizeGhanaMoMoPhoneForPaystack,
@@ -50,6 +49,7 @@ import {
   checkPendingPaystackCharge,
   type PaystackChargeResponse,
 } from '../services/paystack';
+import { paystackDirectApiConfigurationError, verifyPaystackPaymentSecure } from '../services/paystackSecure';
 import { getERPNextClient } from '../services/erpnext';
 import { formatGhanaCedis } from '../utils/currency';
 import { toYmd, erpSubscriptionCoversThrough } from '../utils/subscriptionErpnext';
@@ -440,6 +440,11 @@ export const SubscriptionScreen: React.FC = () => {
   };
 
   const handlePay = async () => {
+    const directPayErr = paystackDirectApiConfigurationError();
+    if (directPayErr) {
+      Alert.alert(t('subscriptionPage.paymentFailed'), directPayErr);
+      return;
+    }
     if (!user?.email) {
       Alert.alert(t('subscriptionPage.signInRequired'), t('subscriptionPage.signInBody'));
       return;
@@ -496,7 +501,7 @@ export const SubscriptionScreen: React.FC = () => {
   const handleCardPaymentRedirect = async (reference: string) => {
     setVerifying(true);
     try {
-      const v = await verifyPaystackPayment(reference);
+      const v = await verifyPaystackPaymentSecure(reference);
       if (v.data?.status === 'success') {
         setCardCheckout(null);
         await finishActivation(v.data.reference || reference, cardPromoRef.current);
@@ -548,7 +553,7 @@ export const SubscriptionScreen: React.FC = () => {
     const promoCodeForErp = promoCode ?? appliedPromo?.code ?? null;
     setVerifying(true);
     try {
-      const v = await verifyPaystackPayment(r);
+      const v = await verifyPaystackPaymentSecure(r);
       if (v.data?.status === 'success') {
         await finishActivation(v.data.reference || r, promoCodeForErp);
         setLastReference(null);

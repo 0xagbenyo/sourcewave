@@ -31,6 +31,7 @@ module.exports = () => {
   // Android App Links — `autoVerify` + HTTPS host + pathPrefix for Frappe reset link.
   expo.android = {
     ...expo.android,
+    usesCleartextTraffic: false,
     intentFilters: [
       {
         action: 'VIEW',

@@ -38,7 +38,7 @@ const FLYER_AUTO_ADVANCE_MS = 5500;
 function orderStatusHomeColor(status: string): string {
   const s = (status || 'pending') as OrderStatus;
   if (s === 'cancelled' || s === 'returned') return '#B91C1C';
-  if (s === 'completed' || s === 'delivered' || s === 'confirmed') return '#15803D';
+  if (s === 'completed' || s === 'delivered') return '#15803D';
   if (s === 'pending') return '#C2410C';
   return '#1D4ED8';
 }
@@ -46,7 +46,7 @@ function orderStatusHomeColor(status: string): string {
 function orderStatusHomeBg(status: string): string {
   const s = (status || 'pending') as OrderStatus;
   if (s === 'cancelled' || s === 'returned') return '#FEE2E2';
-  if (s === 'completed' || s === 'delivered' || s === 'confirmed') return '#DCFCE7';
+  if (s === 'completed' || s === 'delivered') return '#DCFCE7';
   if (s === 'pending') return '#FFEDD5';
   return '#DBEAFE';
 }

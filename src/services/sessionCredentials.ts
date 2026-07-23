@@ -11,6 +11,29 @@ const LOG = '[sessionCredentials]';
 const KEY_EMAIL = 'sourcewave_frappe_web_email';
 const KEY_PASSWORD = 'sourcewave_frappe_web_password';
 
+const secureStoreOptions: SecureStore.SecureStoreOptions = {
+  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+};
+
+async function setSecureItem(key: string, value: string): Promise<void> {
+  try {
+    await SecureStore.setItemAsync(key, value, {
+      ...secureStoreOptions,
+      requireAuthentication: true,
+    });
+  } catch {
+    await SecureStore.setItemAsync(key, value, secureStoreOptions);
+  }
+}
+
+async function getSecureItem(key: string): Promise<string | null> {
+  try {
+    return await SecureStore.getItemAsync(key, { requireAuthentication: true });
+  } catch {
+    return SecureStore.getItemAsync(key, secureStoreOptions);
+  }
+}
+
 export async function saveFrappeWebCredentials(email: string, password: string): Promise<void> {
   const e = email.trim();
   if (!e || !password) {
@@ -18,8 +41,8 @@ export async function saveFrappeWebCredentials(email: string, password: string):
     return;
   }
   try {
-    await SecureStore.setItemAsync(KEY_EMAIL, e);
-    await SecureStore.setItemAsync(KEY_PASSWORD, password);
+    await setSecureItem(KEY_EMAIL, e);
+    await setSecureItem(KEY_PASSWORD, password);
     if (__DEV__) console.log(LOG, 'saved web credentials for Raven bridge');
   } catch (err) {
     console.warn(LOG, 'save failed', err);
@@ -29,8 +52,8 @@ export async function saveFrappeWebCredentials(email: string, password: string):
 
 export async function getFrappeWebCredentials(): Promise<{ email: string; password: string } | null> {
   try {
-    const email = await SecureStore.getItemAsync(KEY_EMAIL);
-    const password = await SecureStore.getItemAsync(KEY_PASSWORD);
+    const email = await getSecureItem(KEY_EMAIL);
+    const password = await getSecureItem(KEY_PASSWORD);
     if (!email || !password) {
       if (__DEV__) console.log(LOG, 'no stored web credentials');
       return null;

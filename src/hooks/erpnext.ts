@@ -18,6 +18,7 @@ import {
 import { Product, Order, Category, User, WishlistItem, ProductReview, SalesInvoice } from '../types';
 import { getProductDiscount } from '../utils/pricingRules';
 import { enrichOrdersWithSupplierNames } from '../utils/erpSalesOrderSupplier';
+import { enrichOrdersWithQuotationPaymentStatus } from '../utils/erpSalesOrderPaymentStatus';
 
 // Types
 interface UseAsyncState<T> {
@@ -551,7 +552,10 @@ export const useOrders = (customerId: string, company?: string, pageSize: number
         mappedOrders = await enrichOrdersWithSupplierNames(mappedOrders, (ids) =>
           client.listSupplierNamesByIds(ids)
         );
-        
+        mappedOrders = await enrichOrdersWithQuotationPaymentStatus(mappedOrders, (candidates) =>
+          client.listPaidSupplierQuotationNames(candidates)
+        );
+
         setOrders(mappedOrders);
         setOffset(mappedOrders.length);
         setHasMore(mappedOrders.length === pageSize);
@@ -583,7 +587,10 @@ export const useOrders = (customerId: string, company?: string, pageSize: number
       mappedOrders = await enrichOrdersWithSupplierNames(mappedOrders, (ids) =>
         client.listSupplierNamesByIds(ids)
       );
-      
+      mappedOrders = await enrichOrdersWithQuotationPaymentStatus(mappedOrders, (candidates) =>
+        client.listPaidSupplierQuotationNames(candidates)
+      );
+
       setOrders((prev) => [...prev, ...mappedOrders]);
       setOffset((prev) => prev + mappedOrders.length);
       setHasMore(mappedOrders.length === pageSize);
@@ -746,6 +753,9 @@ export const useOrder = (orderId: string) => {
       const erpOrder = await client.getSalesOrder(orderId);
       let order = mapERPSalesOrderToOrder(erpOrder);
       [order] = await enrichOrdersWithSupplierNames([order], (ids) => client.listSupplierNamesByIds(ids));
+      [order] = await enrichOrdersWithQuotationPaymentStatus([order], (candidates) =>
+        client.listPaidSupplierQuotationNames(candidates)
+      );
       setState({ data: order, loading: false, error: null });
     } catch (error) {
       const err = error instanceof Error ? error : new Error('Unknown error');

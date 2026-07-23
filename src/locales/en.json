@@ -368,7 +368,7 @@
     "estimatedDelivery": "Estimated delivery",
     "status": {
       "pending": "Pending",
-      "confirmed": "Completed",
+      "confirmed": "Confirmed",
       "processing": "Processing",
       "to_deliver": "To deliver",
       "completed": "Completed",

@@ -368,7 +368,7 @@
     "estimatedDelivery": "预计送达",
     "status": {
       "pending": "待处理",
-      "confirmed": "已完成",
+      "confirmed": "已确认",
       "processing": "处理中",
       "to_deliver": "待发货",
       "completed": "已完成",

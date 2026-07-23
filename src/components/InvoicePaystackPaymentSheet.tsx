@@ -22,14 +22,10 @@ import { useUserSession } from '../context/UserContext';
 import { getERPNextClient } from '../services/erpnext';
 import {
   initializePaystackCharge,
-  initializePaystackCardTransaction,
   mapProviderToPaystack,
   convertToPesewas,
-  verifyPaystackPayment,
   isPaystackChargeAmountValid,
   PAYSTACK_MIN_CHARGE_GHS,
-  getPaystackConfigStatus,
-  paystackConfigurationError,
   isPaystackChargeTransactionSuccessful,
   getPaystackChargeStep,
   normalizeGhanaMoMoPhoneForPaystack,
@@ -37,6 +33,11 @@ import {
   checkPendingPaystackCharge,
   type PaystackChargeResponse,
 } from '../services/paystack';
+import {
+  isPaystackClientSecretEnabled,
+  paystackDirectApiConfigurationError,
+  verifyPaystackPaymentSecure,
+} from '../services/paystackSecure';
 import { userFacingError } from '../utils/userFacingError';
 import { formatGhanaCedis } from '../utils/currency';
 import { PaystackSecureBadge } from './PaystackSecureBadge';
@@ -83,6 +84,14 @@ function formatMoney(amount: number, currency: string): string {
   }
 }
 
+type CheckoutSession = {
+  authorizationUrl: string;
+  reference: string;
+  amountGhs: number;
+  /** ERPNext Payment Request — Paystack secret stays on server. */
+  erpPaymentRequestName?: string;
+};
+
 export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
   visible,
   invoiceName,
@@ -95,6 +104,7 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
 }) => {
   const { t } = useTranslation();
   const isDelivery = paymentKind === 'delivery_note';
+  const usesErpHostedCheckout = !isDelivery;
   const { user } = useUserSession();
   const insets = useSafeAreaInsets();
 
@@ -106,24 +116,16 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
   const [pendingPayment, setPendingPayment] = useState<PendingPaystackPayment | null>(null);
   const [paymentOtp, setPaymentOtp] = useState('');
   const [submittingOtp, setSubmittingOtp] = useState(false);
-  const [cardCheckout, setCardCheckout] = useState<{
-    authorizationUrl: string;
-    reference: string;
-    amountGhs: number;
-  } | null>(null);
+  const [cardCheckout, setCardCheckout] = useState<CheckoutSession | null>(null);
   const [cardCheckoutLoading, setCardCheckoutLoading] = useState(false);
   const [cardCheckoutError, setCardCheckoutError] = useState<string | null>(null);
   const [cardPaymentStarted, setCardPaymentStarted] = useState(false);
 
   const cardSessionCacheRef = useRef<{
     key: string;
-    session: { authorizationUrl: string; reference: string; amountGhs: number };
+    session: CheckoutSession;
   } | null>(null);
-  const cardInitPromiseRef = useRef<Promise<{
-    authorizationUrl: string;
-    reference: string;
-    amountGhs: number;
-  } | null> | null>(null);
+  const cardInitPromiseRef = useRef<Promise<CheckoutSession | null> | null>(null);
 
   const defaultAmount = useMemo(() => {
     const max = Number.isFinite(maxAmount) ? maxAmount : 0;
@@ -147,8 +149,10 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
   }, [amountText, maxAmount, lockAmount]);
 
   const lowOutstanding = maxAmount > 0 && maxAmount < PAYSTACK_MIN_CHARGE_GHS;
-  const paystackReady = getPaystackConfigStatus().configured;
-  const paystackSetupError = paystackReady ? null : paystackConfigurationError();
+  const paystackReady = usesErpHostedCheckout || isPaystackClientSecretEnabled();
+  const paystackSetupError = paystackReady
+    ? null
+    : paystackDirectApiConfigurationError() || 'Paystack is not configured.';
 
   const momoPhoneReady = useMemo(() => {
     const momoPhone = normalizeGhanaMoMoPhoneForPaystack(paymentNumber.trim());
@@ -161,7 +165,7 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
     paystackReady &&
     (selectedPayment === 'mtn' || selectedPayment === 'telecel') &&
     paystackAmountOk &&
-    momoPhoneReady &&
+    (usesErpHostedCheckout || momoPhoneReady) &&
     !paying &&
     !pendingPayment;
 
@@ -209,6 +213,38 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
       return prev;
     });
   }, [visible, maxAmount, defaultAmount]);
+
+  const completeErpHostedPayment = useCallback(
+    async (paymentRequestName: string, paystackRef?: string) => {
+      const prName = String(paymentRequestName || '').trim();
+      if (!prName) return;
+      setVerifying(true);
+      try {
+        const pr = await getERPNextClient().confirmPaystackSalesInvoicePayment({
+          paymentRequestName: prName,
+          paystackReference: String(paystackRef || '').trim(),
+          salesInvoiceName: invoiceName.trim(),
+        });
+        const status = String(pr?.status || '').trim().toLowerCase();
+        if (status === 'paid' || status === 'partially paid') {
+          Alert.alert(t('invoicePayment.successTitle'), t('invoicePayment.successBody'));
+          resetState();
+          onSuccess();
+          onClose();
+        } else {
+          Alert.alert(t('subscriptionPage.notCompleted'), t('subscriptionPage.notCompleted'));
+        }
+      } catch (e: unknown) {
+        Alert.alert(
+          t('invoicePayment.failedTitle'),
+          userFacingError(e, t('invoicePayment.failedBody'))
+        );
+      } finally {
+        setVerifying(false);
+      }
+    },
+    [invoiceName, onClose, onSuccess, resetState, t]
+  );
 
   const finishInvoicePayment = useCallback(
     async (reference: string) => {
@@ -330,22 +366,35 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
     };
   }, [pendingPayment?.reference, finishInvoicePayment]);
 
-  const loadCardCheckout = useCallback(async (): Promise<{
-    authorizationUrl: string;
-    reference: string;
-    amountGhs: number;
-  } | null> => {
+  const loadCardCheckout = useCallback(async (): Promise<CheckoutSession | null> => {
     if (!user?.email?.trim() || payAmountGhs <= 0) return null;
 
-    const sessionKey = `${invoiceName}-${payAmountGhs}`;
+    const sessionKey = `${invoiceName}-${payAmountGhs}-${usesErpHostedCheckout ? 'erp' : 'direct'}`;
     const cached = cardSessionCacheRef.current;
     if (cached?.key === sessionKey) return cached.session;
 
     if (cardInitPromiseRef.current) return cardInitPromiseRef.current;
 
     const promise = (async () => {
-      const reference = paystackDocReference(paymentKind, invoiceName);
       try {
+        if (usesErpHostedCheckout) {
+          const init = await getERPNextClient().initiatePaystackPaymentRequestForSalesInvoice({
+            salesInvoiceName: invoiceName,
+            amount: payAmountGhs,
+            payerEmail: user.email,
+          });
+          const session: CheckoutSession = {
+            authorizationUrl: init.paymentUrl,
+            reference: init.paymentRequestName,
+            amountGhs: payAmountGhs,
+            erpPaymentRequestName: init.paymentRequestName,
+          };
+          cardSessionCacheRef.current = { key: sessionKey, session };
+          return session;
+        }
+
+        const { initializePaystackCardTransaction } = await import('../services/paystack');
+        const reference = paystackDocReference(paymentKind, invoiceName);
         const init = await initializePaystackCardTransaction({
           email: user.email,
           amount: convertToPesewas(payAmountGhs),
@@ -363,7 +412,7 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
               },
         });
         const ref = init.data.reference || reference;
-        const session = {
+        const session: CheckoutSession = {
           authorizationUrl: init.data.authorization_url,
           reference: ref,
           amountGhs: payAmountGhs,
@@ -379,12 +428,11 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
 
     cardInitPromiseRef.current = promise;
     return promise;
-  }, [currency, invoiceName, isDelivery, payAmountGhs, paymentKind, user?.email]);
+  }, [currency, invoiceName, isDelivery, payAmountGhs, paymentKind, usesErpHostedCheckout, user?.email]);
 
   const startCardCheckout = useCallback(async () => {
-    const setupErr = paystackConfigurationError();
-    if (setupErr) {
-      Alert.alert(t('invoicePayment.failedTitle'), setupErr);
+    if (!paystackReady) {
+      Alert.alert(t('invoicePayment.failedTitle'), paystackSetupError || t('invoicePayment.failedBody'));
       return;
     }
     if (!user?.email?.trim()) {
@@ -413,7 +461,7 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
       setCardCheckoutError(null);
     }
     setCardCheckoutLoading(false);
-  }, [loadCardCheckout, payAmountGhs, t, user?.email]);
+  }, [loadCardCheckout, payAmountGhs, paystackReady, paystackSetupError, t, user?.email]);
 
   useEffect(() => {
     setCardPaymentStarted(false);
@@ -425,9 +473,12 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
   }, [payAmountGhs, selectedPayment]);
 
   const handlePayMoMo = useCallback(async () => {
-    const setupErr = paystackConfigurationError();
-    if (setupErr) {
-      Alert.alert(t('invoicePayment.failedTitle'), setupErr);
+    if (!paystackReady) {
+      Alert.alert(t('invoicePayment.failedTitle'), paystackSetupError || t('invoicePayment.failedBody'));
+      return;
+    }
+    if (usesErpHostedCheckout) {
+      await startCardCheckout();
       return;
     }
     if (!user?.email?.trim()) {
@@ -501,19 +552,31 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
     paymentNumber,
     processPaystackChargeResponse,
     selectedPayment,
+    startCardCheckout,
     t,
+    usesErpHostedCheckout,
     user?.email,
+    paystackReady,
+    paystackSetupError,
   ]);
 
   const handleCardPaymentRedirect = async (reference: string) => {
     const ref = String(reference || '').trim();
     if (!ref) return;
+    if (cardCheckout?.erpPaymentRequestName) {
+      await completeErpHostedPayment(cardCheckout.erpPaymentRequestName, ref);
+      return;
+    }
     await finishInvoicePayment(ref);
   };
 
   const handleConfirmCardPayment = async () => {
     const ref = String(cardCheckout?.reference || '').trim();
     if (!ref) return;
+    if (cardCheckout?.erpPaymentRequestName) {
+      await completeErpHostedPayment(cardCheckout.erpPaymentRequestName, ref);
+      return;
+    }
     await finishInvoicePayment(ref);
   };
 
@@ -540,7 +603,7 @@ export const InvoicePaystackPaymentSheet: React.FC<Props> = ({
     if (!pendingPayment) return;
     setVerifying(true);
     try {
-      const v = await verifyPaystackPayment(pendingPayment.reference);
+      const v = await verifyPaystackPaymentSecure(pendingPayment.reference);
       if (v.data?.status === 'success') {
         await finishInvoicePayment(v.data.reference || pendingPayment.reference);
         setPendingPayment(null);

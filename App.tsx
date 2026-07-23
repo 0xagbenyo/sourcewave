@@ -5,7 +5,9 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { AppAlertHost } from './src/components/AppAlertHost';
 import { ImagePickSourceHost } from './src/components/ImagePickSourceHost';
+import { getErpNextUrl } from './src/constants/env';
 import { initializeERPNext, initializeNetworkAwareTimeout } from './src/services/erpnext';
+import { runProductionStartupChecks } from './src/utils/productionChecks';
 import { UserProvider } from './src/context/UserContext';
 import { RavenUnreadProvider } from './src/context/RavenUnreadContext';
 import { SubscriptionProvider } from './src/context/SubscriptionContext';
@@ -21,10 +23,12 @@ const erpApiSecret =
   '';
 
 initializeERPNext({
-  baseUrl: process.env.EXPO_PUBLIC_ERPNEXT_URL || 'https://sourcewave.frappe.cloud',
+  baseUrl: getErpNextUrl(),
   apiKey: erpApiKey,
   apiSecret: erpApiSecret,
 });
+
+runProductionStartupChecks(erpApiKey, erpApiSecret);
 
 if (__DEV__ && (!erpApiKey || !erpApiSecret)) {
   console.warn(

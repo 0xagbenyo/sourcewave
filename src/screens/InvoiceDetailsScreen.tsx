@@ -7,7 +7,6 @@ import { useSalesInvoice } from '../hooks/erpnext';
 import { useSessionCustomerId } from '../hooks/useSessionCustomerId';
 import { useUserSession } from '../context/UserContext';
 import { getERPNextClient } from '../services/erpnext';
-import { paystackConfigurationError } from '../services/paystack';
 import { isSupplierPortalUser } from '../utils/isSupplierPortalUser';
 import {
   readSalesInvoiceSupplier,
@@ -212,11 +211,6 @@ export const InvoiceDetailsScreen: React.FC = () => {
   }, [id, invoice?.items?.length]);
 
   const openPaySheet = () => {
-    const paystackErr = paystackConfigurationError();
-    if (paystackErr) {
-      Alert.alert(t('invoicePayment.failedTitle'), paystackErr);
-      return;
-    }
     if (!user?.email?.trim()) {
       Alert.alert(t('subscriptionPage.signInRequired'), t('subscriptionPage.signInBody'));
       return;

@@ -7,6 +7,7 @@ import axios, { AxiosHeaders, AxiosInstance } from 'axios';
 import * as SecureStore from 'expo-secure-store';
 import { getERPNextClient, postFormDataMultipartWithSlidingIdle } from './erpnext';
 import { logFrappeHttpError, parseFrappeResponseData } from '../utils/frappeHttpError';
+import { IS_DEBUG_MODE } from '../constants/env';
 
 const API_RESOURCE = '/api/resource';
 const SESSION_COOKIES_KEY = 'frappe_session_cookies_v1';
@@ -362,8 +363,11 @@ export function hasFrappeRavenSession(): boolean {
   return sessionAxios != null;
 }
 
-/** Debug snapshot for Metro logs when portal writes fail. */
+/** Debug snapshot for Metro logs when portal writes fail (redacted in release builds). */
 export function getFrappeRavenSessionDebug(): Record<string, unknown> {
+  if (!IS_DEBUG_MODE) {
+    return { hasSession: sessionAxios != null };
+  }
   return {
     hasSession: sessionAxios != null,
     adoptedClient: sessionUsesAdoptedClient,

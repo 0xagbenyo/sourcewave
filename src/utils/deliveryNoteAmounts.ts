@@ -289,8 +289,28 @@ export function computeDeliveryNoteAmountBreakdown(
   const safeInvoice = Number.isFinite(invoiceAmount) && invoiceAmount > 0 ? invoiceAmount : 0;
   const safeTotal = Number.isFinite(total) ? total : 0;
 
-  const shippingAmount =
+  let shippingAmount =
     safeInvoice > 0 ? Math.max(0, safeTotal - safeInvoice) : safeTotal > 0 ? safeTotal : 0;
+
+  // Freight-only DNs (lines already billed on the invoice): grand total is the delivery fee,
+  // which is smaller than the invoice — do not subtract invoice from it.
+  if (safeInvoice > 0 && shippingAmount <= 0.009 && safeTotal > 0.009 && safeTotal + 0.009 < safeInvoice) {
+    shippingAmount = safeTotal;
+  }
+
+  // When line amounts are ~0 (already invoiced) and DN total is the fee/taxes.
+  if (shippingAmount <= 0.009) {
+    const items = Array.isArray(doc.items) ? (doc.items as Record<string, unknown>[]) : [];
+    const itemsSum = items.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+    if (itemsSum <= 0.009) {
+      const taxes = Number(doc.total_taxes_and_charges);
+      if (Number.isFinite(taxes) && taxes > 0.009) {
+        shippingAmount = taxes;
+      } else if (safeTotal > 0.009) {
+        shippingAmount = safeTotal;
+      }
+    }
+  }
 
   return {
     invoiceAmount: safeInvoice,

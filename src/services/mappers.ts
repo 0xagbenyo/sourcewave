@@ -612,7 +612,7 @@ export const mapERPSalesOrderToOrder = (erpOrder: any): Order => {
 
   return {
     id: erpOrder.name,
-    userId: erpOrder.custom_customer_id || '',
+    userId: String(erpOrder.custom_customer_id || erpOrder.customer || '').trim(),
     orderNumber: erpOrder.name,
     status: status,
     supplierId: supplierId || undefined,
@@ -644,24 +644,26 @@ export const mapERPSalesOrderToOrder = (erpOrder: any): Order => {
 };
 
 /**
- * Map ERPNext order status to app status based on docstatus
- * docstatus: 0 = Draft, 1 = Submitted → Completed, 2 = Cancelled
+ * Map ERPNext order status to app status based on docstatus + payment.
+ * docstatus: 0 = Draft → pending, 1 = Submitted → confirmed (or completed when quotation + delivery paid), 2 = Cancelled
  */
 const mapERPOrderStatusFromDocstatus = (
   docstatus: number | string | undefined | null,
   _workflowStatus?: string,
-  _progress?: {
+  progress?: {
     perDelivered?: number | string | null;
     perBilled?: number | string | null;
     deliveryStatus?: string | null;
     billingStatus?: string | null;
+    /** True when the linked quotation invoice(s) and delivery fees are fully paid. */
+    quotationPaid?: boolean | null;
   }
 ): string => {
   const ds = Number(docstatus);
   if (!Number.isFinite(ds) || ds === 0) return 'pending';
   if (ds === 2) return 'cancelled';
-  // Submitted (and any other non-draft/non-cancelled) → Completed for buyers.
-  if (ds === 1) return 'completed';
+  // Submitted: confirmed until quotation invoice + delivery fees are paid, then completed.
+  if (ds === 1) return progress?.quotationPaid ? 'completed' : 'confirmed';
   return 'pending';
 };
 

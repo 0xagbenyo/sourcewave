@@ -4,6 +4,7 @@ import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/nativ
 import { useTranslation } from 'react-i18next';
 import { getERPNextClient } from '../../services/erpnext';
 import { useUserSession } from '../../context/UserContext';
+import { useSessionCustomerId } from '../../hooks/useSessionCustomerId';
 import { useSupplierQuotationBuyerReview } from '../../hooks/useSupplierQuotationBuyerReview';
 import { navigateToSalesInvoiceDetail } from '../../utils/erpDocumentNavigation';
 import {
@@ -20,6 +21,7 @@ import {
   sumErpDocItemsTotalWeight,
 } from '../../utils/erpLineWeight';
 import { QuotationBuyerActionBar } from '../../components/QuotationBuyerActionBar';
+import { ErpInvoicePaymentsPanel } from '../../components/ErpInvoicePaymentsPanel';
 import {
   ErpDocumentPreviewLayout,
   ErpDocSheet,
@@ -32,10 +34,13 @@ import {
   ErpDocEmptyState,
   ErpDocLinkButton,
   ErpDocLinkedSection,
+  ErpDocTabBar,
   erpDocStatusAccent,
   formatErpDocDate,
   formatErpDocMoney,
 } from '../../components/ErpDocumentPreviewLayout';
+
+type QuotationTab = 'details' | 'payments';
 
 function quotationStatusAccent(
   kind: SupplierQuotationUiStatusKind,
@@ -59,8 +64,17 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
   const route = useRoute();
   const { t } = useTranslation();
   const { user } = useUserSession();
+  const { customerId: sessionCustomerId } = useSessionCustomerId();
   const { name } = route.params as { name: string; customerId?: string };
   const isSupplierPortal = user?.appMode === 'supplier' || !!user?.supplierId?.trim();
+
+  const QUOTATION_TABS = useMemo(
+    () => [
+      { id: 'details' as const, label: t('invoiceDetails.tabDetails') },
+      { id: 'payments' as const, label: t('invoiceDetails.tabPayments') },
+    ],
+    [t]
+  );
 
   const [doc, setDoc] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -68,6 +82,11 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
   const [linksLoading, setLinksLoading] = useState(false);
   const [lineImages, setLineImages] = useState<Record<string, string>>({});
   const [refreshing, setRefreshing] = useState(false);
+  const [tab, setTab] = useState<QuotationTab>('details');
+  const [invoiceOutstanding, setInvoiceOutstanding] = useState<number | null>(null);
+  const [invoiceTotalDue, setInvoiceTotalDue] = useState<number | null>(null);
+  const [invoiceCurrency, setInvoiceCurrency] = useState('GHS');
+  const [paymentsRefreshKey, setPaymentsRefreshKey] = useState(0);
 
   const reloadDoc = useCallback(async () => {
     try {
@@ -214,6 +233,50 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
 
   const primaryInvoice = linkedInvoices[0];
   const primaryInvoiceName = String(primaryInvoice?.name || '').trim();
+  const showPaymentsTab = !isSupplierPortal && !!primaryInvoiceName;
+  const customerScope = useMemo(() => {
+    const fromInvoice = String(primaryInvoice?.customer || '').trim();
+    if (fromInvoice && sessionCustomerId && fromInvoice === sessionCustomerId) return fromInvoice;
+    if (fromInvoice) return fromInvoice;
+    return sessionCustomerId || undefined;
+  }, [primaryInvoice?.customer, sessionCustomerId]);
+
+  useEffect(() => {
+    if (!showPaymentsTab) {
+      setTab('details');
+      setInvoiceOutstanding(null);
+      setInvoiceTotalDue(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const client = getERPNextClient();
+        const inv = await client.getSalesInvoiceRaw(primaryInvoiceName);
+        if (cancelled || !inv) return;
+        setInvoiceCurrency(String(inv.currency || primaryInvoice?.currency || 'GHS'));
+        setInvoiceTotalDue(Number(inv.grand_total) || Number(primaryInvoice?.grand_total) || 0);
+        setInvoiceOutstanding(client.effectiveSalesInvoiceOutstanding(inv as Record<string, unknown>));
+      } catch {
+        if (cancelled) return;
+        setInvoiceCurrency(String(primaryInvoice?.currency || 'GHS'));
+        setInvoiceTotalDue(Number(primaryInvoice?.grand_total) || 0);
+        const out = Number(primaryInvoice?.outstanding_amount);
+        setInvoiceOutstanding(Number.isFinite(out) ? out : null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    showPaymentsTab,
+    primaryInvoiceName,
+    primaryInvoice?.currency,
+    primaryInvoice?.grand_total,
+    primaryInvoice?.outstanding_amount,
+    paymentsRefreshKey,
+  ]);
+
   const canEdit = isSupplierPortal && supplierQuotationAllowsSupplierEdit(doc);
   const canResend = isSupplierPortal && supplierQuotationAllowsSupplierResend(doc);
   const showBuyerActions = !isSupplierPortal && buyerReview.canReviewDoc(doc);
@@ -338,6 +401,7 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
     setRefreshing(true);
     void Promise.all([reloadDoc(), loadLinkedInvoices()]).finally(() => {
       setRefreshing(false);
+      setPaymentsRefreshKey((k) => k + 1);
     });
   }, [reloadDoc, loadLinkedInvoices]);
 
@@ -412,77 +476,112 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
             }
           />
 
-          <ErpDocLinkedSection
-            title={t('quotationDetails.linkedInvoice')}
-            loading={linksLoading}
-            emptyTitle={t('quotationDetails.noLinkedInvoice')}
-          >
-            {primaryInvoiceName ? (
-              <ErpDocLinkButton
-                label={t('quotationDetails.viewInvoice', { name: primaryInvoiceName })}
-                subtitle={[
-                  String(primaryInvoice?.status || '').trim(),
-                  formatErpDocMoney(primaryInvoice?.grand_total, String(primaryInvoice?.currency || currency)),
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-                icon="receipt-outline"
-                onPress={() =>
-                  navigateToSalesInvoiceDetail(
-                    navigation as { navigate: (n: string, p?: object) => void },
-                    primaryInvoiceName,
-                    isSupplierPortal
-                  )
-                }
-              />
-            ) : null}
-            {linkedInvoices.slice(1).map((inv) => {
-              const invName = String(inv.name || '').trim();
-              if (!invName) return null;
-              return (
-                <ErpDocLinkButton
-                  key={invName}
-                  label={t('quotationDetails.viewInvoice', { name: invName })}
-                  subtitle={formatErpDocMoney(inv.grand_total, String(inv.currency || currency))}
-                  icon="receipt-outline"
-                  onPress={() =>
-                    navigateToSalesInvoiceDetail(
-                      navigation as { navigate: (n: string, p?: object) => void },
-                      invName,
-                      isSupplierPortal
-                    )
-                  }
-                />
-              );
-            })}
-          </ErpDocLinkedSection>
+          {showPaymentsTab ? (
+            <ErpDocTabBar
+              tabs={QUOTATION_TABS}
+              activeId={tab}
+              onChange={(next) => setTab(next as QuotationTab)}
+            />
+          ) : null}
 
-          <ErpDocSection title={t('common.itemsCount', { count: items.length })}>
-            {items.length === 0 ? (
-              <ErpDocEmptyState title={t('common.noLineItems')} />
-            ) : (
-              <ErpDocItemsList>
-                {items.map((line, idx) => {
-                  const code = String(line.item_code || '').trim();
-                  return (
-                  <ErpDocLineItem
-                    key={String(line.name || idx)}
-                    title={erpLineItemTitle(line.item_name, {
-                      description: line.description,
-                      itemCode: line.item_code,
-                    })}
-                    detail={undefined}
-                    qty={line.qty}
-                    rate={line.rate}
-                    amount={line.amount}
-                    currency={currency}
-                    imageUri={code ? lineImages[code] : undefined}
+          {showPaymentsTab && tab === 'payments' ? (
+            <ErpInvoicePaymentsPanel
+              key={paymentsRefreshKey}
+              invoiceName={primaryInvoiceName}
+              currency={invoiceCurrency || currency}
+              active={tab === 'payments'}
+              variant="buyer"
+              customerId={customerScope}
+              totalDue={invoiceTotalDue ?? Number(primaryInvoice?.grand_total) ?? 0}
+              outstanding={invoiceOutstanding ?? 0}
+            />
+          ) : (
+            <>
+              {showPaymentsTab ? (
+                <ErpDocLinkButton
+                  label={t('invoiceDetails.viewPayments')}
+                  subtitle={t('invoiceDetails.viewPaymentsSub')}
+                  icon="wallet-outline"
+                  onPress={() => setTab('payments')}
+                />
+              ) : null}
+
+              <ErpDocLinkedSection
+                title={t('quotationDetails.linkedInvoice')}
+                loading={linksLoading}
+                emptyTitle={t('quotationDetails.noLinkedInvoice')}
+              >
+                {primaryInvoiceName ? (
+                  <ErpDocLinkButton
+                    label={t('quotationDetails.viewInvoice', { name: primaryInvoiceName })}
+                    subtitle={[
+                      String(primaryInvoice?.status || '').trim(),
+                      formatErpDocMoney(
+                        primaryInvoice?.grand_total,
+                        String(primaryInvoice?.currency || currency)
+                      ),
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                    icon="receipt-outline"
+                    onPress={() =>
+                      navigateToSalesInvoiceDetail(
+                        navigation as { navigate: (n: string, p?: object) => void },
+                        primaryInvoiceName,
+                        isSupplierPortal
+                      )
+                    }
                   />
-                );
+                ) : null}
+                {linkedInvoices.slice(1).map((inv) => {
+                  const invName = String(inv.name || '').trim();
+                  if (!invName) return null;
+                  return (
+                    <ErpDocLinkButton
+                      key={invName}
+                      label={t('quotationDetails.viewInvoice', { name: invName })}
+                      subtitle={formatErpDocMoney(inv.grand_total, String(inv.currency || currency))}
+                      icon="receipt-outline"
+                      onPress={() =>
+                        navigateToSalesInvoiceDetail(
+                          navigation as { navigate: (n: string, p?: object) => void },
+                          invName,
+                          isSupplierPortal
+                        )
+                      }
+                    />
+                  );
                 })}
-              </ErpDocItemsList>
-            )}
-          </ErpDocSection>
+              </ErpDocLinkedSection>
+
+              <ErpDocSection title={t('common.itemsCount', { count: items.length })}>
+                {items.length === 0 ? (
+                  <ErpDocEmptyState title={t('common.noLineItems')} />
+                ) : (
+                  <ErpDocItemsList>
+                    {items.map((line, idx) => {
+                      const code = String(line.item_code || '').trim();
+                      return (
+                        <ErpDocLineItem
+                          key={String(line.name || idx)}
+                          title={erpLineItemTitle(line.item_name, {
+                            description: line.description,
+                            itemCode: line.item_code,
+                          })}
+                          detail={undefined}
+                          qty={line.qty}
+                          rate={line.rate}
+                          amount={line.amount}
+                          currency={currency}
+                          imageUri={code ? lineImages[code] : undefined}
+                        />
+                      );
+                    })}
+                  </ErpDocItemsList>
+                )}
+              </ErpDocSection>
+            </>
+          )}
         </ErpDocSheet>
       ) : null}
     </ErpDocumentPreviewLayout>

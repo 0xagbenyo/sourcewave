@@ -1,3 +1,5 @@
+import { IS_DEBUG_MODE } from '../constants/env';
+
 type AxiosLike = {
   response?: { status?: number; data?: unknown; headers?: Record<string, unknown> };
   config?: { url?: string; method?: string; data?: unknown };
@@ -83,7 +85,7 @@ export function parseFrappeAxiosError(error: unknown): string | null {
   return msg || null;
 }
 
-/** Log full Frappe HTTP error details to Metro / device console. */
+/** Log Frappe HTTP error details. Response bodies are truncated; session debug only in debug mode. */
 export function logFrappeHttpError(tag: string, error: unknown, extra?: Record<string, unknown>): void {
   const ax = error as AxiosLike;
   const data = ax.response?.data;
@@ -97,14 +99,18 @@ export function logFrappeHttpError(tag: string, error: unknown, extra?: Record<s
     serialized = String(data);
   }
 
-  console.error(`[${tag}] HTTP ${ax.response?.status ?? '?'}`, {
+  const payload: Record<string, unknown> = {
     url: ax.config?.url,
     method: ax.config?.method,
     frappeMessage: parseFrappeResponseData(data),
     axiosMessage: ax.message,
-    responseBody: serialized,
-    ...extra,
-  });
+  };
+  if (IS_DEBUG_MODE) {
+    payload.responseBody = serialized;
+    if (extra) Object.assign(payload, extra);
+  }
+
+  console.error(`[${tag}] HTTP ${ax.response?.status ?? '?'}`, payload);
 }
 
 export function userFacingFrappeError(error: unknown, fallback: string): string {
