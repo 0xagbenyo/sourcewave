@@ -15,22 +15,13 @@
     "production": {
       "environment": "production",
       "android": {
-        "buildType": "app-bundle",
-        "autoIncrement": true
+        "buildType": "app-bundle"
       },
       "ios": {
         "autoIncrement": true
       },
       "env": {
         "EXPO_PUBLIC_DEBUG_MODE": "false"
-      }
-    }
-  },
-  "submit": {
-    "production": {
-      "android": {
-        "serviceAccountKeyPath": "./google-play-service-account.json",
-        "track": "internal"
       }
     }
   }
