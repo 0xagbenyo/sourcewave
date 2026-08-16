@@ -29,14 +29,14 @@ Serve this file **without redirects** (HTTPS, `200`, `application/json`):
 
 Use the template in `hosting/well-known/assetlinks.json.example`:
 
-1. Set `package_name` to your Android application id (this project: `com.agbenyo.sourcewaveapp` from `app.json` / `app.config.js`).
+1. Set `package_name` to your Android application id (this project: `com.sourcewave.sourcewaveapp` from `app.json` / `app.config.js`).
 2. Set `sha256_cert_fingerprints` to your **Play App Signing** certificate SHA-256 (Google Play Console → Your app → **Test and release** → **App integrity** → **App signing key certificate**).  
    - For local debug builds, you can temporarily add your **debug** keystore SHA-256; production must use the key Google uses to sign releases.
 
 3. Install on device, then verify:
 
 ```bash
-adb shell pm get-app-links com.agbenyo.sourcewaveapp
+adb shell pm get-app-links com.sourcewave.sourcewaveapp
 ```
 
 Look for your host in `Verified` / `approved` state after Google has crawled `assetlinks.json` (can take up to a day; sometimes faster).
@@ -44,7 +44,7 @@ Look for your host in `Verified` / `approved` state after Google has crawled `as
 ## 3. iOS — Associated Domains + `apple-app-site-association`
 
 1. In **Apple Developer** → Identifiers → your App ID → **Associated Domains** capability: enable it.
-2. In Xcode / EAS credentials, ensure the app’s **bundle identifier** matches what you put in the AASA file (this repo sets `com.agbenyo.sourcewaveapp` in `app.config.js` if missing from `app.json`).
+2. In Xcode / EAS credentials, ensure the app’s **bundle identifier** matches what you put in the AASA file (this repo sets `com.sourcewave.sourcewaveapp` in `app.config.js` if missing from `app.json`).
 3. Add domain: `applinks:YOUR_HOST` (same host as ERP, no `https://`).
 
 Host **either**:
@@ -58,7 +58,7 @@ Apple expects **no** `.json` extension, `Content-Type: application/json`, HTTPS,
 Edit `hosting/well-known/apple-app-site-association.example`:
 
 - Replace `TEAMID` with your **Apple Team ID** (Membership page).
-- Replace `com.agbenyo.sourcewaveapp` if your bundle id differs.
+- Replace `com.sourcewave.sourcewaveapp` if your bundle id differs.
 - Keep paths including `/update-password` (and optional `*` variants if you use trailing segments).
 
 After deploy, use Apple’s **CDN** (they cache AASA); search “apple app site association validator” to test.

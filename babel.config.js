@@ -6,7 +6,12 @@ module.exports = function (api) {
 
   const plugins = [];
   if (isProduction) {
-    plugins.push(['transform-remove-console', { exclude: ['error'] }]);
+    try {
+      require.resolve('babel-plugin-transform-remove-console');
+      plugins.push(['transform-remove-console', { exclude: ['error'] }]);
+    } catch {
+      // Plugin optional — productionChecks / IS_DEBUG_MODE still gate noisy logs.
+    }
   }
 
   return {

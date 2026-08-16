@@ -14,13 +14,14 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
+      "bundleIdentifier": "com.sourcewave.sourcewaveapp",
       "supportsTablet": true,
       "infoPlist": {
         "CFBundleDisplayName": "SOURCEWAVE"
       }
     },
     "android": {
-      "package": "com.agbenyo.sourcewaveapp",
+      "package": "com.sourcewave.sourcewaveapp",
       "label": "SOURCEWAVE",
       "adaptiveIcon": {
         "foregroundImage": "./src/assets/images/sourcewave logo.png",

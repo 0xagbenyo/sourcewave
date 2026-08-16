@@ -24,7 +24,7 @@ module.exports = () => {
   // iOS Universal Links — must match hosted `apple-app-site-association` on this host.
   expo.ios = {
     ...expo.ios,
-    bundleIdentifier: expo.ios?.bundleIdentifier || 'com.agbenyo.sourcewaveapp',
+    bundleIdentifier: expo.ios?.bundleIdentifier || 'com.sourcewave.sourcewaveapp',
     associatedDomains: [`applinks:${host}`],
   };
 
