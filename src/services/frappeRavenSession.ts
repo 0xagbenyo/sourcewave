@@ -307,25 +307,40 @@ async function restoreFrappeRavenSessionFromStore(baseUrl: string): Promise<bool
     return false;
   }
   sessionCookiePairs = stored;
+  sessionUsesAdoptedClient = false;
   rebuildSessionAxios(baseUrl, sessionCookiePairs);
   return sessionAxios != null;
 }
 
+/** Restore cookies from SecureStore or validate the current in-memory session. */
+export async function tryRestoreFrappeRavenSession(baseUrl: string): Promise<boolean> {
+  const normalized = baseUrl.replace(/\/+$/, '');
+
+  if (sessionAxios) {
+    if (await probeFrappeSessionAlive()) {
+      await refreshFrappeRavenSessionCsrf({ quiet: true });
+      return true;
+    }
+    sessionAxios = null;
+    sessionBaseUrl = null;
+    sessionUsesAdoptedClient = false;
+  }
+
+  const restored = await restoreFrappeRavenSessionFromStore(normalized);
+  if (!restored) return false;
+
+  const alive = await probeFrappeSessionAlive();
+  if (alive) {
+    await refreshFrappeRavenSessionCsrf({ quiet: true });
+  }
+  return alive;
+}
+
 /** Ensure portal-user session + CSRF before workflow / submit POSTs. */
 export async function ensureFrappeRavenSessionReady(baseUrl: string): Promise<void> {
-  if (!sessionAxios) {
-    const ok = await restoreFrappeRavenSessionFromStore(baseUrl);
-    if (!ok) {
-      throw new Error('Your login session expired. Sign out and sign in again, then retry.');
-    }
-  }
-  if (!(await probeFrappeSessionAlive())) {
-    if (!sessionUsesAdoptedClient) {
-      const ok = await restoreFrappeRavenSessionFromStore(baseUrl);
-      if (!ok || !(await probeFrappeSessionAlive())) {
-        throw new Error('Your login session expired. Sign out and sign in again, then retry.');
-      }
-    } else {
+  if (!(await tryRestoreFrappeRavenSession(baseUrl))) {
+    const { silentReloginFrappeSession } = await import('../utils/restoreAppSession');
+    if (!(await silentReloginFrappeSession())) {
       throw new Error('Your login session expired. Sign out and sign in again, then retry.');
     }
   }

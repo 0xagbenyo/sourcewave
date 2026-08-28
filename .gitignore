@@ -37,5 +37,8 @@ yarn-error.*
 # Google Play automated submit (never commit)
 google-play-service-account.json
 
+# App Store Connect API key (never commit)
+credentials/apple/*.p8
+
 # typescript
 *.tsbuildinfo

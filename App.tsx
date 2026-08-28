@@ -9,6 +9,7 @@ import { getErpNextUrl } from './src/constants/env';
 import { initializeERPNext, initializeNetworkAwareTimeout } from './src/services/erpnext';
 import { runProductionStartupChecks } from './src/utils/productionChecks';
 import { UserProvider } from './src/context/UserContext';
+import { useSessionKeepalive } from './src/hooks/useSessionKeepalive';
 import { RavenUnreadProvider } from './src/context/RavenUnreadContext';
 import { SubscriptionProvider } from './src/context/SubscriptionContext';
 
@@ -39,10 +40,16 @@ if (__DEV__ && (!erpApiKey || !erpApiSecret)) {
 // Initialize network listener + periodic reachability refresh (used for retry decisions).
 initializeNetworkAwareTimeout();
 
+function SessionKeepalive() {
+  useSessionKeepalive();
+  return null;
+}
+
 export default function App() {
 
   return (
     <UserProvider>
+      <SessionKeepalive />
       <RavenUnreadProvider>
         <SubscriptionProvider>
           <SafeAreaProvider>

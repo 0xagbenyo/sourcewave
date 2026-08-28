@@ -1,6 +1,11 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { clearFrappeWebCredentials } from '../services/sessionCredentials';
 import { clearFrappeRavenSession } from '../services/frappeRavenSession';
+import {
+  clearStoredUserSession,
+  loadStoredUserSession,
+  saveStoredUserSession,
+} from '../services/userSessionStorage';
 import { clearRavenMessagingLocalCache } from '../utils/ravenMessagingLocalCache';
 import { resetToAuthScreen } from '../navigation/rootNavigation';
 import { setRavenLastChat } from '../utils/ravenLastChatStorage';
@@ -30,10 +35,48 @@ const UserContext = createContext<UserContextType | undefined>(undefined);
 
 export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUserState] = useState<UserSession | null>(null);
-  const [isLoading] = useState(false); // Set to false since we're not loading from storage
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const stored = await loadStoredUserSession();
+        if (cancelled) return;
+
+        if (!stored) return;
+
+        const { bootstrapStoredAppSession } = await import('../utils/restoreAppSession');
+        const restored = await bootstrapStoredAppSession(stored);
+        if (cancelled) return;
+
+        if (restored) {
+          setUserState(restored);
+          await saveStoredUserSession(restored);
+        } else {
+          await clearStoredUserSession();
+          clearFrappeRavenSession();
+          await clearFrappeWebCredentials();
+        }
+      } catch (e) {
+        console.warn('[UserContext] session restore failed', e);
+        await clearStoredUserSession();
+        clearFrappeRavenSession();
+        await clearFrappeWebCredentials();
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const setUser = (userData: UserSession | null) => {
     setUserState(userData);
+    void saveStoredUserSession(userData);
   };
 
   const clearUser = () => {
@@ -41,6 +84,7 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setUserState(null);
     clearFrappeRavenSession();
     void clearFrappeWebCredentials();
+    void clearStoredUserSession();
     void clearRavenMessagingLocalCache(email);
     void setRavenLastChat(email, null);
     resetToAuthScreen();
@@ -60,4 +104,3 @@ export const useUserSession = (): UserContextType => {
   }
   return context;
 };
-

@@ -53,6 +53,7 @@ import {
   STORAGE_ONBOARDING_COMPLETE,
 } from '../constants/appPreferencesKeys';
 import { applyChineseLocale, applyEnglishLocale } from '../i18n/machineChineseLocale';
+import { useUserSession } from '../context/UserContext';
 import { RootMainNavigator } from './RootMainNavigator';
 import { rootNavigationRef } from './rootNavigation';
 
@@ -93,14 +94,17 @@ const AuthNavigator = () => {
   );
 };
 
-type InitialRouteName = 'LanguageSelect' | 'Onboarding' | 'Auth';
+type InitialRouteName = 'LanguageSelect' | 'Onboarding' | 'Auth' | 'Main';
 
 // Root Navigator
 export const AppNavigator = () => {
+  const { user, isLoading: userLoading } = useUserSession();
   const [navReady, setNavReady] = useState(false);
   const [initialRouteName, setInitialRouteName] = useState<InitialRouteName>('LanguageSelect');
 
   useEffect(() => {
+    if (userLoading) return;
+
     let cancelled = false;
     (async () => {
       try {
@@ -113,6 +117,8 @@ export const AppNavigator = () => {
           setInitialRouteName('LanguageSelect');
         } else if (onboardingDone !== 'true') {
           setInitialRouteName('Onboarding');
+        } else if (user) {
+          setInitialRouteName('Main');
         } else {
           setInitialRouteName('Auth');
         }
@@ -132,9 +138,9 @@ export const AppNavigator = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [userLoading, user]);
 
-  if (!navReady) {
+  if (!navReady || userLoading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.BACKGROUND }}>
         <ActivityIndicator size="large" color={Colors.BLACK} />

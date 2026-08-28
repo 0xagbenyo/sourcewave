@@ -164,7 +164,6 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
         return;
       }
       setSharing(true);
-      let succeeded = false;
       try {
         const ok = await confirmSalesOrderShareable(orderName, t, navigation as { navigate: (n: string, p?: object) => void });
         if (!ok) return;
@@ -197,7 +196,6 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
           getRavenDmPeerUserId(channelRow, user?.email) ||
           '';
 
-        succeeded = true;
         shareSentRef.current = true;
         await showSalesOrderShareSentAndOpenChat({
           t,
@@ -211,7 +209,7 @@ export const BuyerSalesOrderShareComposeScreen: React.FC = () => {
         shareSentRef.current = false;
         Alert.error(t('salesOrderShare.title'), userFacingError(e, t('salesOrderShare.shareFailed')));
       } finally {
-        if (!succeeded) setSharing(false);
+        setSharing(false);
       }
     },
     [

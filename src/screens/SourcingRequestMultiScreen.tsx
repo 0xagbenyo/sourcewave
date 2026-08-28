@@ -497,7 +497,6 @@ export const SourcingRequestMultiScreen: React.FC = () => {
     }
 
     const expandedForms = forms;
-    let shareCompleted = false;
 
     try {
       setSubmitting(true);
@@ -652,9 +651,8 @@ export const SourcingRequestMultiScreen: React.FC = () => {
           const peerUserId =
             paramPeerUserId || getRavenDmPeerUserId(channelRow, sessionEmail) || '';
 
-          shareCompleted = true;
           shareSentRef.current = true;
-          showSalesOrderShareSentAndOpenChat({
+          await showSalesOrderShareSentAndOpenChat({
             t,
             navigation: navigation as { dispatch: (action: unknown) => void },
             sessionEmail: sessionEmail || null,
@@ -700,7 +698,7 @@ export const SourcingRequestMultiScreen: React.FC = () => {
         error?.message || (editMode ? t('orderDetails.errorHint') : 'Unable to submit request right now.')
       );
     } finally {
-      if (!shareCompleted) setSubmitting(false);
+      setSubmitting(false);
     }
   };
 

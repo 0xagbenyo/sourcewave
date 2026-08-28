@@ -313,6 +313,10 @@ export async function showSalesOrderShareSentAndOpenChat(opts: {
   const channelId = opts.channelId.trim();
   if (!channelId) return;
 
+  appAlert.success(opts.t('salesOrderShare.sharedTitle'), opts.t('salesOrderShare.sharedBody'), [
+    { text: opts.t('contactUs.ok') },
+  ]);
+
   await openRavenSupplierChatAfterSalesOrderShare({
     navigation: opts.navigation,
     sessionEmail: opts.sessionEmail,
@@ -320,10 +324,6 @@ export async function showSalesOrderShareSentAndOpenChat(opts: {
     peerUserId: opts.peerUserId,
     workspaceId: opts.workspaceId,
   });
-
-  appAlert.success(opts.t('salesOrderShare.sharedTitle'), opts.t('salesOrderShare.sharedBody'), [
-    { text: opts.t('contactUs.ok') },
-  ]);
 }
 
 /** After a supplier shares a quotation in chat, open that conversation on the Chat tab. */
