@@ -10,7 +10,8 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_DEBUG_MODE": "false"
+        "EXPO_PUBLIC_DEBUG_MODE": "false",
+        "EXPO_PUBLIC_ENABLE_TEST_SUBSCRIPTION": "true"
       }
     },
     "production": {

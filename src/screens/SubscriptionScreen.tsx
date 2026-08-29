@@ -81,7 +81,7 @@ export const SubscriptionScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const { user } = useUserSession();
   const { subscription, isActive, isLoading, refresh } = useSubscription();
-  const visibleSubscriptionPlans = SOURCEWAVE_SUBSCRIPTION_PLANS.filter((plan) => !plan.isTestPlan);
+  const visibleSubscriptionPlans = SOURCEWAVE_SUBSCRIPTION_PLANS;
 
   const [selectedPlanId, setSelectedPlanId] = useState<SubscriptionPlanId>(() =>
     visibleSubscriptionPlans[0]?.id ?? DEFAULT_SUBSCRIPTION_PLAN_ID
@@ -688,7 +688,11 @@ export const SubscriptionScreen: React.FC = () => {
                           <Text style={[styles.rowTitle, selected && styles.rowTitleSelected]}>
                             {plan.durationLabel}
                           </Text>
-                          {plan.isBestValue ? (
+                          {plan.isTestPlan ? (
+                            <View style={[styles.tagPill, styles.tagPillTest]}>
+                              <Text style={styles.tagPillText}>{t('subscriptionPage.testPlanBadge')}</Text>
+                            </View>
+                          ) : plan.isBestValue ? (
                             <View style={[styles.tagPill, styles.tagPillBest]}>
                               <Text style={styles.tagPillText}>{t('subscriptionPage.bestValue')}</Text>
                             </View>
@@ -699,7 +703,9 @@ export const SubscriptionScreen: React.FC = () => {
                             amount: formatSubscriptionMonthlyRate(plan.monthlyRateGhs),
                           })}
                         </Text>
-                        {plan.savingsPercent ? (
+                        {plan.isTestPlan ? (
+                          <Text style={styles.rowMeta}>{plan.description}</Text>
+                        ) : plan.savingsPercent ? (
                           <Text style={styles.rowMeta}>
                             {t('subscriptionPage.planSave', { percent: plan.savingsPercent })}
                             {totalSaved > 0
@@ -1142,6 +1148,9 @@ const styles = StyleSheet.create({
   },
   tagPillBest: {
     backgroundColor: Colors.SUCCESS,
+  },
+  tagPillTest: {
+    backgroundColor: Colors.WINE,
   },
   tagPillText: {
     fontSize: 10,

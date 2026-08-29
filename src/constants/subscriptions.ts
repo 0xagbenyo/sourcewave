@@ -86,13 +86,12 @@ export interface SubscriptionPlan {
 const TEST_SUBSCRIPTION_PLAN: SubscriptionPlan = {
   id: 'sw-test-1ghc',
   title: 'Payment test',
-  durationLabel: '3 months access',
+  durationLabel: 'GH₵1 test · 3 months',
   months: 3,
   priceGhs: 1,
   monthlyRateGhs: 1,
   isTestPlan: true,
-  description:
-    'Dummy plan for live payment testing — Paystack charges GH₵1; ERPNext subscription uses 3 months access.',
+  description: 'Live payment test — Paystack charges GH₵1; ERPNext uses the 3 months access plan.',
 };
 
 const PRODUCTION_SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
