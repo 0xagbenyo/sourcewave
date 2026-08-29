@@ -14,7 +14,9 @@
     "build:production:android": "eas build --platform android --profile production",
     "build:production:ios": "eas build --platform ios --profile production",
     "submit:android": "eas submit --platform android --latest --profile production",
-    "submit:ios": "eas submit --platform ios --latest --profile production"
+    "submit:ios": "eas submit --platform ios --latest --profile production",
+    "env:push:production": "eas env:push production --path .env.production --force",
+    "env:list:production": "eas env:list --environment production"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",

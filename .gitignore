@@ -32,6 +32,7 @@ yarn-error.*
 
 # local env files
 .env
+.env.production
 .env*.local
 
 # Google Play automated submit (never commit)
