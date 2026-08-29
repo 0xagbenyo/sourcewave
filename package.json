@@ -10,6 +10,8 @@
     "web": "expo start --web",
     "build:apk": "eas build --platform android --profile preview",
     "build:apk:download": "eas build:download --platform android --profile preview",
+    "build:play-testing": "eas build --platform android --profile play-testing",
+    "submit:play-testing": "eas submit --platform android --latest --profile play-testing",
     "build:production": "eas build --platform all --profile production",
     "build:production:android": "eas build --platform android --profile production",
     "build:production:ios": "eas build --platform ios --profile production",
