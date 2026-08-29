@@ -51,19 +51,14 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         const restored = await bootstrapStoredAppSession(stored);
         if (cancelled) return;
 
-        if (restored) {
-          setUserState(restored);
-          await saveStoredUserSession(restored);
-        } else {
-          await clearStoredUserSession();
-          clearFrappeRavenSession();
-          await clearFrappeWebCredentials();
-        }
+        setUserState(restored);
+        await saveStoredUserSession(restored);
       } catch (e) {
-        console.warn('[UserContext] session restore failed', e);
-        await clearStoredUserSession();
-        clearFrappeRavenSession();
-        await clearFrappeWebCredentials();
+        console.warn('[UserContext] session restore failed — keeping stored session if present', e);
+        const fallback = await loadStoredUserSession();
+        if (!cancelled && fallback) {
+          setUserState(fallback);
+        }
       } finally {
         if (!cancelled) setIsLoading(false);
       }

@@ -1,6 +1,6 @@
 import type { UserSession } from '../context/UserContext';
 import { getErpNextUrl } from '../constants/env';
-import { clearFrappeWebCredentials, getFrappeWebCredentials } from '../services/sessionCredentials';
+import { getFrappeWebCredentials } from '../services/sessionCredentials';
 import {
   clearFrappeRavenSession,
   tryRestoreFrappeRavenSession,
@@ -22,7 +22,7 @@ export async function silentReloginFrappeSession(): Promise<boolean> {
 }
 
 /** Restore a saved user session and refresh the server-side Frappe login if needed. */
-export async function bootstrapStoredAppSession(stored: UserSession): Promise<UserSession | null> {
+export async function bootstrapStoredAppSession(stored: UserSession): Promise<UserSession> {
   const baseUrl = getErpNextUrl();
 
   if (await tryRestoreFrappeRavenSession(baseUrl)) {
@@ -31,15 +31,14 @@ export async function bootstrapStoredAppSession(stored: UserSession): Promise<Us
 
   const creds = await getFrappeWebCredentials();
   if (!creds) {
-    return null;
+    return stored;
   }
 
   try {
     clearFrappeRavenSession();
     return await completeAppSignIn(creds.email, creds.password);
   } catch (e) {
-    console.warn('[restoreAppSession] bootstrap failed', e);
-    await clearFrappeWebCredentials();
-    return null;
+    console.warn('[restoreAppSession] bootstrap failed — keeping local session', e);
+    return stored;
   }
 }
