@@ -45,6 +45,10 @@
         "ascApiKeyPath": "./credentials/apple/AuthKey_CGD2XKD2SZ.p8",
         "ascApiKeyIssuerId": "69a6de95-e771-47e3-e053-5b8c7c11a4d1",
         "ascApiKeyId": "CGD2XKD2SZ"
+      },
+      "android": {
+        "serviceAccountKeyPath": "./credentials/google-play/service-account.json",
+        "track": "production"
       }
     },
     "play-testing": {
