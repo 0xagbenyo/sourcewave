@@ -39,6 +39,12 @@ export const ErpPaymentEntryPreview: React.FC<Props> = ({
   const status = erpDocPaymentStatusLabel(doc);
   const statusColor = erpDocStatusAccent(status, doc.docstatus != null ? Number(doc.docstatus) : undefined);
   const amount = erpDocPrimaryPaymentAmount(doc, currency);
+  const paymentAmountNumeric = useMemo(() => {
+    const received = doc.received_amount;
+    const paid = doc.paid_amount;
+    const raw = received != null && Number(received) !== 0 ? received : paid;
+    return Number(raw) || 0;
+  }, [doc.received_amount, doc.paid_amount]);
   const party = String(doc.party || '—').trim();
   const paymentType = String(doc.payment_type || '').trim();
   const paymentName = String(doc.name || '').trim();
@@ -78,6 +84,7 @@ export const ErpPaymentEntryPreview: React.FC<Props> = ({
         amountLabel="Amount"
         subtitle={doc.posting_date ? formatErpDocDate(doc.posting_date) : undefined}
         facts={facts.length ? facts : undefined}
+        currencyConvert={{ amount: paymentAmountNumeric, currency }}
       />
 
       <ErpDocSection title={t('paymentEntry.appliedTo')}>

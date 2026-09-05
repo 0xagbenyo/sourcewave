@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,10 +9,16 @@ import { getERPNextClient } from '../services/erpnext';
 import { OTP_PURPOSE_RESET_PASSWORD } from '../constants/otpPurposes';
 import { appAlert as Alert } from '../services/appAlert';
 import { userFacingError } from '../utils/userFacingError';
-import { useOtpResendCooldown } from '../hooks/useOtpResendCooldown';
+import { useOtpResendCooldown, OTP_RESEND_COOLDOWN_SECONDS } from '../hooks/useOtpResendCooldown';
 import { AuthScreenShell, AuthStepIndicator } from '../components/auth/AuthScreenShell';
 import { AuthField } from '../components/auth/AuthField';
 import { AuthPrimaryButton, AuthInlineSwitch, AuthTextLink } from '../components/auth/AuthPrimaryButton';
+import {
+  clearForgotPasswordDraft,
+  loadForgotPasswordDraft,
+  otpCooldownSecondsRemaining,
+  saveForgotPasswordDraft,
+} from '../services/authFlowDraftStorage';
 
 interface RouteParams {
   email?: string;
@@ -32,6 +38,28 @@ export const ForgotPasswordScreen: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [resendingOtp, setResendingOtp] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [draftReady, setDraftReady] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const draft = await loadForgotPasswordDraft();
+      if (!active) return;
+      if (draft) {
+        setEmail(draft.email);
+        setStep('otp');
+        const remaining = otpCooldownSecondsRemaining(
+          draft.otpSentAt,
+          OTP_RESEND_COOLDOWN_SECONDS
+        );
+        if (remaining > 0) startCooldown(remaining);
+      }
+      setDraftReady(true);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [startCooldown]);
 
   useEffect(() => {
     if (initialEmail) setEmail(initialEmail);
@@ -60,6 +88,7 @@ export const ForgotPasswordScreen: React.FC = () => {
       }
       await client.sendOtp({ email: trimmedEmail, purpose: OTP_PURPOSE_RESET_PASSWORD });
       setStep('otp');
+      await saveForgotPasswordDraft({ email: trimmedEmail, step: 'otp', otpSentAt: Date.now() });
       startCooldown();
     } catch (error: unknown) {
       Alert.alert(t('forgot.alerts.errorTitle'), userFacingError(error, t('forgot.alerts.otpSendFailed')));
@@ -86,6 +115,7 @@ export const ForgotPasswordScreen: React.FC = () => {
     setIsLoading(true);
     try {
       await getERPNextClient().resetPasswordWithOtp(trimmedEmail, otpCode.trim(), newPassword.trim());
+      await clearForgotPasswordDraft();
       setIsSuccess(true);
     } catch (error: unknown) {
       Alert.alert(t('forgot.alerts.errorTitle'), userFacingError(error, t('forgot.alerts.resetFailed')));
@@ -102,6 +132,7 @@ export const ForgotPasswordScreen: React.FC = () => {
     try {
       await getERPNextClient().sendOtp({ email: trimmedEmail, purpose: OTP_PURPOSE_RESET_PASSWORD });
       setOtpCode('');
+      await saveForgotPasswordDraft({ email: trimmedEmail, step: 'otp', otpSentAt: Date.now() });
       startCooldown();
       Alert.alert(t('forgot.alerts.otpResentTitle'), t('forgot.alerts.otpResentBody'));
     } catch (error: unknown) {
@@ -111,8 +142,9 @@ export const ForgotPasswordScreen: React.FC = () => {
     }
   };
 
-  const handleBack = () => {
+  const handleBack = async () => {
     if (isSuccess) {
+      await clearForgotPasswordDraft();
       navigation.goBack();
       return;
     }
@@ -122,19 +154,30 @@ export const ForgotPasswordScreen: React.FC = () => {
       setNewPassword('');
       setConfirmPassword('');
       resetCooldown();
+      await clearForgotPasswordDraft();
       return;
     }
+    await clearForgotPasswordDraft();
     navigation.goBack();
   };
 
-  const handleStartOver = () => {
+  const handleStartOver = async () => {
     setIsSuccess(false);
     setStep('email');
     setOtpCode('');
     setNewPassword('');
     setConfirmPassword('');
     resetCooldown();
+    await clearForgotPasswordDraft();
   };
+
+  if (!draftReady) {
+    return (
+      <View style={styles.loadingWrap}>
+        <ActivityIndicator color={Colors.WINE} />
+      </View>
+    );
+  }
 
   if (isSuccess) {
     return (
@@ -260,9 +303,10 @@ export const ForgotPasswordScreen: React.FC = () => {
           <AuthTextLink
             centered
             disabled={isLoading}
-            onPress={() => {
+            onPress={async () => {
               resetCooldown();
               setStep('email');
+              await clearForgotPasswordDraft();
             }}
           >
             {t('forgot.backEditEmail')}
@@ -297,6 +341,12 @@ export const ForgotPasswordScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
+  loadingWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Colors.BACKGROUND,
+  },
   scrollExtra: {
     paddingBottom: Spacing.XXL,
   },

@@ -240,6 +240,10 @@ export const SupplierSalesInvoiceDetailScreen: React.FC = () => {
             amountLabel={t('invoiceDetails.total')}
             subtitle={doc.posting_date ? t('invoiceDetails.posted', { date: formatErpDocDate(doc.posting_date) }) : undefined}
             facts={facts}
+            currencyConvert={{
+              amount: Number(doc.grand_total) || 0,
+              currency,
+            }}
           />
 
           <ErpDocTabBar tabs={INVOICE_TABS} activeId={tab} onChange={(next) => setTab(next as InvoiceTab)} />

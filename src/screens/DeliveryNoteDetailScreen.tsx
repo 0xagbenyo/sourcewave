@@ -1229,6 +1229,10 @@ export const DeliveryNoteDetailScreen: React.FC = () => {
                     </TouchableOpacity>
                   ) : undefined
                 }
+                currencyConvert={{
+                  amount: displayShippingFee,
+                  currency,
+                }}
               />
             </View>
 

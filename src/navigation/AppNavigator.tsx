@@ -36,6 +36,7 @@ import { AgentSupplierChatScreen } from '../screens/AgentSupplierChatScreen';
 import { SubscriptionScreen } from '../screens/SubscriptionScreen';
 import { ContactUsScreen } from '../screens/ContactUsScreen';
 import { FaqScreen } from '../screens/FaqScreen';
+import { CurrencyConverterScreen } from '../screens/CurrencyConverterScreen';
 import { SupplierChatListScreen } from '../screens/SupplierChatListScreen';
 import { RavenUIMessagesScreen } from '../screens/RavenUIMessagesScreen';
 import { RavenWorkspaceSupplierProfileScreen } from '../screens/RavenWorkspaceSupplierProfileScreen';
@@ -56,6 +57,10 @@ import { applyChineseLocale, applyEnglishLocale } from '../i18n/machineChineseLo
 import { useUserSession } from '../context/UserContext';
 import { RootMainNavigator } from './RootMainNavigator';
 import { rootNavigationRef } from './rootNavigation';
+import {
+  loadForgotPasswordDraft,
+  loadSignupDraft,
+} from '../services/authFlowDraftStorage';
 
 const Stack = createStackNavigator<RootStackParamList>();
 const AuthStack = createStackNavigator<AuthStackParamList>();
@@ -77,8 +82,43 @@ const stackScreenOptions = {
 
 // Auth Navigator
 const AuthNavigator = () => {
+  const [ready, setReady] = useState(false);
+  const [initialRoute, setInitialRoute] = useState<keyof AuthStackParamList>('Login');
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [signupDraft, forgotDraft] = await Promise.all([
+          loadSignupDraft(),
+          loadForgotPasswordDraft(),
+        ]);
+        if (cancelled) return;
+        if (signupDraft?.otpStep === 'verify') {
+          setInitialRoute('Register');
+        } else if (forgotDraft?.step === 'otp') {
+          setInitialRoute('ForgotPassword');
+        }
+      } finally {
+        if (!cancelled) setReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!ready) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.BACKGROUND }}>
+        <ActivityIndicator size="large" color={Colors.BLACK} />
+      </View>
+    );
+  }
+
   return (
     <AuthStack.Navigator
+      initialRouteName={initialRoute}
       screenOptions={{
         headerShown: false,
       }}
@@ -219,6 +259,7 @@ export const AppNavigator = () => {
         <Stack.Screen name="Subscription" component={SubscriptionScreen} options={{ presentation: 'card' }} />
         <Stack.Screen name="ContactUs" component={ContactUsScreen} options={{ presentation: 'card' }} />
         <Stack.Screen name="Faq" component={FaqScreen} options={{ presentation: 'card', gestureEnabled: true }} />
+        <Stack.Screen name="CurrencyConverter" component={CurrencyConverterScreen} options={{ presentation: 'card' }} />
         <Stack.Screen name="Splash" component={SplashScreen} />
       </Stack.Navigator>
     </NavigationContainer>

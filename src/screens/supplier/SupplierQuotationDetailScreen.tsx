@@ -474,6 +474,10 @@ export const SupplierQuotationDetailScreen: React.FC = () => {
                 />
               ) : undefined
             }
+            currencyConvert={{
+              amount: Number(doc.grand_total) || 0,
+              currency,
+            }}
           />
 
           {showPaymentsTab ? (

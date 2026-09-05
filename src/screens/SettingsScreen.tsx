@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,11 @@ import { Spacing } from '../constants/spacing';
 import { Header } from '../components/Header';
 import { useUserSession } from '../context/UserContext';
 import { appAlert as Alert } from '../services/appAlert';
+import {
+  disableRavenPushNotifications,
+  enableRavenPushNotifications,
+  isPushEnabledLocally,
+} from '../services/ravenPushNotifications';
 
 const hairline = StyleSheet.hairlineWidth;
 
@@ -85,6 +90,28 @@ export const SettingsScreen: React.FC = () => {
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [emailNotifications, setEmailNotifications] = useState(true);
 
+  useEffect(() => {
+    void isPushEnabledLocally().then(setNotificationsEnabled);
+  }, []);
+
+  const onPushToggle = useCallback(async (next: boolean) => {
+    setNotificationsEnabled(next);
+    try {
+      if (next) {
+        const ok = await enableRavenPushNotifications();
+        if (!ok) {
+          setNotificationsEnabled(false);
+          Alert.alert(t('settings.push'), t('settings.pushEnableFailed'));
+        }
+      } else {
+        await disableRavenPushNotifications();
+      }
+    } catch {
+      setNotificationsEnabled(!next);
+      Alert.alert(t('settings.push'), t('settings.pushEnableFailed'));
+    }
+  }, [t]);
+
   const languageSubtitle = useMemo(() => {
     const code = (i18n.resolvedLanguage || i18n.language || 'en').toLowerCase();
     if (code.startsWith('zh')) return t('languageSelect.chinese');
@@ -139,7 +166,7 @@ export const SettingsScreen: React.FC = () => {
             title={t('settings.push')}
             subtitle={t('settings.pushSub')}
             value={notificationsEnabled}
-            onValueChange={setNotificationsEnabled}
+            onValueChange={(v) => void onPushToggle(v)}
           />
           <RowSwitch
             icon="mail-outline"
@@ -153,6 +180,12 @@ export const SettingsScreen: React.FC = () => {
             title={t('settings.language')}
             subtitle={languageSubtitle}
             onPress={() => nav.navigate('LanguageSelect', { fromSettings: true })}
+          />
+          <RowNav
+            icon="cash-outline"
+            title={t('settings.currencyConverter')}
+            subtitle={t('settings.currencyConverterSub')}
+            onPress={() => nav.navigate('CurrencyConverter')}
           />
         </View>
 

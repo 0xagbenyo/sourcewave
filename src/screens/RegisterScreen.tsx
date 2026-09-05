@@ -24,10 +24,17 @@ import {
 import { appAlert as Alert } from '../services/appAlert';
 import { userFacingError } from '../utils/userFacingError';
 import { hasAcceptedLegalTerms } from '../legal/legalAcceptance';
-import { useOtpResendCooldown } from '../hooks/useOtpResendCooldown';
+import { useOtpResendCooldown, OTP_RESEND_COOLDOWN_SECONDS } from '../hooks/useOtpResendCooldown';
 import { useUserSession } from '../context/UserContext';
 import { completeAppSignIn } from '../utils/completeAppSignIn';
 import { resetToMainScreen } from '../navigation/rootNavigation';
+import {
+  clearSignupDraft,
+  loadSignupDraft,
+  otpCooldownSecondsRemaining,
+  saveSignupDraft,
+  type SignupDraft,
+} from '../services/authFlowDraftStorage';
 import { AuthScreenShell, AuthStepIndicator } from '../components/auth/AuthScreenShell';
 import { AuthField } from '../components/auth/AuthField';
 import { AuthPrimaryButton, AuthInlineSwitch, AuthTextLink } from '../components/auth/AuthPrimaryButton';
@@ -59,6 +66,29 @@ export const RegisterScreen: React.FC = () => {
   const { t } = useTranslation();
   const { setUser } = useUserSession();
   const { secondsLeft, canResend, startCooldown, resetCooldown } = useOtpResendCooldown();
+  const [draftReady, setDraftReady] = useState(false);
+
+  const buildSignupDraft = useCallback(
+    (step: SignupDraft['otpStep'], otpSentAt?: number): SignupDraft => ({
+      email,
+      firstName,
+      lastName,
+      middleName,
+      phone,
+      sourceValue,
+      otherSource,
+      otpStep: step,
+      ...(otpSentAt != null ? { otpSentAt } : {}),
+    }),
+    [email, firstName, lastName, middleName, phone, sourceValue, otherSource]
+  );
+
+  const persistSignupDraft = useCallback(
+    async (step: SignupDraft['otpStep'], otpSentAt?: number) => {
+      await saveSignupDraft(buildSignupDraft(step, otpSentAt));
+    },
+    [buildSignupDraft]
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -78,6 +108,39 @@ export const RegisterScreen: React.FC = () => {
   useEffect(() => {
     let active = true;
     (async () => {
+      const draft = await loadSignupDraft();
+      if (!active || !draft) {
+        if (active) setDraftReady(true);
+        return;
+      }
+
+      setEmail(draft.email);
+      setFirstName(draft.firstName);
+      setLastName(draft.lastName);
+      setMiddleName(draft.middleName);
+      setPhone(draft.phone);
+      setSourceValue(draft.sourceValue);
+      setOtherSource(draft.otherSource);
+      setOtpStep(draft.otpStep);
+
+      if (draft.otpStep === 'verify') {
+        const remaining = otpCooldownSecondsRemaining(
+          draft.otpSentAt,
+          OTP_RESEND_COOLDOWN_SECONDS
+        );
+        if (remaining > 0) startCooldown(remaining);
+      }
+
+      if (active) setDraftReady(true);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [startCooldown]);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
       const [rows, storedSource, storedIsOther] = await Promise.all([
         getERPNextClient().getLeadSources(),
         appStorage.getItem(STORAGE_REFERRAL_SOURCE),
@@ -86,11 +149,13 @@ export const RegisterScreen: React.FC = () => {
       if (!active) return;
       setLeadSources(rows);
       const stored = String(storedSource || '').trim();
-      if (!stored) return;
+      if (!stored && !sourceValue) return;
       if (storedIsOther === '1') {
-        setSourceValue(OTHER_SOURCE);
-        setOtherSource(stored);
-      } else {
+        if (!sourceValue) {
+          setSourceValue(OTHER_SOURCE);
+          setOtherSource(stored);
+        }
+      } else if (stored && !sourceValue) {
         setSourceValue(stored);
         // Keep the prior choice selectable even if the list fetch omitted it.
         if (!rows.includes(stored)) setLeadSources([stored, ...rows]);
@@ -99,7 +164,7 @@ export const RegisterScreen: React.FC = () => {
     return () => {
       active = false;
     };
-  }, []);
+  }, [sourceValue]);
 
   const isOtherSource = sourceValue === OTHER_SOURCE;
   const sourceDisplay = isOtherSource
@@ -175,7 +240,9 @@ export const RegisterScreen: React.FC = () => {
     setErrors({});
     try {
       await getERPNextClient().sendOtp({ email: email.trim(), purpose: OTP_PURPOSE_SIGN_UP });
+      const sentAt = Date.now();
       setOtpStep('verify');
+      await persistSignupDraft('verify', sentAt);
       startCooldown();
     } catch (error: unknown) {
       Alert.alert(t('register.alerts.registrationError'), userFacingError(error, t('register.alerts.otpSendFailed')));
@@ -191,6 +258,7 @@ export const RegisterScreen: React.FC = () => {
     try {
       await getERPNextClient().sendOtp({ email: email.trim(), purpose: OTP_PURPOSE_SIGN_UP });
       setOtpCode('');
+      await persistSignupDraft('verify', Date.now());
       startCooldown();
       Alert.alert(t('register.alerts.otpResentTitle'), t('register.alerts.otpResentBody'));
     } catch (error: unknown) {
@@ -263,6 +331,8 @@ export const RegisterScreen: React.FC = () => {
 
       await createSignupLead(firstName.trim(), lastName.trim(), fullName, emailTrim, phone.trim());
 
+      await clearSignupDraft();
+
       try {
         const session = await completeAppSignIn(emailTrim, passwordTrim);
         setUser(session);
@@ -286,7 +356,7 @@ export const RegisterScreen: React.FC = () => {
     }
   };
 
-  const handleBack = () => {
+  const handleBack = async () => {
     if (otpStep === 'verify') {
       setOtpStep('details');
       setOtpCode('');
@@ -294,8 +364,10 @@ export const RegisterScreen: React.FC = () => {
       setConfirmPassword('');
       setErrors({});
       resetCooldown();
+      await persistSignupDraft('details');
       return;
     }
+    await clearSignupDraft();
     navigation.goBack();
   };
 
@@ -312,6 +384,14 @@ export const RegisterScreen: React.FC = () => {
       {t('register.legalSuffix')}
     </Text>
   );
+
+  if (!draftReady) {
+    return (
+      <View style={styles.loadingWrap}>
+        <ActivityIndicator color={Colors.WINE} />
+      </View>
+    );
+  }
 
   return (
     <AuthScreenShell
@@ -495,9 +575,10 @@ export const RegisterScreen: React.FC = () => {
 
           <AuthTextLink
             centered
-            onPress={() => {
+            onPress={async () => {
               resetCooldown();
               setOtpStep('details');
+              await persistSignupDraft('details');
             }}
           >
             {t('register.backEditDetails')}
@@ -520,7 +601,10 @@ export const RegisterScreen: React.FC = () => {
       <AuthInlineSwitch
         prefix={t('register.haveAccount')}
         action={t('register.signIn')}
-        onPress={() => navigation.navigate('Login' as never)}
+        onPress={async () => {
+          await clearSignupDraft();
+          navigation.navigate('Login' as never);
+        }}
       />
 
       <Modal
@@ -584,6 +668,12 @@ export const RegisterScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
+  loadingWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Colors.BACKGROUND,
+  },
   scrollExtra: {
     paddingBottom: Spacing.XXL,
   },

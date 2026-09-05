@@ -12,13 +12,19 @@ import { AppState, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { useUserSession } from './UserContext';
 import { getUnreadCountForChannels } from '../services/ravenNativeApi';
+import { hasFrappeRavenSession } from '../services/frappeRavenSession';
+import {
+  ensureNotificationChannels,
+  registerRavenPushNotifications,
+  requestNotificationPermissions,
+} from '../services/ravenPushNotifications';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
     shouldShowBanner: true,
     shouldShowList: true,
-    shouldPlaySound: false,
+    shouldPlaySound: true,
     shouldSetBadge: true,
   }),
 });
@@ -50,6 +56,7 @@ export function RavenUnreadProvider({ children }: { children: ReactNode }) {
   const initDoneRef = useRef(false);
   const lastGlobalNotifyAtRef = useRef(0);
   const notifSetupRef = useRef(false);
+  const pushRegisteredRef = useRef(false);
 
   const setActiveChannelId = useCallback((id: string | null) => {
     activeChannelIdRef.current = id;
@@ -60,17 +67,32 @@ export function RavenUnreadProvider({ children }: { children: ReactNode }) {
     if (notifSetupRef.current) return;
     notifSetupRef.current = true;
     try {
-      await Notifications.requestPermissionsAsync();
-      if (Platform.OS === 'android') {
-        await Notifications.setNotificationChannelAsync('raven-chat', {
-          name: 'Team chat',
-          importance: Notifications.AndroidImportance.DEFAULT,
-        });
-      }
+      await requestNotificationPermissions();
+      await ensureNotificationChannels();
     } catch {
       /* ignore */
     }
   }, []);
+
+  const registerPushNotifications = useCallback(async () => {
+    if (!user?.email) {
+      pushRegisteredRef.current = false;
+      return;
+    }
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      if (!hasFrappeRavenSession()) {
+        await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+        continue;
+      }
+      try {
+        pushRegisteredRef.current = await registerRavenPushNotifications();
+      } catch {
+        pushRegisteredRef.current = false;
+      }
+      return;
+    }
+    pushRegisteredRef.current = false;
+  }, [user?.email]);
 
   const refreshUnreadCounts = useCallback(async () => {
     if (!user?.email) {
@@ -126,7 +148,11 @@ export function RavenUnreadProvider({ children }: { children: ReactNode }) {
       }
 
       const now = Date.now();
-      if (gainedElsewhere && now - lastGlobalNotifyAtRef.current > GLOBAL_NOTIFY_COOLDOWN_MS) {
+      if (
+        !pushRegisteredRef.current &&
+        gainedElsewhere &&
+        now - lastGlobalNotifyAtRef.current > GLOBAL_NOTIFY_COOLDOWN_MS
+      ) {
         lastGlobalNotifyAtRef.current = now;
         void setupNotifications().then(async () => {
           try {
@@ -184,11 +210,20 @@ export function RavenUnreadProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!user?.email) return;
+    void setupNotifications();
+    void registerPushNotifications();
+  }, [user?.email, setupNotifications, registerPushNotifications]);
+
+  useEffect(() => {
+    if (!user?.email) return;
     const sub = AppState.addEventListener('change', (s) => {
-      if (s === 'active') void refreshUnreadCounts();
+      if (s === 'active') {
+        void refreshUnreadCounts();
+        void registerPushNotifications();
+      }
     });
     return () => sub.remove();
-  }, [user?.email, refreshUnreadCounts]);
+  }, [user?.email, refreshUnreadCounts, registerPushNotifications]);
 
   /** First load + login: supplier portal never mounts retail Header (which refetches on focus). */
   useEffect(() => {

@@ -9,3 +9,7 @@ export const STORAGE_LEGAL_ACCEPTANCE_VERSION = '@sourcewave/legal_acceptance_ve
 export const STORAGE_REFERRAL_SOURCE = '@sourcewave/referral_source';
 /** '1' when the referral source is a custom "Other" entry (not an existing Lead Source). */
 export const STORAGE_REFERRAL_SOURCE_IS_OTHER = '@sourcewave/referral_source_is_other';
+/** In-progress sign-up form while waiting for email OTP (survives Android process death). */
+export const STORAGE_SIGNUP_DRAFT = '@sourcewave/signup_draft';
+/** In-progress forgot-password OTP step (survives Android process death). */
+export const STORAGE_FORGOT_PASSWORD_DRAFT = '@sourcewave/forgot_password_draft';

@@ -242,6 +242,27 @@ export const OrderDetailsScreen: React.FC = () => {
     });
   }, [acceptedQuotation, order?.items]);
 
+  const acceptedQuotationId = String(order?.acceptedQuotationId || acceptedQuotation?.name || '').trim();
+  const linkedQuotationRows = useMemo(() => {
+    const rows = [...linkedQuotations];
+    if (
+      acceptedQuotationId &&
+      !rows.some((r) => String(r.name || '').trim() === acceptedQuotationId) &&
+      acceptedQuotation
+    ) {
+      rows.unshift(acceptedQuotation);
+    }
+    if (acceptedQuotationId) {
+      rows.sort((a, b) => {
+        const aAccepted = String(a.name || '').trim() === acceptedQuotationId;
+        const bAccepted = String(b.name || '').trim() === acceptedQuotationId;
+        if (aAccepted !== bAccepted) return aAccepted ? -1 : 1;
+        return 0;
+      });
+    }
+    return rows;
+  }, [linkedQuotations, acceptedQuotationId, acceptedQuotation]);
+
   const statusKey = (order?.status || 'pending') as OrderStatus;
   const statusLabel = t(`orderDetails.status.${statusKey}`, {
     defaultValue: t('orderDetails.status.pending'),
@@ -401,6 +422,11 @@ export const OrderDetailsScreen: React.FC = () => {
                   />
                 ) : undefined
               }
+              currencyConvert={
+                hasAccepted && acceptedTotal != null
+                  ? { amount: acceptedTotal, currency: acceptedCurrency }
+                  : { amount: order.total, currency: 'GHS' }
+              }
             />
 
             {order.reference ? (
@@ -459,10 +485,11 @@ export const OrderDetailsScreen: React.FC = () => {
               loading={linksLoading || customerLoading}
               emptyTitle={t('orderDetails.noLinkedQuotation')}
             >
-              {linkedQuotations.length ? (
-                linkedQuotations.map((row) => {
+              {linkedQuotationRows.length ? (
+                linkedQuotationRows.map((row) => {
                   const qName = String(row.name || '').trim();
                   if (!qName) return null;
+                  const isAccepted = !!acceptedQuotationId && qName === acceptedQuotationId;
                   const currency = String(row.currency || 'GHS');
                   const total = formatErpDocMoney(row.grand_total, currency);
                   const supplier = String(row.supplier_name || row.supplier || '').trim();
@@ -475,6 +502,12 @@ export const OrderDetailsScreen: React.FC = () => {
                       label={t('orderDetails.viewQuotation', { name: qName })}
                       subtitle={subtitle || undefined}
                       icon="document-text-outline"
+                      highlighted={isAccepted}
+                      badge={
+                        isAccepted
+                          ? { label: t('orderDetails.acceptedQuotationBadge'), color: Colors.SUCCESS }
+                          : undefined
+                      }
                       onPress={() => openQuotation(qName)}
                     />
                   );

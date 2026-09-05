@@ -358,6 +358,10 @@ export const InvoiceDetailsScreen: React.FC = () => {
                   />
                 ) : undefined
               }
+              currencyConvert={{
+                amount: invoice.grandTotal ?? 0,
+                currency,
+              }}
             />
 
             <ErpDocTabBar tabs={INVOICE_TABS} activeId={tab} onChange={(next) => setTab(next as InvoiceTab)} />

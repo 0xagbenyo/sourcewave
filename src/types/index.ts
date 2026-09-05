@@ -446,6 +446,8 @@ export type RootStackParamList = {
   ContactUs: undefined;
   /** Screen-by-screen help; `scope` selects buyer vs supplier copy. */
   Faq: { scope?: 'buyer' | 'supplier' } | undefined;
+  /** Live forex converter using ERPNext exchange rates (USD, CNY/RMB, GHS). */
+  CurrencyConverter: undefined;
 };
 
 export type AuthStackParamList = {

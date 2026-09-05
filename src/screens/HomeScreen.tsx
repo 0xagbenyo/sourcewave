@@ -216,6 +216,10 @@ export const HomeScreen: React.FC = () => {
     (navigation as any).navigate('Profile');
   };
 
+  const goCurrencyConverter = () => {
+    (navigation as any).navigate('CurrencyConverter');
+  };
+
   const renderWelcome = () => (
     <View style={homeLayout.welcomeBlock}>
       <Text style={homeLayout.welcomeTitle}>{t('home.welcomeTitle')}</Text>
@@ -248,6 +252,14 @@ export const HomeScreen: React.FC = () => {
         tint: '#0369A1',
         bg: '#E0F2FE',
         onPress: goAccount,
+      },
+      {
+        key: 'converter',
+        label: t('home.quickConverter'),
+        icon: 'swap-horizontal-outline' as const,
+        tint: '#047857',
+        bg: '#D1FAE5',
+        onPress: goCurrencyConverter,
       },
     ];
     return (
@@ -571,13 +583,14 @@ const homeLayout = StyleSheet.create({
   },
   quickGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
     paddingHorizontal: 16,
     paddingTop: 16,
     paddingBottom: 8,
   },
   quickCard: {
-    flex: 1,
+    width: '48%',
     alignItems: 'center',
     paddingVertical: 14,
     paddingHorizontal: 6,

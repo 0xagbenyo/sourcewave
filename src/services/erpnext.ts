@@ -704,10 +704,20 @@ class ERPNextClient {
 
           const blob = `${excStr} ${smStr}`.toLowerCase();
           const errMsg = String(errorData?._error_message || '').toLowerCase();
+          const reqUrl = String(error.config?.url || '').toLowerCase();
+          const isCurrencyExchangeProbe =
+            reqUrl.includes('currency%20exchange') ||
+            (reqUrl.includes('/api/method/frappe.client.get_list') &&
+              blob.includes('currency exchange'));
+          const isLegacyExchangeRateRpc =
+            blob.includes('erpnext.setup.utils.exchange_rate.get_exchange_rate') ||
+            blob.includes('erpnext.setup.utils.get_exchange_rate');
           const suppressExpectedProbeNoise =
             (blob.includes('validate_otp') && blob.includes('not whitelisted')) ||
             (blob.includes('insufficient permission') && blob.includes('portal user')) ||
-            (errMsg.includes('write') && errMsg.includes('permission') && errMsg.includes('raven user'));
+            (errMsg.includes('write') && errMsg.includes('permission') && errMsg.includes('raven user')) ||
+            isCurrencyExchangeProbe ||
+            isLegacyExchangeRateRpc;
 
           if (!isNotFoundError && !isTimestampMismatch && !suppressExpectedProbeNoise) {
             console.error('ERPNext API Error:', errorData);
@@ -4541,6 +4551,154 @@ class ERPNextClient {
   }
 
   /**
+   * Latest ERPNext exchange rate between two currencies via **Currency Exchange** DocType API.
+   * Rate means: `amount_in_to = amount_in_from * rate`.
+   */
+  async getExchangeRateQuote(
+    fromCurrency: string,
+    toCurrency: string,
+    transactionDate?: string
+  ): Promise<{ fromCurrency: string; toCurrency: string; rate: number; rateDate: string }> {
+    const from = String(fromCurrency || '')
+      .trim()
+      .toUpperCase()
+      .replace(/^RMB$/, 'CNY');
+    const to = String(toCurrency || '')
+      .trim()
+      .toUpperCase()
+      .replace(/^RMB$/, 'CNY');
+    const date = String(transactionDate || new Date().toISOString().slice(0, 10)).trim();
+
+    if (from === to) {
+      return { fromCurrency: from, toCurrency: to, rate: 1, rateDate: date };
+    }
+
+    const direct = await this.resolveExchangeRatePair(from, to, date);
+    if (direct) {
+      return { fromCurrency: from, toCurrency: to, rate: direct.rate, rateDate: direct.rateDate };
+    }
+
+    const viaGhs = await this.resolveExchangeRateViaHub(from, to, date, 'GHS');
+    if (viaGhs) {
+      return { fromCurrency: from, toCurrency: to, rate: viaGhs.rate, rateDate: viaGhs.rateDate };
+    }
+
+    throw new Error(
+      `No exchange rate found for ${from} → ${to}. Add a Currency Exchange record in ERPNext.`
+    );
+  }
+
+  /** Direct or inverse rate from Currency Exchange rows. */
+  private async resolveExchangeRatePair(
+    fromCurrency: string,
+    toCurrency: string,
+    transactionDate: string
+  ): Promise<{ rate: number; rateDate: string } | null> {
+    const direct = await this.getLatestExchangeRateRow(fromCurrency, toCurrency, transactionDate);
+    if (direct) {
+      return { rate: direct.rate, rateDate: direct.date };
+    }
+    const inverse = await this.getLatestExchangeRateRow(toCurrency, fromCurrency, transactionDate);
+    if (inverse && inverse.rate > 0) {
+      return { rate: 1 / inverse.rate, rateDate: inverse.date };
+    }
+    return null;
+  }
+
+  private async resolveExchangeRateViaHub(
+    fromCurrency: string,
+    toCurrency: string,
+    transactionDate: string,
+    hubCurrency: string
+  ): Promise<{ rate: number; rateDate: string } | null> {
+    const hub = hubCurrency.trim().toUpperCase();
+    if (fromCurrency === hub || toCurrency === hub) return null;
+
+    const legFrom = await this.resolveExchangeRatePair(fromCurrency, hub, transactionDate);
+    const legTo = await this.resolveExchangeRatePair(hub, toCurrency, transactionDate);
+    if (!legFrom || !legTo) return null;
+
+    return {
+      rate: legFrom.rate * legTo.rate,
+      rateDate: legFrom.rateDate >= legTo.rateDate ? legFrom.rateDate : legTo.rateDate,
+    };
+  }
+
+  /** Read Currency Exchange rows via GET /api/resource/Currency Exchange only. */
+  private async queryCurrencyExchangeRows(
+    fromCurrency: string,
+    toCurrency: string,
+    transactionDate?: string
+  ): Promise<any[]> {
+    const from = String(fromCurrency || '').trim().toUpperCase();
+    const to = String(toCurrency || '').trim().toUpperCase();
+    const date = String(transactionDate || new Date().toISOString().slice(0, 10)).trim();
+    const fields = ['name', 'date', 'from_currency', 'to_currency', 'exchange_rate'];
+    const filterSets: any[][][] = [
+      [
+        ['from_currency', '=', from],
+        ['to_currency', '=', to],
+        ['date', '<=', date],
+      ],
+      [
+        ['from_currency', '=', from],
+        ['to_currency', '=', to],
+      ],
+    ];
+
+    for (const filters of filterSets) {
+      const rows = await this.fetchCurrencyExchangeResource(filters, fields);
+      if (rows.length) return rows;
+    }
+
+    return [];
+  }
+
+  /** GET /api/resource/Currency Exchange — returns [] on failure (no RPC). */
+  private async fetchCurrencyExchangeResource(
+    filters: any[][],
+    fields: string[]
+  ): Promise<any[]> {
+    try {
+      const response = await this.client.get(
+        `${API_VERSION}/${encodeURIComponent('Currency Exchange')}`,
+        {
+          params: {
+            fields: JSON.stringify(fields),
+            filters: JSON.stringify(filters),
+            order_by: 'date desc',
+            limit_page_length: '1',
+          },
+        }
+      );
+      const h = response.headers;
+      const ct = (h['content-type'] || h['Content-Type']) as string | undefined;
+      if (responseBodyLooksLikeHtml(response.data, ct)) {
+        return [];
+      }
+      return Array.isArray(response.data?.data) ? response.data.data : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Most recent Currency Exchange row on or before `transactionDate`, if any. */
+  async getLatestExchangeRateRow(
+    fromCurrency: string,
+    toCurrency: string,
+    transactionDate?: string
+  ): Promise<{ rate: number; date: string } | null> {
+    const rows = await this.queryCurrencyExchangeRows(fromCurrency, toCurrency, transactionDate);
+    const row = rows[0];
+    if (!row) return null;
+    const rate = Number(row.exchange_rate);
+    if (!Number.isFinite(rate) || rate <= 0) return null;
+    const date =
+      String(row.date || transactionDate || new Date().toISOString().slice(0, 10)).trim();
+    return { rate, date };
+  }
+
+  /**
    * Get item price from Item Price doctype
    * Tries multiple price lists: configured default, then "Standard Selling", then any available
    */
@@ -4736,82 +4894,90 @@ class ERPNextClient {
     }
   }
 
-  async getAddresses(customerName: string): Promise<any[]> {
+  private addressListFields(): string[] {
+    return [
+      'name',
+      'address_title',
+      'address_type',
+      'address_line1',
+      'address_line2',
+      'city',
+      'county',
+      'state',
+      'country',
+      'pincode',
+      'email_id',
+      'phone',
+      'fax',
+      'tax_category',
+      'is_primary_address',
+      'is_shipping_address',
+      'disabled',
+      'is_your_company_address',
+    ];
+  }
+
+  private dedupeAddressRows(rows: any[]): any[] {
+    const seen = new Set<string>();
+    return (rows || []).filter((address) => {
+      const name = String(address?.name || '').trim();
+      if (!name || seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    });
+  }
+
+  private async listAddressesLinkedToCustomer(customerName: string): Promise<any[]> {
+    const customer = String(customerName || '').trim();
+    if (!customer) return [];
     try {
-      // Fetch all addresses, then filter client-side for those linked to this customer
-      const response = await this.client.get(`${API_VERSION}/Address`, {
-        params: {
-          fields: JSON.stringify(['name', 'address_title', 'address_type', 'address_line1', 'address_line2', 'city', 'county', 'state', 'country', 'pincode', 'email_id', 'phone', 'fax', 'tax_category', 'is_primary_address', 'is_shipping_address', 'disabled', 'is_your_company_address', 'links']),
-          limit_page_length: 500,
-        },
+      return await this.listResourceRows('Address', {
+        filters: [
+          ['Dynamic Link', 'link_doctype', '=', 'Customer'],
+          ['Dynamic Link', 'link_name', '=', customer],
+        ],
+        fields: this.addressListFields(),
+        limit_page_length: 100,
+        order_by: 'modified desc',
       });
-      
-      const allAddresses = response.data.data || [];
-      
-      // Filter addresses that are linked to this customer
-      const linkedAddresses = allAddresses.filter((address: any) => {
-        if (!address.links || !Array.isArray(address.links)) {
-          return false;
-        }
-        return address.links.some((link: any) => 
-          link.link_doctype === 'Customer' && link.link_name === customerName
-        );
-      });
-      
-      return linkedAddresses;
     } catch (error) {
-      console.warn('Error fetching addresses:', error);
+      console.warn('Error fetching addresses linked to customer:', error);
       return [];
     }
   }
 
+  private async listAddressesByEmailId(userEmail: string): Promise<any[]> {
+    const email = String(userEmail || '').trim();
+    if (!email) return [];
+    try {
+      return await this.listResourceRows('Address', {
+        filters: [['email_id', '=', email]],
+        fields: this.addressListFields(),
+        limit_page_length: 100,
+        order_by: 'modified desc',
+      });
+    } catch (error) {
+      console.warn('Error fetching addresses by email_id:', error);
+      return [];
+    }
+  }
+
+  async getAddresses(customerName: string): Promise<any[]> {
+    return this.listAddressesLinkedToCustomer(customerName);
+  }
+
   async getAddressesByEmail(userEmail: string): Promise<any[]> {
     try {
-      // Preferred lookup: resolve customer's actual name via portal_users and match Address links.
-      const customer = await this.getCustomerByEmail(userEmail);
+      const email = String(userEmail || '').trim();
+      if (!email) return [];
 
-      // Fetch all addresses, then filter by email_id field
-      const response = await this.client.get(`${API_VERSION}/Address`, {
-        params: {
-          fields: JSON.stringify(['name', 'address_title', 'address_type', 'address_line1', 'address_line2', 'city', 'county', 'state', 'country', 'pincode', 'email_id', 'phone', 'fax', 'tax_category', 'is_primary_address', 'is_shipping_address', 'disabled', 'is_your_company_address', 'links']),
-          limit_page_length: 500,
-        },
-      });
-      
-      const allAddresses = response.data.data || [];
-      
-      console.log('All addresses from API:', allAddresses);
-      console.log('Looking for email:', userEmail);
-      
-      // Filter addresses linked to resolved customer first; fallback to email-based matching.
-      const addressesByEmail = allAddresses.filter((address: any) => {
-        if (customer?.name && address.links && Array.isArray(address.links)) {
-          const hasCustomerLink = address.links.some((link: any) =>
-            link.link_doctype === 'Customer' && link.link_name === customer.name
-          );
-          if (hasCustomerLink) return true;
-        }
+      const customer = await this.getCustomerByEmail(email);
+      const [linkedToCustomer, byEmailId] = await Promise.all([
+        customer?.name ? this.listAddressesLinkedToCustomer(String(customer.name)) : Promise.resolve([]),
+        this.listAddressesByEmailId(email),
+      ]);
 
-        // Check email_id field directly
-        if (address.email_id === userEmail) {
-          return true;
-        }
-        
-        // Also check if email matches in links (customer links might use email)
-        if (address.links && Array.isArray(address.links)) {
-          const hasEmailLink = address.links.some((link: any) => 
-            link.link_name === userEmail
-          );
-          if (hasEmailLink) {
-            return true;
-          }
-        }
-        
-        return false;
-      });
-      
-      console.log('Filtered addresses by email:', addressesByEmail);
-      return addressesByEmail;
+      return this.dedupeAddressRows([...linkedToCustomer, ...byEmailId]);
     } catch (error) {
       console.warn('Error fetching addresses by email:', error);
       return [];

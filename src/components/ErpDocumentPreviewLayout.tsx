@@ -17,6 +17,7 @@ import { Spacing } from '../constants/spacing';
 import { ERP_DOC_FLAT } from '../constants/erpDocFlatUi';
 import { DocumentPrintButton } from './DocumentPrintButton';
 import { ErpAuthenticatedImage } from './ErpAuthenticatedImage';
+import { DocumentCurrencyConverter } from './DocumentCurrencyConverter';
 
 const hairline = ERP_DOC_FLAT.hairline;
 const flatBorder = ERP_DOC_FLAT.border;
@@ -245,6 +246,8 @@ type HeroProps = {
   statusTrailing?: React.ReactNode;
   /** Renders directly below the status badge row. */
   belowStatusRow?: React.ReactNode;
+  /** Prefill converter from document total (shown under primary amount). */
+  currencyConvert?: { amount: number; currency: string };
 };
 
 export const ErpDocHero: React.FC<HeroProps> = ({
@@ -260,6 +263,7 @@ export const ErpDocHero: React.FC<HeroProps> = ({
   factPairs,
   statusTrailing,
   belowStatusRow,
+  currencyConvert,
 }) => (
   <View style={styles.hero}>
     <View style={styles.heroBadgeRow}>
@@ -296,6 +300,12 @@ export const ErpDocHero: React.FC<HeroProps> = ({
           </View>
         ) : null}
       </View>
+    ) : null}
+    {currencyConvert && Number.isFinite(currencyConvert.amount) ? (
+      <DocumentCurrencyConverter
+        amount={currencyConvert.amount}
+        currency={currencyConvert.currency}
+      />
     ) : null}
     {subtitle ? (
       <Text style={styles.subtitle} numberOfLines={1}>
@@ -635,6 +645,8 @@ type LinkButtonProps = {
   loading?: boolean;
   disabled?: boolean;
   icon?: keyof typeof Ionicons.glyphMap;
+  badge?: { label: string; color?: string };
+  highlighted?: boolean;
 };
 
 /** Primary navigation to a linked ERP document (quotation, invoice, payments, etc.). */
@@ -645,9 +657,15 @@ export const ErpDocLinkButton: React.FC<LinkButtonProps> = ({
   loading,
   disabled,
   icon = 'arrow-forward-circle-outline',
+  badge,
+  highlighted,
 }) => (
   <TouchableOpacity
-    style={[styles.linkBtn, (disabled || loading) && styles.linkBtnDisabled]}
+    style={[
+      styles.linkBtn,
+      highlighted && styles.linkBtnHighlighted,
+      (disabled || loading) && styles.linkBtnDisabled,
+    ]}
     onPress={onPress}
     disabled={disabled || loading}
     activeOpacity={0.8}
@@ -658,10 +676,29 @@ export const ErpDocLinkButton: React.FC<LinkButtonProps> = ({
     ) : (
       <>
         <View style={styles.linkBtnIconWrap}>
-          <Ionicons name={icon} size={20} color={flatMuted} />
+          <Ionicons name={icon} size={20} color={highlighted ? Colors.SUCCESS : flatMuted} />
         </View>
         <View style={styles.linkBtnTextCol}>
-          <Text style={styles.linkBtnLabel}>{label}</Text>
+          <View style={styles.linkBtnLabelRow}>
+            <Text style={[styles.linkBtnLabel, highlighted && styles.linkBtnLabelHighlighted]} numberOfLines={1}>
+              {label}
+            </Text>
+            {badge ? (
+              <View
+                style={[
+                  styles.linkBtnBadge,
+                  {
+                    backgroundColor: `${badge.color ?? Colors.SUCCESS}18`,
+                    borderColor: `${badge.color ?? Colors.SUCCESS}40`,
+                  },
+                ]}
+              >
+                <Text style={[styles.linkBtnBadgeText, { color: badge.color ?? Colors.SUCCESS }]} numberOfLines={1}>
+                  {badge.label}
+                </Text>
+              </View>
+            ) : null}
+          </View>
           {subtitle ? (
             <Text style={styles.linkBtnSub} numberOfLines={2}>
               {subtitle}
@@ -1176,6 +1213,14 @@ const styles = StyleSheet.create({
     width: '100%',
     minWidth: 0,
   },
+  linkBtnHighlighted: {
+    backgroundColor: `${Colors.SUCCESS}0A`,
+    marginHorizontal: -4,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.SUCCESS,
+  },
   linkBtnDisabled: { opacity: 0.55 },
   linkBtnLoader: { alignSelf: 'center', flex: 1 },
   linkBtnIconWrap: {
@@ -1185,7 +1230,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   linkBtnTextCol: { flex: 1, minWidth: 0 },
-  linkBtnLabel: { fontSize: 15, fontWeight: '600', color: flatInk },
+  linkBtnLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minWidth: 0,
+  },
+  linkBtnLabel: { fontSize: 15, fontWeight: '600', color: flatInk, flexShrink: 1 },
+  linkBtnLabelHighlighted: { color: flatInk },
+  linkBtnBadge: {
+    flexShrink: 0,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  linkBtnBadgeText: { fontSize: 10, fontWeight: '700', letterSpacing: 0.2, textTransform: 'uppercase' },
   linkBtnSub: { marginTop: 3, fontSize: 13, color: flatMuted, lineHeight: 18 },
   tabBar: {
     flexDirection: 'row',
