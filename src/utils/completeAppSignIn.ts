@@ -195,7 +195,7 @@ export async function completeAppSignIn(
   });
 
   void import('../services/ravenPushNotifications')
-    .then(({ registerRavenPushNotifications }) => registerRavenPushNotifications())
+    .then(({ startBackgroundPushRegistration }) => startBackgroundPushRegistration())
     .catch((pushErr) => {
       console.warn('Could not register push notifications after login:', pushErr);
     });

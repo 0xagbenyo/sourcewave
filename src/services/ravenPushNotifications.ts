@@ -1,13 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
-import { hasFrappeRavenSession, ravenCallFrappeMethod } from './frappeRavenSession';
+import { Linking, Platform } from 'react-native';
+import {
+  hasFrappeRavenSession,
+  ravenCallFrappeMethod,
+  tryRestoreFrappeRavenSession,
+} from './frappeRavenSession';
+import { getErpNextUrl } from '../constants/env';
 
 const LOG = '[ravenPush]';
 const PUSH_TOKEN_KEY = '@sourcewave/raven_push_token';
 const PUSH_ENABLED_KEY = '@sourcewave/push_enabled';
-const RAVEN_PUSH_PROJECT = 'raven';
 
 export type PushRegistrationResult = {
   ok: boolean;
@@ -17,7 +21,20 @@ export type PushRegistrationResult = {
   relaySubscribed: boolean;
 };
 
+export type PushPermissionStatus = 'granted' | 'denied' | 'undetermined';
+
+export type PushSetupStatus = {
+  permission: PushPermissionStatus;
+  registered: boolean;
+  enabledLocally: boolean;
+};
+
 let lastRegistration: PushRegistrationResult | null = null;
+let registrationInFlight: Promise<PushRegistrationResult> | null = null;
+let backgroundRegistrationTimer: ReturnType<typeof setInterval> | null = null;
+
+const SESSION_WAIT_MS = 20_000;
+const SESSION_POLL_MS = 400;
 
 export function getLastPushRegistration(): PushRegistrationResult | null {
   return lastRegistration;
@@ -72,11 +89,39 @@ export async function requestNotificationPermissions(): Promise<boolean> {
   return next.granted === true;
 }
 
-/** Native FCM/APNs token required for Frappe/Raven relay delivery. */
+/** Wait until the logged-in Frappe cookie session exists (needed before Raven subscribe). */
+export async function waitForFrappeRavenSession(timeoutMs = SESSION_WAIT_MS): Promise<boolean> {
+  if (hasFrappeRavenSession()) return true;
+
+  const baseUrl = getErpNextUrl();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await tryRestoreFrappeRavenSession(baseUrl)) return true;
+    if (hasFrappeRavenSession()) return true;
+    await new Promise((resolve) => setTimeout(resolve, SESSION_POLL_MS));
+  }
+  return hasFrappeRavenSession();
+}
+
+/** Push token for ERPNext + Expo Push relay (Server Script). Prefers Expo token when EAS project is set. */
 export async function getNativePushToken(): Promise<string | null> {
   await ensureNotificationChannels();
   const granted = await requestNotificationPermissions();
   if (!granted) return null;
+
+  const projectId =
+    Constants.expoConfig?.extra?.eas?.projectId ??
+    (Constants as { easConfig?: { projectId?: string } }).easConfig?.projectId;
+
+  if (projectId) {
+    try {
+      const expo = await Notifications.getExpoPushTokenAsync({ projectId });
+      const token = String(expo.data || '').trim();
+      if (token) return token;
+    } catch (error) {
+      if (__DEV__) console.warn(LOG, 'Expo push token unavailable', error);
+    }
+  }
 
   try {
     const native = await Notifications.getDevicePushTokenAsync();
@@ -84,24 +129,6 @@ export async function getNativePushToken(): Promise<string | null> {
     if (token) return token;
   } catch (error) {
     if (__DEV__) console.warn(LOG, 'native push token unavailable', error);
-  }
-
-  if (__DEV__) {
-    const projectId =
-      Constants.expoConfig?.extra?.eas?.projectId ??
-      (Constants as { easConfig?: { projectId?: string } }).easConfig?.projectId;
-    if (projectId) {
-      try {
-        const expo = await Notifications.getExpoPushTokenAsync({ projectId });
-        const token = String(expo.data || '').trim();
-        if (token) {
-          console.warn(LOG, 'using Expo push token — Frappe relay will not deliver; add google-services.json');
-          return token;
-        }
-      } catch {
-        /* ignore */
-      }
-    }
   }
 
   return null;
@@ -116,13 +143,13 @@ async function subscribeRavenPushToken(token: string): Promise<void> {
   });
 }
 
-/** Registers the device token with Frappe Cloud push relay (required for delivery). */
-async function subscribeFrappePushRelay(token: string): Promise<void> {
-  if (!hasFrappeRavenSession()) return;
-  await ravenCallFrappeMethod('frappe.push_notification.subscribe', {
-    fcm_token: token,
-    project_name: RAVEN_PUSH_PROJECT,
-  });
+/** Frappe Cloud push relay — not used when delivery goes through Expo Server Script. */
+async function subscribeFrappePushRelay(_token: string): Promise<void> {
+  /* no-op: frappe.push_notification.subscribe is not permitted for portal users on Frappe Cloud */
+}
+
+async function unsubscribeFrappePushRelay(_token: string): Promise<void> {
+  /* no-op: avoid 403 noise; Raven Push Token rows are managed via raven.api.notification.* */
 }
 
 async function unsubscribeRavenPushToken(token: string): Promise<void> {
@@ -132,19 +159,16 @@ async function unsubscribeRavenPushToken(token: string): Promise<void> {
   });
 }
 
-async function unsubscribeFrappePushRelay(token: string): Promise<void> {
-  if (!hasFrappeRavenSession()) return;
-  try {
-    await ravenCallFrappeMethod('frappe.push_notification.unsubscribe', {
-      fcm_token: token,
-      project_name: RAVEN_PUSH_PROJECT,
-    });
-  } catch {
-    /* older Frappe versions may not expose this */
-  }
+export async function registerRavenPushNotifications(): Promise<PushRegistrationResult> {
+  if (registrationInFlight) return registrationInFlight;
+
+  registrationInFlight = registerRavenPushNotificationsInternal().finally(() => {
+    registrationInFlight = null;
+  });
+  return registrationInFlight;
 }
 
-export async function registerRavenPushNotifications(): Promise<PushRegistrationResult> {
+async function registerRavenPushNotificationsInternal(): Promise<PushRegistrationResult> {
   const empty: PushRegistrationResult = {
     ok: false,
     token: null,
@@ -170,14 +194,26 @@ export async function registerRavenPushNotifications(): Promise<PushRegistration
 
   const nativeFcm = isNativeFcmToken(token);
   const previous = String((await AsyncStorage.getItem(PUSH_TOKEN_KEY)) || '').trim();
+
+  if (
+    previous === token &&
+    lastRegistration?.token === token &&
+    lastRegistration.ravenSubscribed &&
+    lastRegistration.nativeFcm === nativeFcm
+  ) {
+    return lastRegistration;
+  }
+
   if (previous && previous !== token) {
-    await unsubscribeRavenPushToken(previous);
+    await unsubscribeRavenPushToken(previous).catch(() => {});
     await unsubscribeFrappePushRelay(previous);
   }
 
   let ravenSubscribed = false;
   let relaySubscribed = false;
 
+  // Always (re)subscribe — local AsyncStorage can hold a token while ERPNext has no row
+  // (e.g. app restart, failed prior subscribe, or token row deleted on server).
   try {
     await subscribeRavenPushToken(token);
     ravenSubscribed = true;
@@ -199,7 +235,7 @@ export async function registerRavenPushNotifications(): Promise<PushRegistration
   }
 
   const result: PushRegistrationResult = {
-    ok: ravenSubscribed && nativeFcm && relaySubscribed,
+    ok: ravenSubscribed && Boolean(token),
     token,
     nativeFcm,
     ravenSubscribed,
@@ -215,6 +251,7 @@ export async function registerRavenPushNotifications(): Promise<PushRegistration
 }
 
 export async function disableRavenPushNotifications(): Promise<void> {
+  stopBackgroundPushRegistration();
   const stored = String((await AsyncStorage.getItem(PUSH_TOKEN_KEY)) || '').trim();
   await setPushEnabledLocally(false);
   if (stored) {
@@ -229,4 +266,101 @@ export async function enableRavenPushNotifications(): Promise<boolean> {
   await setPushEnabledLocally(true);
   const result = await registerRavenPushNotifications();
   return result.ok || result.ravenSubscribed;
+}
+
+/** Wait for session + permission, then register. Retries until success or attempts exhausted. */
+export async function ensureRavenPushRegistered(opts?: {
+  requestPermission?: boolean;
+  maxAttempts?: number;
+}): Promise<PushRegistrationResult> {
+  const maxAttempts = opts?.maxAttempts ?? 8;
+  const empty: PushRegistrationResult = {
+    ok: false,
+    token: null,
+    nativeFcm: false,
+    ravenSubscribed: false,
+    relaySubscribed: false,
+  };
+
+  if (!(await isPushEnabledLocally())) {
+    return empty;
+  }
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const sessionReady = await waitForFrappeRavenSession();
+    if (!sessionReady) {
+      await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+      continue;
+    }
+
+    if (opts?.requestPermission !== false) {
+      await ensureNotificationChannels();
+      const granted = await requestNotificationPermissions();
+      if (!granted) {
+        return empty;
+      }
+    }
+
+    const result = await registerRavenPushNotifications();
+    if (result.ok || result.ravenSubscribed) {
+      stopBackgroundPushRegistration();
+      return result;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+  }
+
+  return getLastPushRegistration() ?? empty;
+}
+
+/** Retry registration in the background until ERPNext has the token row. */
+export function startBackgroundPushRegistration(): void {
+  if (backgroundRegistrationTimer) return;
+
+  void ensureRavenPushRegistered();
+
+  backgroundRegistrationTimer = setInterval(() => {
+    const last = getLastPushRegistration();
+    if (last?.ok) {
+      stopBackgroundPushRegistration();
+      return;
+    }
+    void ensureRavenPushRegistered({ requestPermission: false });
+  }, 30_000);
+}
+
+export function stopBackgroundPushRegistration(): void {
+  if (!backgroundRegistrationTimer) return;
+  clearInterval(backgroundRegistrationTimer);
+  backgroundRegistrationTimer = null;
+}
+
+export async function getPushSetupStatus(): Promise<PushSetupStatus> {
+  const perm = await Notifications.getPermissionsAsync();
+  const permission: PushPermissionStatus = perm.granted
+    ? 'granted'
+    : perm.canAskAgain === false
+      ? 'denied'
+      : 'undetermined';
+  const last = getLastPushRegistration();
+  const enabledLocally = await isPushEnabledLocally();
+
+  return {
+    permission,
+    registered: last?.ok === true,
+    enabledLocally,
+  };
+}
+
+/** Request permission, register with Raven, and open system settings when blocked. */
+export async function promptEnablePushNotifications(): Promise<boolean> {
+  await setPushEnabledLocally(true);
+  const result = await ensureRavenPushRegistered();
+  if (result.ok || result.ravenSubscribed) return true;
+
+  const perm = await Notifications.getPermissionsAsync();
+  if (!perm.granted && perm.canAskAgain === false) {
+    await Linking.openSettings();
+  }
+  return false;
 }

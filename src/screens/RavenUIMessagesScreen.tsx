@@ -2923,6 +2923,9 @@ export const RavenUIMessagesScreen: React.FC = () => {
       const subCore = item.preview?.trim() || metaLine || '';
       const subText = (item.workspaceLabel ? `${item.workspaceLabel} · ` : '') + (subCore || ' ');
       const wsLogoUri = resolveRavenErpAttachImageUri(item.workspaceLogo);
+      const peerActive =
+        !!peerLine &&
+        ravenUserIsActiveLikeWeb(peerLine, viewerFrappeName, presenceActiveSet, presenceInvisibleSet);
       return (
         <TouchableOpacity
           style={s.refListRow}
@@ -2976,9 +2979,9 @@ export const RavenUIMessagesScreen: React.FC = () => {
               <View style={s.refListUnreadBadge}>
                 <Text style={s.refListUnreadText}>{unread > 99 ? '99+' : String(unread)}</Text>
               </View>
-            ) : (
-              <Ionicons name="time-outline" size={15} color={RavenLight.textSubtle} />
-            )}
+            ) : peerActive ? (
+              <View style={s.refListStatusDot} />
+            ) : null}
           </View>
         </TouchableOpacity>
       );
@@ -3325,11 +3328,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
             </View>
           </View>
           <View style={s.refListRight}>
-            {showDot ? (
-              <Ionicons name="radio-button-on" size={14} color={RavenLight.onlineGreen} />
-            ) : (
-              <Ionicons name="time-outline" size={15} color={RavenLight.textSubtle} />
-            )}
+            {showDot ? <View style={s.refListStatusDot} /> : null}
           </View>
         </TouchableOpacity>
       );
@@ -5062,6 +5061,12 @@ const s = StyleSheet.create({
     alignItems: 'flex-end',
     justifyContent: 'center',
     marginLeft: 4,
+  },
+  refListStatusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: RavenLight.onlineGreen,
   },
   refListUnreadBadge: {
     minWidth: 22,

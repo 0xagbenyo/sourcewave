@@ -922,6 +922,13 @@
     "screenTitle": "付款",
     "loadFailed": "无法加载此付款。"
   },
+  "pushNotifications": {
+    "bannerTitle": "接收聊天提醒",
+    "bannerBody": "允许通知后，应用在后台时也能收到新消息。",
+    "allowButton": "允许通知",
+    "openSettings": "打开设置",
+    "permissionDeniedHint": "此设备已阻止通知。请在系统设置中允许通知。"
+  },
   "settings": {
     "title": "设置",
     "sectionAccount": "账户",

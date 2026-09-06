@@ -22,6 +22,7 @@ import { useOrders } from '../hooks/erpnext';
 import { getERPNextClient } from '../services/erpnext';
 import { encodeErpFileUrl } from '../utils/erpImageUrl';
 import { appAlert as Alert } from '../services/appAlert';
+import { EnablePushNotificationsBanner } from '../components/EnablePushNotificationsBanner';
 
 const hairline = StyleSheet.hairlineWidth;
 
@@ -152,6 +153,8 @@ export const ProfileScreen: React.FC = () => {
   return (
     <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
       <Header title={t('tabs.account')} subtitle={headerSubtitle} />
+
+      {user?.email ? <EnablePushNotificationsBanner /> : null}
 
       <ScrollView
         style={styles.scroll}

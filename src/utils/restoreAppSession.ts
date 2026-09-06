@@ -26,6 +26,9 @@ export async function bootstrapStoredAppSession(stored: UserSession): Promise<Us
   const baseUrl = getErpNextUrl();
 
   if (await tryRestoreFrappeRavenSession(baseUrl)) {
+    void import('../services/ravenPushNotifications').then(({ startBackgroundPushRegistration }) =>
+      startBackgroundPushRegistration()
+    );
     return stored;
   }
 

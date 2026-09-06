@@ -77,8 +77,8 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const clearUser = () => {
     const email = user?.email;
     setUserState(null);
-    void import('../services/ravenPushNotifications').then(({ unsubscribeRavenPushToken }) =>
-      unsubscribeRavenPushToken()
+    void import('../services/ravenPushNotifications').then(({ disableRavenPushNotifications }) =>
+      disableRavenPushNotifications()
     );
     clearFrappeRavenSession();
     void clearFrappeWebCredentials();

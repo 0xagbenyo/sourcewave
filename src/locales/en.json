@@ -922,6 +922,13 @@
     "screenTitle": "Payment",
     "loadFailed": "Could not load this payment."
   },
+  "pushNotifications": {
+    "bannerTitle": "Get chat alerts",
+    "bannerBody": "Allow notifications so you receive new messages when the app is in the background.",
+    "allowButton": "Allow notifications",
+    "openSettings": "Open settings",
+    "permissionDeniedHint": "Notifications are blocked on this device. Open system settings to allow them."
+  },
   "settings": {
     "title": "Settings",
     "sectionAccount": "Account",

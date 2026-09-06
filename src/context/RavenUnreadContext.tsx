@@ -12,11 +12,12 @@ import { AppState, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { useUserSession } from './UserContext';
 import { getUnreadCountForChannels } from '../services/ravenNativeApi';
-import { hasFrappeRavenSession } from '../services/frappeRavenSession';
 import {
   ensureNotificationChannels,
-  registerRavenPushNotifications,
+  ensureRavenPushRegistered,
   requestNotificationPermissions,
+  startBackgroundPushRegistration,
+  stopBackgroundPushRegistration,
 } from '../services/ravenPushNotifications';
 
 Notifications.setNotificationHandler({
@@ -79,24 +80,21 @@ export function RavenUnreadProvider({ children }: { children: ReactNode }) {
     if (!user?.email) {
       pushRegisteredRef.current = false;
       setServerPushReady(false);
+      stopBackgroundPushRegistration();
       return;
     }
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      if (!hasFrappeRavenSession()) {
-        await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
-        continue;
+    try {
+      const result = await ensureRavenPushRegistered();
+      pushRegisteredRef.current = result.ok || result.ravenSubscribed;
+      setServerPushReady(result.ok || result.ravenSubscribed);
+      if (!result.ok && !result.ravenSubscribed) {
+        startBackgroundPushRegistration();
       }
-      try {
-        const result = await registerRavenPushNotifications();
-        pushRegisteredRef.current = result.ok;
-        setServerPushReady(result.ok);
-      } catch {
-        pushRegisteredRef.current = false;
-        setServerPushReady(false);
-      }
-      return;
+    } catch {
+      pushRegisteredRef.current = false;
+      setServerPushReady(false);
+      startBackgroundPushRegistration();
     }
-    pushRegisteredRef.current = false;
   }, [user?.email]);
 
   const refreshUnreadCounts = useCallback(async () => {
