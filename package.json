@@ -13,6 +13,7 @@
     "build:production": "eas build --platform all --profile production",
     "build:production:android": "eas build --platform android --profile production",
     "build:production:ios": "eas build --platform ios --profile production",
+    "setup:push": "powershell -ExecutionPolicy Bypass -File ./scripts/setup-push-credentials.ps1",
     "submit:android": "eas submit --platform android --latest --profile production",
     "submit:ios": "eas submit --platform ios --latest --profile production",
     "env:push:production": "eas env:push production --path .env.production --force",

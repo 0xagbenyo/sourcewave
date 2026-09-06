@@ -39,6 +39,9 @@ yarn-error.*
 google-play-service-account.json
 credentials/google-play/*.json
 
+# Firebase FCM service account (secret). google-services.json at repo root is OK to commit.
+credentials/firebase/*.json
+
 # App Store Connect API key (never commit)
 credentials/apple/*.p8
 

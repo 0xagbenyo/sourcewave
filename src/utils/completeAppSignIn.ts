@@ -194,5 +194,11 @@ export async function completeAppSignIn(
     console.warn('Could not save credentials for Raven auto-login:', credErr);
   });
 
+  void import('../services/ravenPushNotifications')
+    .then(({ registerRavenPushNotifications }) => registerRavenPushNotifications())
+    .catch((pushErr) => {
+      console.warn('Could not register push notifications after login:', pushErr);
+    });
+
   return session;
 }

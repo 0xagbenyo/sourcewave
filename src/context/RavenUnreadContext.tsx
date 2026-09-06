@@ -57,6 +57,7 @@ export function RavenUnreadProvider({ children }: { children: ReactNode }) {
   const lastGlobalNotifyAtRef = useRef(0);
   const notifSetupRef = useRef(false);
   const pushRegisteredRef = useRef(false);
+  const [serverPushReady, setServerPushReady] = useState(false);
 
   const setActiveChannelId = useCallback((id: string | null) => {
     activeChannelIdRef.current = id;
@@ -77,6 +78,7 @@ export function RavenUnreadProvider({ children }: { children: ReactNode }) {
   const registerPushNotifications = useCallback(async () => {
     if (!user?.email) {
       pushRegisteredRef.current = false;
+      setServerPushReady(false);
       return;
     }
     for (let attempt = 0; attempt < 6; attempt += 1) {
@@ -85,9 +87,12 @@ export function RavenUnreadProvider({ children }: { children: ReactNode }) {
         continue;
       }
       try {
-        pushRegisteredRef.current = await registerRavenPushNotifications();
+        const result = await registerRavenPushNotifications();
+        pushRegisteredRef.current = result.ok;
+        setServerPushReady(result.ok);
       } catch {
         pushRegisteredRef.current = false;
+        setServerPushReady(false);
       }
       return;
     }
@@ -235,9 +240,9 @@ export function RavenUnreadProvider({ children }: { children: ReactNode }) {
     if (!user?.email) return;
     const id = setInterval(() => {
       void refreshUnreadCounts();
-    }, 45_000);
+    }, serverPushReady ? 45_000 : 20_000);
     return () => clearInterval(id);
-  }, [user?.email, refreshUnreadCounts]);
+  }, [user?.email, refreshUnreadCounts, serverPushReady]);
 
   return <RavenUnreadContext.Provider value={value}>{children}</RavenUnreadContext.Provider>;
 }

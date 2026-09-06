@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "953401878281",
+    "project_id": "sourcewave-fac34",
+    "storage_bucket": "sourcewave-fac34.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:953401878281:android:5e52a08685d4e65e3455d8",
+        "android_client_info": {
+          "package_name": "com.sourcewave.sourcewaveapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAIO8ng7sqClB-FLbIdX2-1fgK8rtvUySU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
