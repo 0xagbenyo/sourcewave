@@ -1507,6 +1507,9 @@ export async function listAllNewerMessagesForChannel(
   return sortMessagesNewestFirst([...byName.values()]);
 }
 
+export type RavenChannelType = 'Public' | 'Private' | 'Open';
+
+export async function listMessagesForChannel(
   channelId: string,
   limit = 80,
   opts?: {

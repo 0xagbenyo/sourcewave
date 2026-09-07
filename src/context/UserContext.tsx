@@ -6,10 +6,7 @@ import {
   loadStoredUserSession,
   saveStoredUserSession,
 } from '../services/userSessionStorage';
-import { clearRavenMessagingLocalCache } from '../utils/ravenMessagingLocalCache';
-import { clearSubscriptionLocalSnapshot } from '../utils/subscriptionLocalCache';
 import { resetToAuthScreen } from '../navigation/rootNavigation';
-import { setRavenLastChat } from '../utils/ravenLastChatStorage';
 
 /** Buyer = retail customer flow; Supplier = linked Supplier portal (buying docs + chat). */
 export type AppMode = 'buyer' | 'supplier';
@@ -83,16 +80,20 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         await unregisterRavenPushOnLogout();
       } catch (e) {
         console.warn('[UserContext] push unregister on logout failed', e);
-      } finally {
-        setUserState(null);
-        clearFrappeRavenSession();
-        void clearFrappeWebCredentials();
-        void clearStoredUserSession();
-        void clearRavenMessagingLocalCache(email);
-        void clearSubscriptionLocalSnapshot(email);
-        void setRavenLastChat(email, null);
-        resetToAuthScreen();
       }
+
+      try {
+        const { clearUserLocalDataOnLogout } = await import('../utils/clearUserLocalDataOnLogout');
+        await clearUserLocalDataOnLogout(email);
+      } catch (e) {
+        console.warn('[UserContext] local data cleanup on logout failed', e);
+      }
+
+      setUserState(null);
+      clearFrappeRavenSession();
+      await clearFrappeWebCredentials();
+      await clearStoredUserSession();
+      resetToAuthScreen();
     })();
   };
 

@@ -212,7 +212,20 @@ export function RavenUnreadProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    if (!user?.email) return;
+    if (!user?.email) {
+      setUnreadByChannelId({});
+      setActiveChannelIdState(null);
+      activeChannelIdRef.current = null;
+      prevUnreadRef.current = null;
+      initDoneRef.current = false;
+      pushRegisteredRef.current = false;
+      setServerPushReady(false);
+      stopBackgroundPushRegistration();
+      if (Platform.OS === 'ios') {
+        void Notifications.setBadgeCountAsync(0).catch(() => {});
+      }
+      return;
+    }
     void setupNotifications();
     void registerPushNotifications();
   }, [user?.email, setupNotifications, registerPushNotifications]);

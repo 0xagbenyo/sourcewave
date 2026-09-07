@@ -28,3 +28,12 @@ export async function markSalesOrderSharedLocally(orderName: string): Promise<vo
   set.add(n);
   await appStorage.setItem(STORAGE_SHARED_SALES_ORDERS, JSON.stringify([...set]));
 }
+
+/** Cleared on logout so the next account does not inherit share UI state. */
+export async function clearSharedSalesOrderMarksLocally(): Promise<void> {
+  try {
+    await appStorage.removeItem(STORAGE_SHARED_SALES_ORDERS);
+  } catch {
+    /* ignore */
+  }
+}

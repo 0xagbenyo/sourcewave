@@ -158,8 +158,13 @@ export const SubscriptionProvider: React.FC<{ children: ReactNode }> = ({ childr
   }, [user?.email, isSupplierUser]);
 
   useEffect(() => {
+    if (!user?.email) {
+      setSubscription(null);
+      setIsLoading(false);
+      return;
+    }
     refresh();
-  }, [refresh]);
+  }, [refresh, user?.email]);
 
   const expiresAtDate = useMemo(() => {
     if (!subscription?.expiresAt) return null;
