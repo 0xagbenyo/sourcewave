@@ -14,7 +14,6 @@ import { useTranslation } from 'react-i18next';
 import { Colors } from '../constants/colors';
 import { Spacing } from '../constants/spacing';
 import { Header } from '../components/Header';
-import { EnablePushNotificationsBanner } from '../components/EnablePushNotificationsBanner';
 import { useUserSession } from '../context/UserContext';
 import { appAlert as Alert } from '../services/appAlert';
 import {
@@ -159,12 +158,6 @@ export const SettingsScreen: React.FC = () => {
             />
           ) : null}
         </View>
-
-        {user?.email ? (
-          <EnablePushNotificationsBanner
-            onEnabled={() => setNotificationsEnabled(true)}
-          />
-        ) : null}
 
         <Text style={styles.sectionLabel}>{t('settings.sectionPreferences')}</Text>
         <View style={styles.group}>

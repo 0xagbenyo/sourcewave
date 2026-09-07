@@ -1,6 +1,7 @@
 /**
  * Local snapshots: global inbox, per-workspace channel list, per-channel messages (offline-first paint).
  * Keyed by user email; cleared on logout via `clearRavenMessagingLocalCache`.
+ * Subscription snapshot is cleared separately via `clearSubscriptionLocalSnapshot`.
  */
 import { appStorage } from '../services/appStorage';
 import { clearRavenChannelMessagesMemoryCache } from './ravenMessagingMemoryCache';

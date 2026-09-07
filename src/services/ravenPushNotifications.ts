@@ -5,6 +5,7 @@ import { Linking, Platform } from 'react-native';
 import {
   hasFrappeRavenSession,
   ravenCallFrappeMethod,
+  ravenListResourceRows,
   tryRestoreFrappeRavenSession,
 } from './frappeRavenSession';
 import { getErpNextUrl } from '../constants/env';
@@ -159,6 +160,33 @@ async function unsubscribeRavenPushToken(token: string): Promise<void> {
   });
 }
 
+/** Keep one Mobile token per user — remove older rows when a new device token registers. */
+async function cleanupOtherMobilePushTokens(currentToken: string): Promise<void> {
+  if (!hasFrappeRavenSession()) return;
+  try {
+    const loggedIn = await ravenCallFrappeMethod('frappe.auth.get_logged_user', {});
+    const userId = String(loggedIn?.message || '').trim();
+    if (!userId) return;
+
+    const rows = await ravenListResourceRows('Raven Push Token', {
+      filters: [
+        ['user', '=', userId],
+        ['environment', '=', 'Mobile'],
+      ],
+      fields: ['fcm_token'],
+      limit_page_length: 20,
+    });
+
+    for (const row of rows) {
+      const t = String(row.fcm_token || '').trim();
+      if (!t || t === currentToken) continue;
+      await unsubscribeRavenPushToken(t).catch(() => {});
+    }
+  } catch {
+    /* list may be restricted — logout + previous-token cleanup still apply */
+  }
+}
+
 export async function registerRavenPushNotifications(): Promise<PushRegistrationResult> {
   if (registrationInFlight) return registrationInFlight;
 
@@ -217,6 +245,7 @@ async function registerRavenPushNotificationsInternal(): Promise<PushRegistratio
   try {
     await subscribeRavenPushToken(token);
     ravenSubscribed = true;
+    await cleanupOtherMobilePushTokens(token);
   } catch (error) {
     console.warn(LOG, 'Raven token subscribe failed', error);
   }
@@ -250,11 +279,22 @@ async function registerRavenPushNotificationsInternal(): Promise<PushRegistratio
   return result;
 }
 
+/** Remove this device's token from ERPNext. Call before clearing the Frappe session. */
+export async function unregisterRavenPushOnLogout(): Promise<void> {
+  stopBackgroundPushRegistration();
+  const stored = String((await AsyncStorage.getItem(PUSH_TOKEN_KEY)) || '').trim();
+  if (stored && hasFrappeRavenSession()) {
+    await unsubscribeRavenPushToken(stored).catch(() => {});
+  }
+  await AsyncStorage.removeItem(PUSH_TOKEN_KEY);
+  lastRegistration = null;
+}
+
 export async function disableRavenPushNotifications(): Promise<void> {
   stopBackgroundPushRegistration();
   const stored = String((await AsyncStorage.getItem(PUSH_TOKEN_KEY)) || '').trim();
   await setPushEnabledLocally(false);
-  if (stored) {
+  if (stored && hasFrappeRavenSession()) {
     await unsubscribeRavenPushToken(stored).catch(() => {});
     await unsubscribeFrappePushRelay(stored).catch(() => {});
   }

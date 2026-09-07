@@ -14,6 +14,11 @@ import {
   pickAppRelevantERPSubscription,
   endOfDayIsoFromYmd,
 } from '../utils/subscriptionErpnext';
+import {
+  clearSubscriptionLocalSnapshot,
+  getSubscriptionLocalSnapshot,
+  setSubscriptionLocalSnapshot,
+} from '../utils/subscriptionLocalCache';
 
 /** Far-future ISO when ERP subscription has no end_date but is Active (app gate). */
 const OPEN_ENDED_PLACEHOLDER_ISO = new Date(
@@ -90,8 +95,6 @@ export const SubscriptionProvider: React.FC<{ children: ReactNode }> = ({ childr
   const isSupplierUser = user?.appMode === 'supplier' || !!user?.supplierId?.trim();
 
   const refresh = useCallback(async (): Promise<SubscriptionRefreshResult> => {
-    setIsLoading(true);
-
     if (isSupplierUser) {
       setSubscription(null);
       setIsLoading(false);
@@ -104,6 +107,17 @@ export const SubscriptionProvider: React.FC<{ children: ReactNode }> = ({ childr
       return { isActive: false, subscription: null };
     }
 
+    const cached = await getSubscriptionLocalSnapshot(user.email);
+    const cachedSub = cached?.subscription ?? null;
+    const cachedActive = computeIsActive(cachedSub);
+
+    if (cachedActive && cachedSub) {
+      setSubscription(cachedSub);
+      setIsLoading(false);
+    } else {
+      setIsLoading(true);
+    }
+
     let merged: ActiveSubscription | null = null;
 
     try {
@@ -114,11 +128,27 @@ export const SubscriptionProvider: React.FC<{ children: ReactNode }> = ({ childr
         const erp = pickAppRelevantERPSubscription(rows);
         if (erp) {
           merged = activeSubscriptionFromErpRow(erp, OPEN_ENDED_PLACEHOLDER_ISO);
+          await setSubscriptionLocalSnapshot(user.email, {
+            subscription: merged,
+            startDateYmd: erp.start_date ? String(erp.start_date) : null,
+            endDateYmd: erp.end_date ? String(erp.end_date) : null,
+            erpStatus: erp.status ? String(erp.status) : null,
+          });
+        } else {
+          merged = null;
+          await clearSubscriptionLocalSnapshot(user.email);
         }
+      } else {
+        merged = null;
+        await clearSubscriptionLocalSnapshot(user.email);
       }
     } catch (e) {
       console.warn('SubscriptionContext: subscription fetch failed', e);
-      merged = null;
+      if (cachedActive && cachedSub) {
+        merged = cachedSub;
+      } else {
+        merged = null;
+      }
     }
 
     setSubscription(merged);

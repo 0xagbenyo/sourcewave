@@ -7,6 +7,7 @@ import {
   saveStoredUserSession,
 } from '../services/userSessionStorage';
 import { clearRavenMessagingLocalCache } from '../utils/ravenMessagingLocalCache';
+import { clearSubscriptionLocalSnapshot } from '../utils/subscriptionLocalCache';
 import { resetToAuthScreen } from '../navigation/rootNavigation';
 import { setRavenLastChat } from '../utils/ravenLastChatStorage';
 
@@ -76,16 +77,23 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const clearUser = () => {
     const email = user?.email;
-    setUserState(null);
-    void import('../services/ravenPushNotifications').then(({ disableRavenPushNotifications }) =>
-      disableRavenPushNotifications()
-    );
-    clearFrappeRavenSession();
-    void clearFrappeWebCredentials();
-    void clearStoredUserSession();
-    void clearRavenMessagingLocalCache(email);
-    void setRavenLastChat(email, null);
-    resetToAuthScreen();
+    void (async () => {
+      try {
+        const { unregisterRavenPushOnLogout } = await import('../services/ravenPushNotifications');
+        await unregisterRavenPushOnLogout();
+      } catch (e) {
+        console.warn('[UserContext] push unregister on logout failed', e);
+      } finally {
+        setUserState(null);
+        clearFrappeRavenSession();
+        void clearFrappeWebCredentials();
+        void clearStoredUserSession();
+        void clearRavenMessagingLocalCache(email);
+        void clearSubscriptionLocalSnapshot(email);
+        void setRavenLastChat(email, null);
+        resetToAuthScreen();
+      }
+    })();
   };
 
   return (

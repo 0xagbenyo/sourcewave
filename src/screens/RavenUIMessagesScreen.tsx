@@ -646,6 +646,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
   const channelIdRef = useRef<string | null>(null);
   const messagesListRef = useRef<FlatList<RavenMessageRow> | null>(null);
   const messagesRef = useRef<RavenMessageRow[]>([]);
+  const hasMoreOlderRef = useRef(false);
   const loadingOlderRef = useRef(false);
   /** Avoids `onEndReached` firing once on mount (inverted list) before the user scrolls. */
   const allowOlderEndReachedRef = useRef(false);
@@ -1179,7 +1180,11 @@ export const RavenUIMessagesScreen: React.FC = () => {
               cid,
               RAVEN_CHAT_FIRST_PAGE_SIZE,
               memPaint.messages,
-              { silent: true }
+              {
+                silent: true,
+                userEmail: user?.email,
+                localHasMoreOlder: memPaint.hasMoreOlder,
+              }
             );
             startTransition(() => {
               setMessages(result.messages);
@@ -1212,7 +1217,12 @@ export const RavenUIMessagesScreen: React.FC = () => {
         cid,
         RAVEN_CHAT_FIRST_PAGE_SIZE,
         silent ? messagesRef.current : prevForMerge,
-        { silent }
+        {
+          silent,
+          userEmail: user?.email,
+          localHasMoreOlder: silent ? hasMoreOlderRef.current : prevForMerge.length > RAVEN_CHAT_FIRST_PAGE_SIZE,
+          forceFullFetch: force,
+        }
       );
       if (silent) {
         startTransition(() => {
@@ -1254,7 +1264,8 @@ export const RavenUIMessagesScreen: React.FC = () => {
       const result = await fetchChannelOlderMessagesPage(
         ch,
         RAVEN_CHAT_OLDER_PAGE_SIZE,
-        messagesRef.current
+        messagesRef.current,
+        user?.email
       );
       if (!result) return;
       setMessages(result.messages);
@@ -1393,6 +1404,7 @@ export const RavenUIMessagesScreen: React.FC = () => {
 
   useEffect(() => {
     messagesRef.current = messages;
+    hasMoreOlderRef.current = hasMoreOlderMessages;
   }, [messages]);
 
   const resolveDisplayName = useCallback(
@@ -2129,10 +2141,17 @@ export const RavenUIMessagesScreen: React.FC = () => {
         }
         if (stale()) return;
         if (chs.length === 0) {
+          const cachedInbox = await getRavenGlobalInboxSnapshot(user?.email);
+          if (!stale() && cachedInbox?.length) {
+            globalInboxRowsRef.current = cachedInbox as GlobalInboxRow[];
+            setGlobalInboxRows(cachedInbox as GlobalInboxRow[]);
+            if (!silent) setLoadingGlobalInbox(false);
+            setGlobalInboxSettled(true);
+            return;
+          }
           if (!stale()) {
             globalInboxRowsRef.current = [];
             setGlobalInboxRows([]);
-            void setRavenGlobalInboxSnapshot(user?.email, []);
             if (!silent) setLoadingGlobalInbox(false);
             setGlobalInboxSettled(true);
           }
@@ -2279,9 +2298,12 @@ export const RavenUIMessagesScreen: React.FC = () => {
           });
         }
       } catch {
-        if (!stale()) {
-          setGlobalInboxRows([]);
-          void setRavenGlobalInboxSnapshot(user?.email, []);
+        if (!stale() && globalInboxRowsRef.current.length === 0) {
+          const cachedInbox = await getRavenGlobalInboxSnapshot(user?.email);
+          if (cachedInbox?.length) {
+            globalInboxRowsRef.current = cachedInbox as GlobalInboxRow[];
+            setGlobalInboxRows(cachedInbox as GlobalInboxRow[]);
+          }
         }
       } finally {
         if (myGen === globalInboxLoadGenerationRef.current) {

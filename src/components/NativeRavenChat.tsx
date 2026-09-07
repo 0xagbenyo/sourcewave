@@ -291,6 +291,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
   const channelIdRef = useRef<string | null>(null);
   const messagesListRef = useRef<FlatList<RavenMessageRow> | null>(null);
   const messagesRef = useRef<RavenMessageRow[]>([]);
+  const hasMoreOlderRef = useRef(false);
   const loadingOlderRef = useRef(false);
   const allowOlderEndReachedRef = useRef(false);
   const screenFocusedRef = useRef(false);
@@ -322,7 +323,11 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
               cid,
               NATIVE_RAVEN_CHAT_FIRST_PAGE_SIZE,
               memPaint.messages,
-              { silent: true }
+              {
+                silent: true,
+                userEmail: user?.email,
+                localHasMoreOlder: memPaint.hasMoreOlder,
+              }
             );
             setMessages(result.messages);
             setHasMoreOlderMessages(result.hasMoreOlder);
@@ -353,7 +358,14 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
         cid,
         NATIVE_RAVEN_CHAT_FIRST_PAGE_SIZE,
         silent ? messagesRef.current : prevForMerge,
-        { silent }
+        {
+          silent,
+          userEmail: user?.email,
+          localHasMoreOlder: silent
+            ? hasMoreOlderRef.current
+            : prevForMerge.length > NATIVE_RAVEN_CHAT_FIRST_PAGE_SIZE,
+          forceFullFetch: force,
+        }
       );
       setMessages(result.messages);
       setHasMoreOlderMessages(result.hasMoreOlder);
@@ -388,7 +400,8 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
       const result = await fetchChannelOlderMessagesPage(
         ch,
         NATIVE_RAVEN_CHAT_OLDER_PAGE_SIZE,
-        messagesRef.current
+        messagesRef.current,
+        user?.email
       );
       if (!result) return;
       setMessages(result.messages);
@@ -481,6 +494,7 @@ export const NativeRavenChat: React.FC<Props> = ({ workspaceId: workspaceProp })
 
   useEffect(() => {
     messagesRef.current = messages;
+    hasMoreOlderRef.current = hasMoreOlderMessages;
   }, [messages]);
 
   useEffect(() => {

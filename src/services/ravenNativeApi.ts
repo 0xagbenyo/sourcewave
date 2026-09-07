@@ -1410,9 +1410,103 @@ export async function resolveRavenWorkspaceId(explicit?: string): Promise<string
   return pickRavenWorkspaceId(rows);
 }
 
-export type RavenChannelType = 'Public' | 'Private' | 'Open';
+/** Unwrap `data.message` from chat-stream APIs (`get_messages`, `get_newer_messages`, etc.). */
+function unwrapChatStreamPayload(data: any): {
+  messages: unknown[];
+  hasOldMessages: boolean;
+  hasNewMessages: boolean;
+} {
+  let payload: Record<string, unknown> | null = null;
+  const raw = data?.message;
+  if (raw != null && typeof raw === 'object' && !Array.isArray(raw)) {
+    payload = raw as Record<string, unknown>;
+  } else if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        payload = parsed as Record<string, unknown>;
+      }
+    } catch {
+      payload = null;
+    }
+  }
+  const arr = payload?.messages;
+  return {
+    messages: Array.isArray(arr) ? arr : [],
+    hasOldMessages: payload?.has_old_messages === true || payload?.has_old_messages === 1,
+    hasNewMessages: payload?.has_new_messages === true || payload?.has_new_messages === 1,
+  };
+}
 
-export async function listMessagesForChannel(
+/** Messages newer than `fromMessageId` (for incremental sync after offline / local cache). */
+export async function listNewerMessagesForChannel(
+  channelId: string,
+  fromMessageId: string,
+  limit = 80
+): Promise<{ messages: RavenMessageRow[]; hasMoreNewMessages: boolean }> {
+  const cid = channelId.trim();
+  const from = fromMessageId.trim();
+  if (!cid || !from) return { messages: [], hasMoreNewMessages: false };
+
+  const data = await ravenCallFrappeMethod('raven.api.chat_stream.get_newer_messages', {
+    channel_id: cid,
+    from_message: from,
+    limit,
+  });
+
+  const { messages: rawList, hasNewMessages } = unwrapChatStreamPayload(data);
+  const rows = sortMessagesNewestFirst(mapMessagePlainText(mapRawMessageListToRows(rawList, rawList.length + 1)));
+  return { messages: rows, hasMoreNewMessages: hasNewMessages };
+}
+
+/** Messages older than `fromMessageId` (oldest row currently on device). */
+export async function listOlderMessagesForChannel(
+  channelId: string,
+  fromMessageId: string,
+  limit = 80
+): Promise<{ messages: RavenMessageRow[]; hasMoreOlder: boolean }> {
+  const cid = channelId.trim();
+  const from = fromMessageId.trim();
+  if (!cid || !from) return { messages: [], hasMoreOlder: false };
+
+  const data = await ravenCallFrappeMethod('raven.api.chat_stream.get_older_messages', {
+    channel_id: cid,
+    from_message: from,
+    limit,
+  });
+
+  const { messages: rawList, hasOldMessages } = unwrapChatStreamPayload(data);
+  const rows = sortMessagesNewestFirst(mapMessagePlainText(mapRawMessageListToRows(rawList, rawList.length + 1)));
+  return { messages: rows, hasMoreOlder: hasOldMessages };
+}
+
+/** Fetch every message newer than anchor (paginates while user was offline). */
+export async function listAllNewerMessagesForChannel(
+  channelId: string,
+  fromMessageId: string,
+  pageSize = 80
+): Promise<RavenMessageRow[]> {
+  const cid = channelId.trim();
+  let anchor = fromMessageId.trim();
+  if (!cid || !anchor) return [];
+
+  const byName = new Map<string, RavenMessageRow>();
+  for (let page = 0; page < 25; page += 1) {
+    const { messages, hasMoreNewMessages } = await listNewerMessagesForChannel(cid, anchor, pageSize);
+    if (!messages.length) break;
+    for (const row of messages) {
+      const id = String(row.name || '').trim();
+      if (id) byName.set(id, row);
+    }
+    const newest = messages[0];
+    const nextAnchor = String(newest?.name || '').trim();
+    if (!nextAnchor || nextAnchor === anchor) break;
+    anchor = nextAnchor;
+    if (!hasMoreNewMessages) break;
+  }
+  return sortMessagesNewestFirst([...byName.values()]);
+}
+
   channelId: string,
   limit = 80,
   opts?: {
